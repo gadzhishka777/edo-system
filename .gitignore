@@ -1,0 +1,45 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+venv/
+env/
+*.egg-info/
+dist/
+build/
+
+# Базы данных
+*.db
+*.sqlite3
+
+# Файлы окружения
+.env
+.env.local
+
+# Загруженные файлы
+uploads/
+signed/
+archives/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Node
+node_modules/
+npm-debug.log*
+
+# React build
+frontend/build/
+
+# Логи
+*.log
+logs/
+
+# OS
+.DS_Store
+Thumbs.db

@@ -1,0 +1,290 @@
+# backend/app/models/pydantic.py
+from pydantic import BaseModel, Field
+from datetime import datetime
+from typing import Optional, List, Dict, Any, Union
+from enum import Enum
+
+from app.models.document import SignatureType, DocumentStatus, FolderType
+
+# ===== Пользователь =====
+class UserBase(BaseModel):
+    username: str
+    email: str
+    full_name: Optional[str] = None
+
+class UserCreate(UserBase):
+    password: str
+
+class UserResponse(UserBase):
+    id: int
+    is_active: bool
+    created_at: datetime
+    
+    class Config:
+        from_attributes = True
+
+# ===== Документ =====
+class DocumentBase(BaseModel):
+    name: str
+    type: str
+    folder: FolderType
+    registration_number: str
+    signer: str
+    signer_full_name: Optional[str] = None
+    signer_inn: Optional[str] = None
+    executor: Optional[str] = None
+    signature_type: SignatureType = SignatureType.NONE
+
+class DocumentCreate(DocumentBase):
+    pass
+
+class DocumentUpdate(BaseModel):
+    name: Optional[str] = None
+    type: Optional[str] = None
+    folder: Optional[FolderType] = None
+    registration_number: Optional[str] = None
+    signer: Optional[str] = None
+    signer_full_name: Optional[str] = None
+    signer_inn: Optional[str] = None
+    executor: Optional[str] = None
+    created_at: Optional[datetime] = None
+
+
+class VisualizeRequest(BaseModel):
+    stamp_x: int = 100
+    stamp_y: int = 50
+    stamp_size: int = 100
+    stamp_url: Optional[str] = None
+    stamp_page: int = 1
+    preview_width: int = 600
+
+class GoskeyData(BaseModel):
+    certificate_serial: str
+    signer_name: str
+    signer_inn: str
+    signature_date: str
+    hash_algorithm: str
+    verification_details: str
+    ocsp_status: Optional[str] = None
+    not_before: Optional[str] = None
+    not_after: Optional[str] = None
+
+class DocumentResponse(BaseModel):
+    id: int
+    uuid: str
+    name: str
+    type: str
+    folder: FolderType
+    registration_number: str
+    signer: str
+    signer_full_name: Optional[str] = None
+    signer_inn: Optional[str] = None
+    executor: Optional[str] = None
+    created_at: datetime
+    signature_date: Optional[datetime] = None
+    original_file_name: str
+    original_file_size: int
+    signature_type: SignatureType
+    goskey_valid: Optional[bool] = None
+    goskey_data: Optional[Union[Dict[str, Any], str]] = None  # ✅ разрешаем и dict и str
+    status: DocumentStatus
+    transferred_to_ped_id: bool
+    ped_id_link: Optional[str] = None
+    has_sig_file: bool
+    signed_copy_url: Optional[str] = None
+    
+    class Config:
+        from_attributes = True
+        # ✅ Добавляем возможность принимать строку
+        arbitrary_types_allowed = True
+
+# ===== Проверка подписи =====
+class SignatureVerifyRequest(BaseModel):
+    document_uuid: str
+
+class SignatureVerifyResponse(BaseModel):
+    document_uuid: str
+    signature_valid: bool
+    signature_type: SignatureType
+    signer_name: str
+    signer_inn: str
+    signature_date: str
+    certificate_serial: str
+    hash_algorithm: str
+    verification_details: str
+    ocsp_status: Optional[str] = None
+
+# ===== Ответы с пагинацией =====
+class PaginatedResponse(BaseModel):
+    items: List[DocumentResponse]
+    total: int
+    page: int
+    size: int
+    pages: int
+
+
+# ===== Почта =====
+class OrganizationResponse(BaseModel):
+    id: int
+    uuid: str
+    name: str
+    inn: Optional[str] = None
+    kpp: Optional[str] = None
+    address: Optional[str] = None
+    contact_person: Optional[str] = None
+    contact_email: Optional[str] = None
+    is_active: bool = True
+
+    class Config:
+        from_attributes = True
+
+
+# ===== Аутентификация =====
+class LoginRequest(BaseModel):
+    login: str
+    password: str
+
+
+class TokenResponse(BaseModel):
+    access_token: str
+    refresh_token: str
+    token_type: str = "bearer"
+    org_id: int
+    org_name: str
+
+
+class RefreshRequest(BaseModel):
+    refresh_token: str
+
+
+class OrgInfoResponse(BaseModel):
+    id: int
+    uuid: str
+    name: str
+    inn: Optional[str] = None
+    is_active: bool
+    license_status: str
+    license_expire: str
+    license_max_docs: int
+    license_max_orgs: int
+
+
+# ===== Лицензирование =====
+class LicenseInfo(BaseModel):
+    license_key: str
+    product: str
+    valid: bool
+    expire_date: str
+    max_organizations: int
+    max_documents: int
+    current_organizations: int
+    current_documents: int
+
+
+class LicenseActivateRequest(BaseModel):
+    license_key: str
+
+
+class LicenseActivateResponse(BaseModel):
+    success: bool
+    license_key: str
+    duration_days: int
+    activated_at: str
+    expires_at: str
+    message: str = ""
+
+
+# ===== Контакты =====
+class ContactCreate(BaseModel):
+    last_name: str
+    first_name: str
+    middle_name: Optional[str] = None
+    organization: Optional[str] = None
+    department: Optional[str] = None
+    position: Optional[str] = None
+    mobile_phone: Optional[str] = None
+    email: Optional[str] = None
+    birthday: Optional[datetime] = None
+    notes: Optional[str] = None
+    contact_group: Optional[str] = None
+
+
+class ContactUpdate(BaseModel):
+    last_name: Optional[str] = None
+    first_name: Optional[str] = None
+    middle_name: Optional[str] = None
+    organization: Optional[str] = None
+    department: Optional[str] = None
+    position: Optional[str] = None
+    mobile_phone: Optional[str] = None
+    email: Optional[str] = None
+    birthday: Optional[datetime] = None
+    notes: Optional[str] = None
+    contact_group: Optional[str] = None
+
+
+class ContactResponse(BaseModel):
+    id: int
+    uuid: str
+    last_name: str
+    first_name: str
+    middle_name: Optional[str] = None
+    organization: Optional[str] = None
+    department: Optional[str] = None
+    position: Optional[str] = None
+    mobile_phone: Optional[str] = None
+    email: Optional[str] = None
+    birthday: Optional[datetime] = None
+    notes: Optional[str] = None
+    contact_group: Optional[str] = None
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class ContactPaginatedResponse(BaseModel):
+    items: List[ContactResponse]
+    total: int
+    page: int
+    size: int
+    pages: int
+
+
+class MailMessageCreate(BaseModel):
+    recipient_org_id: int
+    document_uuid: Optional[str] = None
+    document_name: Optional[str] = None
+    comment: Optional[str] = None
+    request_signature: bool = False
+
+
+class MailMessageResponse(BaseModel):
+    id: int
+    uuid: str
+    direction: str
+    sender_org_name: str
+    recipient_org_name: str
+    recipient_org_id: Optional[int] = None
+    sender_org_id: Optional[int] = None
+    document_uuid: Optional[str] = None
+    document_name: Optional[str] = None
+    comment: Optional[str] = None
+    request_signature: bool
+    status: str
+    created_at: datetime
+    sent_at: Optional[datetime] = None
+    read_at: Optional[datetime] = None
+    is_deleted: bool
+    parent_mail_uuid: Optional[str] = None
+
+    class Config:
+        from_attributes = True
+
+
+class MailPaginatedResponse(BaseModel):
+    items: List[MailMessageResponse]
+    total: int
+    page: int
+    size: int
+    pages: int
