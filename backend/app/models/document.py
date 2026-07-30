@@ -9,6 +9,7 @@ class SignatureType(str, enum.Enum):
     NONE = "none"
     PEP = "PEP"
     UNEP = "UNEP"
+    HAND = "HAND"
     UKEP = "UKEP"
 
 class DocumentStatus(str, enum.Enum):

@@ -3,6 +3,7 @@ import json
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
+import shutil
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, Query
 from fastapi.responses import FileResponse
@@ -10,7 +11,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, and_, or_
 
 from app.database import get_async_db
-from app.models import Document, DocumentStatus, SignatureType, FolderType
+# Импортируем все из app.models (главный файл)
+from app.models import Document, DocumentStatus, SignatureType, FolderType, Organization, User
 from app.models.mail import MailMessage, MailStatus
 from app.models.pydantic import (
     DocumentCreate, DocumentUpdate, DocumentResponse,
@@ -20,7 +22,6 @@ from app.services.signature_service import verify_signature
 from app.services.pdf_service import generate_signed_copy
 from app.config import settings
 from app.core.dependencies import get_current_org, get_current_org_for_download
-from app.models.mail import Organization
 from app.utils.file_utils import save_upload_file, delete_file
 
 router = APIRouter(prefix="/documents", tags=["documents"])
@@ -54,6 +55,7 @@ async def _accessible_doc(doc_uuid: str, org: Organization, db: AsyncSession) ->
 
     raise HTTPException(403, "Нет доступа к этому документу")
 
+
 @router.post("/upload", response_model=DocumentResponse)
 async def upload_document(
     file: UploadFile = File(...),
@@ -69,7 +71,7 @@ async def upload_document(
     db: AsyncSession = Depends(get_async_db),
     org: Organization = Depends(get_current_org),
 ):
-    """Загрузка нового документа"""
+    """Загрузка нового документа. Для HAND (собственноручная подпись) не требуется SIG файл."""
     
     # Проверка размера файла
     if file.size > settings.MAX_FILE_SIZE:
@@ -84,7 +86,14 @@ async def upload_document(
     doc_uuid = str(uuid.uuid4())
     file_path = await save_upload_file(file, settings.UPLOAD_DIR, doc_uuid)
     
-    # Создание документа в БД (принадлежит текущей организации)
+    # Определяем статус документа
+    if signature_type == SignatureType.HAND:
+        status = DocumentStatus.SIGNED
+    elif signature_type != SignatureType.NONE:
+        status = DocumentStatus.PENDING
+    else:
+        status = DocumentStatus.DRAFT
+    
     now = datetime.now()
     doc = Document(
         uuid=doc_uuid,
@@ -100,9 +109,9 @@ async def upload_document(
         original_file_size=file.size,
         original_file_path=file_path,
         signature_type=signature_type,
-        status=DocumentStatus.PENDING if signature_type != SignatureType.NONE else DocumentStatus.DRAFT,
+        status=status,
         created_at=now,
-        created_at_str=now.strftime("%Y-%m-%d"),
+        created_at_str=now.strftime("%d.%m.%Y"),
         creator_id=1,
         owner_org_id=org.id,
     )
@@ -111,7 +120,32 @@ async def upload_document(
     await db.commit()
     await db.refresh(doc)
     
+    # Для HAND: сразу создаем подписанную копию (копируем оригинал)
+    if signature_type == SignatureType.HAND:
+        signed_dir = Path(settings.SIGNED_DIR)
+        signed_dir.mkdir(parents=True, exist_ok=True)
+        
+        signed_path = signed_dir / f"{doc.uuid}_signed.pdf"
+        shutil.copy2(file_path, signed_path)
+        
+        doc.signed_copy_path = str(signed_path)
+        doc.signature_date = now
+        doc.goskey_data = json.dumps({
+            "signature_type": "handwritten",
+            "note": "Документ подписан собственноручной подписью",
+            "signer": signer,
+            "signer_full_name": signer_full_name or signer,
+            "signature_date": now.isoformat()
+        })
+        await db.commit()
+        await db.refresh(doc)
+    
+    # Формируем URL для скачивания
+    if doc.signed_copy_path:
+        doc.signed_copy_url = f"/api/documents/download/signed/{doc.uuid}"
+    
     return doc
+
 
 @router.post("/upload-sig/{doc_uuid}")
 async def upload_signature_file(
@@ -120,7 +154,7 @@ async def upload_signature_file(
     db: AsyncSession = Depends(get_async_db),
     org: Organization = Depends(get_current_org),
 ):
-    """Загрузка файла подписи (.sig)"""
+    """Загрузка файла подписи (.sig) - только для УНЭП/УКЭП"""
     
     result = await db.execute(select(Document).where(Document.uuid == doc_uuid))
     doc = result.scalar_one_or_none()
@@ -128,6 +162,13 @@ async def upload_signature_file(
         raise HTTPException(404, "Документ не найден")
     if doc.owner_org_id != org.id:
         raise HTTPException(403, "Документ не принадлежит вашей организации")
+    
+    # Для HAND не нужен SIG файл
+    if doc.signature_type == SignatureType.HAND:
+        raise HTTPException(400, "Для документов с собственноручной подписью (HAND) загрузка SIG файла не требуется")
+    
+    if doc.signature_type not in [SignatureType.UNEP, SignatureType.UKEP]:
+        raise HTTPException(400, "SIG файл требуется только для УНЭП/УКЭП")
     
     if not file.filename.endswith('.sig'):
         raise HTTPException(400, "Файл должен иметь расширение .sig")
@@ -143,13 +184,14 @@ async def upload_signature_file(
     
     return {"message": "Файл подписи загружен", "uuid": doc_uuid}
 
+
 @router.post("/verify/{doc_uuid}")
 async def verify_signature_endpoint(
     doc_uuid: str,
     db: AsyncSession = Depends(get_async_db),
     org: Organization = Depends(get_current_org),
 ):
-    """Проверка подписи документа"""
+    """Проверка подписи документа. Для HAND проверка не выполняется."""
     
     result = await db.execute(select(Document).where(Document.uuid == doc_uuid))
     doc = result.scalar_one_or_none()
@@ -157,6 +199,21 @@ async def verify_signature_endpoint(
         raise HTTPException(404, "Документ не найден")
     if doc.owner_org_id != org.id:
         raise HTTPException(403, "Документ не принадлежит вашей организации")
+    
+    # Для HAND возвращаем успешный результат без проверки
+    if doc.signature_type == SignatureType.HAND:
+        return {
+            "document_uuid": doc.uuid,
+            "signature_valid": True,
+            "signature_type": doc.signature_type,
+            "signer_name": doc.signer_full_name or doc.signer,
+            "signer_inn": doc.signer_inn or "",
+            "signature_date": doc.signature_date.isoformat() if doc.signature_date else "",
+            "certificate_serial": "HANDWRITTEN",
+            "hash_algorithm": "N/A",
+            "verification_details": "Собственноручная подпись не требует проверки",
+            "ocsp_status": "N/A",
+        }
     
     if doc.signature_type in [SignatureType.NONE, SignatureType.PEP]:
         raise HTTPException(400, "Для данного документа не требуется проверка ЭП")
@@ -175,6 +232,10 @@ async def verify_signature_endpoint(
     doc.goskey_valid = verification_result["signature_valid"]
     doc.goskey_data = json.dumps(verification_result)
     doc.status = DocumentStatus.SIGNED if verification_result["signature_valid"] else DocumentStatus.REJECTED
+    if verification_result.get("signer_name"):
+        doc.signer = verification_result["signer_name"]
+        doc.signer_full_name = verification_result["signer_name"]
+    
     await db.commit()
     
     return {
@@ -189,6 +250,7 @@ async def verify_signature_endpoint(
         "verification_details": verification_result["verification_details"],
         "ocsp_status": verification_result.get("ocsp_status"),
     }
+
 
 @router.get("/", response_model=PaginatedResponse)
 async def get_documents(
@@ -234,7 +296,7 @@ async def get_documents(
     count_result = await db.execute(count_query)
     total = count_result.scalar()
     
-    # Преобразуем goskey_data из строки в словарь
+    # Преобразуем данные для ответа
     for item in items:
         if item.goskey_data and isinstance(item.goskey_data, str):
             try:
@@ -242,19 +304,11 @@ async def get_documents(
             except:
                 item.goskey_data = None
         
-        # Формируем URL для скачивания со штампом
         if item.signed_copy_path:
             item.signed_copy_url = f"/api/documents/download/signed/{item.uuid}"
         
-        # Заполняем пустые поля
         if not item.signer_full_name and item.signer:
             item.signer_full_name = item.signer
-        if not item.name:
-            item.name = "Без названия"
-        if not item.type:
-            item.type = "Документ"
-        if not item.registration_number:
-            item.registration_number = "—"
     
     return PaginatedResponse(
         items=items,
@@ -264,6 +318,7 @@ async def get_documents(
         pages=(total + size - 1) // size if total > 0 else 0,
     )
 
+
 @router.get("/counts/summary")
 async def get_folder_counts(
     db: AsyncSession = Depends(get_async_db),
@@ -271,7 +326,6 @@ async def get_folder_counts(
 ):
     """Получение количества документов по каждой папке (своей организации)"""
     
-    # Подсчёт по каждой папке одним запросом
     query = (
         select(Document.folder, func.count())
         .where(Document.owner_org_id == org.id)
@@ -288,6 +342,7 @@ async def get_folder_counts(
     
     counts["all"] = total
     return counts
+
 
 @router.get("/{doc_uuid}", response_model=DocumentResponse)
 async def get_document(
@@ -308,6 +363,7 @@ async def get_document(
     
     return doc
 
+
 @router.put("/{doc_uuid}", response_model=DocumentResponse)
 async def update_document(
     doc_uuid: str,
@@ -323,13 +379,17 @@ async def update_document(
     for field, value in update_data.items():
         setattr(doc, field, value)
     
-    # Синхронизируем created_at_str при обновлении created_at
     if 'created_at' in update_data and update_data['created_at']:
-        doc.created_at_str = update_data['created_at'].strftime("%Y-%m-%d")
+        doc.created_at_str = update_data['created_at'].strftime("%d.%m.%Y")
     
     await db.commit()
     await db.refresh(doc)
+    
+    if doc.signed_copy_path:
+        doc.signed_copy_url = f"/api/documents/download/signed/{doc.uuid}"
+    
     return doc
+
 
 @router.delete("/{doc_uuid}")
 async def delete_document(
@@ -355,6 +415,7 @@ async def delete_document(
     
     return {"message": "Документ удалён"}
 
+
 @router.post("/visualize/{doc_uuid}")
 async def visualize_signature(
     doc_uuid: str,
@@ -362,12 +423,18 @@ async def visualize_signature(
     db: AsyncSession = Depends(get_async_db),
     org: Organization = Depends(get_current_org),
 ):
-    """Генерация PDF-копии со штампом"""
+    """Генерация PDF-копии со штампом. Для HAND визуализация не выполняется."""
     
     doc = await _accessible_doc(doc_uuid, org, db)
     
+    if doc.signature_type == SignatureType.HAND:
+        raise HTTPException(400, "Для документов с собственноручной подписью (HAND) визуализация штампа не требуется")
+    
     if doc.status != DocumentStatus.SIGNED:
         raise HTTPException(400, "Документ ещё не подписан")
+    
+    if doc.signature_type == SignatureType.PEP:
+        raise HTTPException(400, "Для ПЭП визуализация штампа не поддерживается")
     
     with open(doc.original_file_path, "rb") as f:
         doc_content = f.read()
@@ -398,6 +465,7 @@ async def visualize_signature(
         "file_url": f"/api/documents/download/signed/{doc.uuid}"
     }
 
+
 @router.get("/download/{doc_uuid}")
 async def download_original(
     doc_uuid: str,
@@ -423,33 +491,37 @@ async def download_archive(
     import zipfile
     from io import BytesIO
     from fastapi.responses import StreamingResponse
+    import re
+    from urllib.parse import quote
 
     doc = await _accessible_doc(doc_uuid, org, db)
 
     if not doc.original_file_path or not Path(doc.original_file_path).exists():
         raise HTTPException(404, "Файл документа не найден")
 
-    # Читаем оригинальный PDF
     with open(doc.original_file_path, "rb") as f:
         pdf_bytes = f.read()
 
-    # Создаём ZIP-архив в памяти
     archive_buffer = BytesIO()
     with zipfile.ZipFile(archive_buffer, mode='w', compression=zipfile.ZIP_DEFLATED) as zf:
         zf.writestr(doc.original_file_name, pdf_bytes)
-        if doc.signature_file_path and Path(doc.signature_file_path).exists():
+        
+        if doc.signature_type in [SignatureType.UNEP, SignatureType.UKEP] and doc.signature_file_path and Path(doc.signature_file_path).exists():
             with open(doc.signature_file_path, "rb") as sf:
                 sig_bytes = sf.read()
             sig_name = Path(doc.signature_file_path).name or f"{doc_uuid}.sig"
             zf.writestr(sig_name, sig_bytes)
+        elif doc.signature_type == SignatureType.HAND:
+            zf.writestr("README.txt", 
+                f"Документ подписан собственноручной подписью\n"
+                f"Подписант: {doc.signer_full_name or doc.signer}\n"
+                f"Дата: {doc.signature_date.strftime('%d.%m.%Y %H:%M') if doc.signature_date else 'Не указана'}\n"
+                f"Файл подписи (.sig) отсутствует, так как подпись выполнена ручкой."
+            )
 
     archive_buffer.seek(0)
 
-    # Имя файла с кириллицей — используем RFC 5987 (filename* для не-ASCII)
-    # filename должен быть ASCII-безопасным, filename* — UTF-8 кодированный
-    import re
     ascii_safe = re.sub(r'[^\x20-\x7E]', '_', f"{doc.registration_number or doc_uuid}") or "archive"
-    from urllib.parse import quote
     archive_name_ru = f"{doc.registration_number or doc_uuid}_архив.zip"
     content_disposition = f"attachment; filename=\"{ascii_safe}_archive.zip\"; filename*=UTF-8''{quote(archive_name_ru)}"
 
@@ -459,6 +531,7 @@ async def download_archive(
         headers={"Content-Disposition": content_disposition},
     )
 
+
 @router.get("/download/signed/{doc_uuid}")
 async def download_signed_copy(
     doc_uuid: str,
@@ -466,11 +539,23 @@ async def download_signed_copy(
     org: Organization = Depends(get_current_org_for_download),
 ):
     doc = await _accessible_doc(doc_uuid, org, db)
-    if not doc.signed_copy_path:
+    
+    if doc.signature_type == SignatureType.HAND and not doc.signed_copy_path:
+        signed_dir = Path(settings.SIGNED_DIR)
+        signed_dir.mkdir(parents=True, exist_ok=True)
+        
+        signed_path = signed_dir / f"{doc.uuid}_signed.pdf"
+        shutil.copy2(doc.original_file_path, signed_path)
+        
+        doc.signed_copy_path = str(signed_path)
+        await db.commit()
+    
+    if not doc.signed_copy_path or not Path(doc.signed_copy_path).exists():
         raise HTTPException(404, "PDF-копия ещё не создана")
     
+    filename = f"{doc.registration_number or doc.uuid}.pdf"
     return FileResponse(
         path=doc.signed_copy_path,
-        filename=f"{doc.registration_number}_с_штампом.pdf",
+        filename=filename,
         media_type="application/pdf",
     )

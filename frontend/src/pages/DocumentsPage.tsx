@@ -80,6 +80,8 @@ import {
   Edit as EditIcon,
   Warning as WarningIcon,
   Archive as ArchiveIcon,
+  Download as DownloadIcon,
+  Lock as LockIcon,
 } from '@mui/icons-material';
 import {
   getDocuments,
@@ -94,10 +96,13 @@ import {
   verifySignature as verifySignatureApi,
   visualizeSignature,
   updateDocument,
+  SignatureType,
+  authApi,
 } from '../api/edoApi';
 import { Document as PDFDocument, Page, pdfjs } from 'react-pdf';
 import 'react-pdf/dist/Page/TextLayer.css';
 import 'react-pdf/dist/Page/AnnotationLayer.css';
+import { useEvents } from '../context/EventContext';
 
 // Настройка worker для PDF.js
 pdfjs.GlobalWorkerOptions.workerSrc = `//cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js`;
@@ -239,6 +244,7 @@ const StatusChip = styled(Chip)<{ status: string }>(({ status }) => {
 
 const SignatureTypeText = styled(Typography)<{ type: string; valid?: boolean }>(({ type, valid }) => {
   const colors: Record<string, { bg: string; color: string }> = {
+    HAND: { bg: '#e8f5e9', color: '#1b5e20' },
     PEP: { bg: '#e3f2fd', color: '#0d47a1' },
     UNEP_valid: { bg: '#e8f5e9', color: '#1b5e20' },
     UNEP_invalid: { bg: '#ffebee', color: '#c62828' },
@@ -446,16 +452,13 @@ const StampContainer = styled(Box)({
 });
 
 // ===== ТИПЫ ПОДПИСИ =====
-type SignatureType = 'none' | 'PEP' | 'UNEP' | 'UKEP';
-
-const signatureTypes = [
-  { value: 'PEP', label: 'ПЭП', description: 'Простая электронная подпись (фото подписи)', disabled: true },
+const signatureTypes: { value: SignatureType; label: string; description: string; disabled: boolean }[] = [
+  { value: 'HAND', label: 'Собственноручная подпись', description: 'Загрузка скана документа с живой подписью ручкой', disabled: false },
   { value: 'UNEP', label: 'УНЭП (Госключ)', description: 'Усиленная неквалифицированная ЭП через Госключ', disabled: false },
   { value: 'UKEP', label: 'УКЭП (Госключ)', description: 'Усиленная квалифицированная ЭП через Госключ', disabled: false },
 ];
 
 // ===== МАППИНГ ПОДПИСАНТ → ШТАМП =====
-// Фамилия подписанта (в нижнем регистре) → файл штампа в /public/stamps/
 const STAMP_BY_SIGNER: Record<string, string> = {
   'плахов': '/stamps/plakhov.png',
   'валеев': '/stamps/valeev.png',
@@ -463,11 +466,8 @@ const STAMP_BY_SIGNER: Record<string, string> = {
 };
 
 const DEFAULT_STAMP_URL = '/stamps/premium-stamp.png';
-
-// Размер штампа по умолчанию — фикс 40%, нельзя менять
 const FIXED_STAMP_SIZE = 40;
 
-// Автоподстановка типа документа по выбранной папке
 const FOLDER_TO_TYPE: Record<string, string> = {
   orders: 'Приказ по ОО',
   regulations: 'Распоряжение',
@@ -477,24 +477,10 @@ const FOLDER_TO_TYPE: Record<string, string> = {
   tasks: 'Поручение',
 };
 
-/**
- * Определяет URL штампа по имени подписанта.
- * Ищет фамилию в строке (не зависит от регистра).
- * Если совпадений нет — возвращает штамп по умолчанию.
- */
-function resolveStampUrl(signerName: string | undefined | null): string {
-  if (!signerName) return DEFAULT_STAMP_URL;
-  const lower = signerName.toLowerCase();
-  for (const [lastName, stampUrl] of Object.entries(STAMP_BY_SIGNER)) {
-    if (lower.includes(lastName)) {
-      return stampUrl;
-    }
-  }
-  return DEFAULT_STAMP_URL;
-}
-
 // ===== ОСНОВНОЙ КОМПОНЕНТ =====
 const DocumentsPage: React.FC = () => {
+  const { addSuccess, addError, addWarning, addInfo } = useEvents();
+  
   const [activeFolder, setActiveFolder] = useState<string>('all');
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedDocuments, setSelectedDocuments] = useState<string[]>([]);
@@ -525,17 +511,22 @@ const DocumentsPage: React.FC = () => {
   const [rowMenuAnchor, setRowMenuAnchor] = useState<null | HTMLElement>(null);
   const [rowMenuDoc, setRowMenuDoc] = useState<Document | null>(null);
   
+  // ===== СОСТОЯНИЕ ЛИЦЕНЗИИ =====
+  const [licenseValid, setLicenseValid] = useState<boolean | null>(null);
+  const [licenseLoading, setLicenseLoading] = useState(true);
+  const [licenseError, setLicenseError] = useState<string | null>(null);
+  
   // ===== СОСТОЯНИЕ ЗАГРУЗКИ =====
   const [activeStep, setActiveStep] = useState(0);
   const [uploadData, setUploadData] = useState({
-    signatureType: 'UNEP' as SignatureType,
+    signatureType: 'HAND' as SignatureType,
     pdfFile: null as File | null,
     sigFile: null as File | null,
     folder: 'orders' as FolderType,
     documentType: '',
     name: '',
     registrationNumber: '',
-    date: dayjs().format('DD-MM-YYYY'),
+    date: dayjs().format('YYYY-MM-DD'),
     signer: '',
     signerFullName: '',
     signerInn: '',
@@ -548,14 +539,12 @@ const DocumentsPage: React.FC = () => {
   const [uploadLoading, setUploadLoading] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
 
-  // ===== СОСТОЯНИЕ ДЛЯ ПРОВЕРКИ ПОДПИСИ =====
   const [verificationResult, setVerificationResult] = useState<{
     status: 'idle' | 'loading' | 'success' | 'error';
     data: any | null;
     error: string | null;
   }>({ status: 'idle', data: null, error: null });
 
-  // ===== СОСТОЯНИЕ ДЛЯ ПРЕДПРОСМОТРА PDF =====
   const [showStampPreview, setShowStampPreview] = useState(false);
   const [stampSize, setStampSize] = useState(FIXED_STAMP_SIZE);
   const [numPages, setNumPages] = useState<number | null>(null);
@@ -569,19 +558,16 @@ const DocumentsPage: React.FC = () => {
   const dragOffset = useRef({ x: 0, y: 0 });
   const stampPosition = useRef({ x: 100, y: 50 });
 
-  // Размеры штампа в PDF (мм) — должны совпадать с бэкендом
   const STAMP_BASE_WIDTH_MM = 150;
   const STAMP_BASE_HEIGHT_MM = 80;
   const MM_TO_PT = 2.83465;
 
-  // Вычисляем размеры штампа в пикселях превью, чтобы они точно соответствовали PDF
   const previewScale = pdfOriginalSize && previewPageWidth
     ? previewPageWidth / pdfOriginalSize.width
     : 1;
-  const stampBaseWidthPx = STAMP_BASE_WIDTH_MM * MM_TO_PT * previewScale;  // ширина при 100%
-  const stampBaseHeightPx = STAMP_BASE_HEIGHT_MM * MM_TO_PT * previewScale; // высота при 100%
+  const stampBaseWidthPx = STAMP_BASE_WIDTH_MM * MM_TO_PT * previewScale;
+  const stampBaseHeightPx = STAMP_BASE_HEIGHT_MM * MM_TO_PT * previewScale;
 
-  // Мемоизированный URL файла — создаётся один раз, чтобы react-pdf не перезагружался
   const pdfFileUrl = useMemo(() => {
     if (uploadData.pdfFile) {
       return URL.createObjectURL(uploadData.pdfFile);
@@ -589,7 +575,6 @@ const DocumentsPage: React.FC = () => {
     return null;
   }, [uploadData.pdfFile]);
 
-  // Очищаем URL при размонтировании / смене файла
   useEffect(() => {
     return () => {
       if (pdfFileUrl) {
@@ -598,8 +583,48 @@ const DocumentsPage: React.FC = () => {
     };
   }, [pdfFileUrl]);
 
-  // Загрузка документов
+  // ===== ПРОВЕРКА ЛИЦЕНЗИИ =====
+  const checkLicense = useCallback(async () => {
+    setLicenseLoading(true);
+    setLicenseError(null);
+    try {
+      const response = await authApi.getLicense();
+      // Проверяем валидность лицензии
+      const isValid = response?.valid === true;
+      setLicenseValid(isValid);
+      
+      if (!isValid) {
+        addWarning(
+          '⚠️ Лицензия неактивна',
+          'Для доступа к документам необходима активная лицензия. Обратитесь к администратору.'
+        );
+      }
+      
+      return isValid;
+    } catch (err: any) {
+      const errorMsg = err.response?.data?.detail || 'Ошибка проверки лицензии';
+      setLicenseError(errorMsg);
+      setLicenseValid(false);
+      addError('Ошибка проверки лицензии', errorMsg);
+      return false;
+    } finally {
+      setLicenseLoading(false);
+    }
+  }, [addWarning, addError]);
+
+  // Проверяем лицензию при загрузке страницы
+  useEffect(() => {
+    checkLicense();
+  }, [checkLicense]);
+
+  // ===== ЗАГРУЗКА ДОКУМЕНТОВ (только если лицензия активна) =====
   const loadDocuments = useCallback(async () => {
+    // Если лицензия неактивна - не загружаем документы
+    if (licenseValid === false) {
+      setLoading(false);
+      return;
+    }
+    
     setLoading(true);
     setError(null);
     try {
@@ -611,39 +636,73 @@ const DocumentsPage: React.FC = () => {
         setTotal(response.total);
       });
     } catch (err: any) {
-      setError(err.response?.data?.detail || 'Ошибка загрузки документов');
+      const errorMsg = err.response?.data?.detail || 'Ошибка загрузки документов';
+      setError(errorMsg);
+      addError('Ошибка загрузки документов', errorMsg);
     } finally {
       setLoading(false);
     }
-  }, [activeFolder, page, pageSize, searchQuery]);
+  }, [activeFolder, page, pageSize, searchQuery, addError, licenseValid]);
 
-  // Загрузка счётчиков по папкам
   const loadFolderCounts = useCallback(async () => {
+    // Если лицензия неактивна - не загружаем счетчики
+    if (licenseValid === false) {
+      return;
+    }
     try {
       const counts = await getFolderCounts();
       setFolderCounts(counts);
     } catch {
-      // тихо игнорируем — счётчики не критичны
+      // тихо игнорируем
     }
-  }, []);
+  }, [licenseValid]);
+
+  // Загружаем документы только когда лицензия проверена и активна
+  useEffect(() => {
+    if (licenseValid !== null) {
+      loadDocuments();
+    }
+  }, [loadDocuments, licenseValid]);
 
   useEffect(() => {
-    loadDocuments();
+    if (licenseValid !== null) {
+      loadFolderCounts();
+    }
+  }, [loadFolderCounts, activeFolder, licenseValid]);
+
+  useEffect(() => {
+    if (licenseValid !== null) {
+      loadFolderCounts();
+    }
   }, [loadDocuments]);
 
-  // Обновляем счётчики при загрузке, смене папки и после операций
-  useEffect(() => {
-    loadFolderCounts();
-  }, [loadFolderCounts, activeFolder]);
+  // ===== ФОРМАТИРОВАНИЕ ДАТЫ =====
+  const formatDate = (dateStr: string | undefined | null): string => {
+    if (!dateStr) return '—';
+    
+    try {
+      if (typeof dateStr === 'string' && /^\d{2}\.\d{2}\.\d{4}$/.test(dateStr)) {
+        return dateStr;
+      }
+      
+      const parsed = dayjs(dateStr);
+      
+      if (!parsed.isValid()) {
+        return '—';
+      }
+      
+      const year = parsed.year();
+      if (year < 2000 || year > 2100) {
+        return '—';
+      }
+      
+      return parsed.format('DD.MM.YYYY');
+    } catch (error) {
+      return '—';
+    }
+  };
 
-  // Обновляем счётчики после загрузки документов
-  useEffect(() => {
-    loadFolderCounts();
-  }, [loadDocuments]);
-
-  // ===== ОБРАБОТЧИКИ ДРАГА ШТАМПА =====
-  // Позиция трекается относительно pageWrapRef (элемент-обёртка страницы PDF),
-  // чтобы координаты пикселей превью точно соответствовали координатам в PDF.
+  // ===== ОСТАЛЬНЫЕ ОБРАБОТЧИКИ =====
   const handleStampMouseDown = (e: React.MouseEvent<HTMLDivElement>) => {
     if (!pageWrapRef.current || !stampRef.current) return;
     e.stopPropagation();
@@ -689,7 +748,6 @@ const DocumentsPage: React.FC = () => {
     setPageNumber(1);
   };
 
-  // Получаем оригинальные размеры PDF-страницы (в точках) для точного масштабирования штампа
   const onPageLoadSuccess = (page: any) => {
     setPdfOriginalSize({
       width: page.originalWidth,
@@ -697,7 +755,6 @@ const DocumentsPage: React.FC = () => {
     });
   };
 
-  // Отслеживаем ширину контейнера превью для синхронизации с бэкендом
   useEffect(() => {
     if (!showStampPreview) return;
     const updateWidth = () => {
@@ -707,7 +764,6 @@ const DocumentsPage: React.FC = () => {
       }
     };
     updateWidth();
-    // ResizeObserver для отслеживания изменений размера контейнера
     const ro = new ResizeObserver(updateWidth);
     if (previewRef.current) {
       ro.observe(previewRef.current);
@@ -741,14 +797,17 @@ const DocumentsPage: React.FC = () => {
         await deleteDocument(uuid);
       }
       setSelectedDocuments([]);
-      setSuccess(`Удалено ${selectedDocuments.length} документов`);
+      const msg = `Удалено ${selectedDocuments.length} документов`;
+      setSuccess(msg);
+      addSuccess('Документы удалены', msg);
       await loadDocuments();
     } catch (err: any) {
-      setError(err.response?.data?.detail || 'Ошибка удаления');
+      const errorMsg = err.response?.data?.detail || 'Ошибка удаления';
+      setError(errorMsg);
+      addError('Ошибка удаления', errorMsg);
     }
   };
 
-  // ===== РЕДАКТИРОВАНИЕ МЕТАДАННЫХ =====
   const handleOpenEditModal = async (doc: Document) => {
     setRowMenuAnchor(null);
     setEditData(doc);
@@ -789,29 +848,15 @@ const DocumentsPage: React.FC = () => {
         created_at: editFormData.date ? `${editFormData.date}T00:00:00` : undefined,
       });
       setSuccess('Метаданные обновлены');
+      addSuccess('Метаданные обновлены', `Документ "${editFormData.name}" успешно обновлен`);
       setIsEditModalOpen(false);
       await loadDocuments();
     } catch (err: any) {
-      setError(err.response?.data?.detail || 'Ошибка обновления');
+      const errorMsg = err.response?.data?.detail || 'Ошибка обновления';
+      setError(errorMsg);
+      addError('Ошибка обновления', errorMsg);
     } finally {
       setEditLoading(false);
-    }
-  };
-
-  const formatDate = (dateStr: string): string => {
-    if (!dateStr) return '—';
-    try {
-      // Go GOST возвращает дату в формате "DD.MM.YYYY HH:mm:ss TZ"
-      // dayjs по умолчанию парсит точечно-разделённые даты как MM.DD.YYYY,
-      // поэтому указываем формат явно
-      const parsed = dayjs(dateStr, 'DD.MM.YYYY HH:mm:ss');
-      if (parsed.isValid()) {
-        return parsed.format('DD.MM.YYYY');
-      }
-      // Fallback — пробуем стандартный парсинг
-      return dayjs(dateStr).format('DD.MM.YYYY');
-    } catch {
-      return '—';
     }
   };
 
@@ -827,6 +872,7 @@ const DocumentsPage: React.FC = () => {
 
   const getSignatureLabel = (type: string, valid?: boolean): string => {
     const map: Record<string, string> = {
+      HAND: 'Собственноручная',
       PEP: 'ПЭП действ',
       UNEP_valid: 'УНЭП действ',
       UNEP_invalid: 'УНЭП недейств',
@@ -835,6 +881,7 @@ const DocumentsPage: React.FC = () => {
       none: 'Без подписи',
     };
     
+    if (type === 'HAND') return map.HAND;
     if (type === 'PEP') return map.PEP;
     if (type === 'none') return map.none;
     if (type === 'UNEP' || type === 'UKEP') {
@@ -844,7 +891,6 @@ const DocumentsPage: React.FC = () => {
     return type;
   };
 
-  // ===== ВИЗУАЛИЗАЦИЯ ШТАМПА =====
   const handleVisualizeStamp = async (uuid: string) => {
     try {
       setLoading(true);
@@ -858,23 +904,27 @@ const DocumentsPage: React.FC = () => {
         previewPageWidth
       );
       setSuccess('Документ готов к загрузке');
+      addSuccess('Штамп создан', 'PDF-копия со штампом успешно создана');
       await loadDocuments();
       window.open(downloadSignedCopy(uuid), '_blank');
     } catch (err: any) {
-      setError(err.response?.data?.detail || 'Ошибка создания штампа');
+      const errorMsg = err.response?.data?.detail || 'Ошибка создания штампа';
+      setError(errorMsg);
+      addError('Ошибка создания штампа', errorMsg);
     } finally {
       setLoading(false);
     }
   };
 
-  // ===== ПРОВЕРКА ПОДПИСИ ЧЕРЕЗ БЭКЕНД =====
   const handleVerifySignature = async () => {
     if (!uploadData.pdfFile || !uploadData.sigFile) {
+      const errorMsg = 'Не выбраны файлы для проверки';
       setVerificationResult({
         status: 'error',
         data: null,
-        error: 'Не выбраны файлы для проверки',
+        error: errorMsg,
       });
+      addError('Ошибка проверки', errorMsg);
       return;
     }
 
@@ -898,7 +948,6 @@ const DocumentsPage: React.FC = () => {
       
       const isValid = result?.signature_valid === true;
 
-      // Подбираем штамп по имени подписанта из сертификата
       const signerNameFromCert = result?.signer_name;
       const resolvedStampUrl = resolveStampUrl(signerNameFromCert);
 
@@ -906,7 +955,6 @@ const DocumentsPage: React.FC = () => {
         ...prev,
         _doc_uuid: doc.uuid,
         customStampUrl: resolvedStampUrl,
-        // Если имя подписанта не было введено вручную — берём из сертификата
         signer: prev.signer || signerNameFromCert || 'Не указан',
         signerFullName: prev.signerFullName || signerNameFromCert || prev.signer,
       }));
@@ -914,8 +962,14 @@ const DocumentsPage: React.FC = () => {
       setVerificationResult({
         status: isValid ? 'success' : 'error',
         data: result,
-        error: isValid ? null : 'Подпись не подтверждена. Файл был модифицирован или подпись не соответствует файлу.',
+        error: isValid ? null : 'Подпись не подтверждена',
       });
+
+      if (isValid) {
+        addSuccess('Подпись подтверждена', `Документ "${doc.name}" успешно проверен`);
+      } else {
+        addError('Подпись не подтверждена', 'Файл был модифицирован или подпись не соответствует файлу');
+      }
     } catch (err: any) {
       console.error('❌ Ошибка проверки:', err);
       const errorMessage = err?.response?.data?.detail || err?.message || 'Ошибка проверки подписи';
@@ -924,15 +978,34 @@ const DocumentsPage: React.FC = () => {
         data: null,
         error: typeof errorMessage === 'string' ? errorMessage : JSON.stringify(errorMessage),
       });
+      addError('Ошибка проверки подписи', typeof errorMessage === 'string' ? errorMessage : 'Неизвестная ошибка');
     }
   };
 
-  // ===== ПОШАГОВАЯ ЗАГРУЗКА =====
+  function resolveStampUrl(signerName: string | undefined | null): string {
+    if (!signerName) return DEFAULT_STAMP_URL;
+    const lower = signerName.toLowerCase();
+    for (const [lastName, stampUrl] of Object.entries(STAMP_BY_SIGNER)) {
+      if (lower.includes(lastName)) {
+        return stampUrl;
+      }
+    }
+    return DEFAULT_STAMP_URL;
+  }
+
   const handleOpenUploadModal = () => {
+    // Проверяем лицензию перед открытием модалки
+    if (!licenseValid) {
+      addWarning(
+        '⚠️ Доступ запрещен',
+        'Для загрузки документов необходима активная лицензия.'
+      );
+      return;
+    }
     setIsUploadModalOpen(true);
     setActiveStep(0);
     setUploadData({
-      signatureType: 'UNEP',
+      signatureType: 'HAND',
       pdfFile: null,
       sigFile: null,
       folder: 'orders',
@@ -967,13 +1040,11 @@ const DocumentsPage: React.FC = () => {
     setVerificationResult({ status: 'idle', data: null, error: null });
   };
 
-  // Шаг 1: Выбор типа подписи
   const handleSignatureTypeSelect = (type: SignatureType) => {
     setUploadData(prev => ({ ...prev, signatureType: type }));
     setVerificationResult({ status: 'idle', data: null, error: null });
   };
 
-  // Шаг 2: Загрузка файлов
   const handleFileSelect = (type: 'pdf' | 'sig') => (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) {
       if (type === 'pdf') {
@@ -1014,13 +1085,10 @@ const DocumentsPage: React.FC = () => {
     setIsDragging(false);
   };
 
-  // Шаг 5: Заполнение метаданных
   const handleFieldChange = (field: string) => (e: React.ChangeEvent<HTMLInputElement>) => {
     const value = e.target.value;
     setUploadData(prev => {
       const next = { ...prev, [field]: value };
-      // При изменении подписанта — обновляем штамп (если проверка ещё не прошла,
-      // т.е. имя из сертификата ещё не получено)
       if ((field === 'signer' || field === 'signerFullName') && !next._doc_uuid) {
         next.customStampUrl = resolveStampUrl(value || next.signerFullName);
       }
@@ -1028,10 +1096,20 @@ const DocumentsPage: React.FC = () => {
     });
   };
 
-  // Шаг 6: Сохранение
   const handleSaveDocument = async () => {
     if (!uploadData.pdfFile) {
-      setError('Выберите PDF файл');
+      const errorMsg = 'Выберите PDF файл';
+      setError(errorMsg);
+      addError('Ошибка загрузки', errorMsg);
+      return;
+    }
+
+    // Проверяем лицензию перед сохранением
+    if (!licenseValid) {
+      addWarning(
+        '⚠️ Доступ запрещен',
+        'Для сохранения документов необходима активная лицензия.'
+      );
       return;
     }
 
@@ -1040,6 +1118,7 @@ const DocumentsPage: React.FC = () => {
 
     try {
       let docUuid = uploadData._doc_uuid;
+      let documentName = uploadData.name || uploadData.pdfFile.name;
       
       if (!docUuid) {
         const doc = await uploadDocument(uploadData.pdfFile, {
@@ -1053,8 +1132,9 @@ const DocumentsPage: React.FC = () => {
           signature_type: uploadData.signatureType,
         });
         docUuid = doc.uuid;
+        documentName = doc.name;
         
-        if (uploadData.sigFile) {
+        if (uploadData.signatureType !== 'HAND' && uploadData.sigFile) {
           await uploadSignatureFile(docUuid, uploadData.sigFile);
         }
         
@@ -1062,7 +1142,6 @@ const DocumentsPage: React.FC = () => {
           await verifySignatureApi(docUuid);
         }
       } else {
-        // Документ уже создан на шаге проверки — обновляем метаданные
         await updateDocument(docUuid, {
           name: uploadData.name || uploadData.pdfFile.name,
           type: uploadData.documentType || 'Документ',
@@ -1077,7 +1156,7 @@ const DocumentsPage: React.FC = () => {
         });
       }
       
-      if (uploadData.visualizeStamp && docUuid) {
+      if (uploadData.visualizeStamp && docUuid && uploadData.signatureType !== 'HAND') {
         await visualizeSignature(
           docUuid,
           Math.round(stampPosition.current.x),
@@ -1089,39 +1168,70 @@ const DocumentsPage: React.FC = () => {
         );
       }
       
-      setSuccess(`Документ успешно сохранён`);
+      const successMsg = `Документ "${documentName}" успешно сохранён`;
+      setSuccess(successMsg);
+      
+      addSuccess(
+        'Документ загружен',
+        successMsg,
+        {
+          label: 'Открыть',
+          handler: () => window.open(`/documents`, '_blank'),
+        }
+      );
+      
       handleCloseUploadModal();
       await loadDocuments();
     } catch (err: any) {
       const errorMessage = err?.response?.data?.detail || err?.message || 'Ошибка загрузки документа';
       setError(typeof errorMessage === 'string' ? errorMessage : JSON.stringify(errorMessage));
+      addError('Ошибка загрузки', typeof errorMessage === 'string' ? errorMessage : 'Не удалось загрузить документ');
     } finally {
       setUploadLoading(false);
     }
   };
 
-  // Шаги для стоппера
-  const steps = [
-    { label: 'Тип подписи', icon: <VpnKeyIcon /> },
-    { label: 'Загрузка файлов', icon: <UploadFileIcon /> },
-    { label: 'Проверка подписи', icon: <VerifiedIcon /> },
-    { label: 'Визуализация', icon: <VisibilityIcon /> },
-    { label: 'Метаданные', icon: <DescriptionIcon /> },
-    { label: 'Сохранение', icon: <CheckCircleIcon /> },
-  ];
+  const getSteps = () => {
+    const isHand = uploadData.signatureType === 'HAND';
+    if (isHand) {
+      return [
+        { label: 'Тип подписи', icon: <VpnKeyIcon /> },
+        { label: 'Загрузка файлов', icon: <UploadFileIcon /> },
+        { label: 'Метаданные', icon: <DescriptionIcon /> },
+        { label: 'Сохранение', icon: <CheckCircleIcon /> },
+      ];
+    }
+    return [
+      { label: 'Тип подписи', icon: <VpnKeyIcon /> },
+      { label: 'Загрузка файлов', icon: <UploadFileIcon /> },
+      { label: 'Проверка подписи', icon: <VerifiedIcon /> },
+      { label: 'Визуализация', icon: <VisibilityIcon /> },
+      { label: 'Метаданные', icon: <DescriptionIcon /> },
+      { label: 'Сохранение', icon: <CheckCircleIcon /> },
+    ];
+  };
+
+  const steps = getSteps();
 
   const canProceed = () => {
+    const isHand = uploadData.signatureType === 'HAND';
+    
     switch (activeStep) {
       case 0:
-        // ПЭП недоступен
-        return uploadData.signatureType !== 'none' && uploadData.signatureType !== 'PEP';
+        return uploadData.signatureType !== 'none';
       case 1:
         if (!uploadData.pdfFile) return false;
-        if ((uploadData.signatureType === 'UNEP' || uploadData.signatureType === 'UKEP') && !uploadData.sigFile) return false;
+        if (!isHand && (uploadData.signatureType === 'UNEP' || uploadData.signatureType === 'UKEP') && !uploadData.sigFile) return false;
         return true;
       case 2:
+        if (isHand) {
+          return uploadData.name.trim().length > 0
+            && uploadData.signer.trim().length > 0
+            && uploadData.registrationNumber.trim().length > 0;
+        }
         return verificationResult.status === 'success';
       case 3:
+        if (isHand) return true;
         return true;
       case 4:
         return uploadData.name.trim().length > 0
@@ -1135,26 +1245,38 @@ const DocumentsPage: React.FC = () => {
   };
 
   const handleNext = () => {
-    // Блокировка ПЭП
-    if (uploadData.signatureType === 'PEP') {
-      setError('Невозможно использовать ПЭП');
+    const isHand = uploadData.signatureType === 'HAND';
+    const isLastStep = activeStep === steps.length - 1;
+    
+    if (isLastStep) {
+      handleSaveDocument();
       return;
     }
-    if (activeStep === 5) {
-      handleSaveDocument();
-    } else if (activeStep === 1 && (uploadData.signatureType === 'UNEP' || uploadData.signatureType === 'UKEP')) {
+    
+    if (isHand && activeStep === 1) {
+      setActiveStep(2);
+      return;
+    }
+    
+    if (!isHand && activeStep === 1) {
       setActiveStep(2);
       handleVerifySignature();
-    } else if (activeStep === 2 && verificationResult.status === 'success') {
+      return;
+    }
+    
+    if (!isHand && activeStep === 2 && verificationResult.status === 'success') {
       setActiveStep(3);
-      // Превью загружается только при активации чекбокса
       stampPosition.current = { x: 100, y: 50 };
       setStampSize(FIXED_STAMP_SIZE);
-    } else if (activeStep === 3) {
-      setActiveStep(4);
-    } else {
-      setActiveStep(prev => prev + 1);
+      return;
     }
+    
+    if (!isHand && activeStep === 3) {
+      setActiveStep(4);
+      return;
+    }
+    
+    setActiveStep(prev => prev + 1);
   };
 
   const handleBack = () => {
@@ -1165,27 +1287,77 @@ const DocumentsPage: React.FC = () => {
   };
 
   const isAllSelected = documents.length > 0 && selectedDocuments.length === documents.length;
+  const getFolderCount = (folderId: string) => folderCounts[folderId] ?? 0;
 
-  const getFolderCount = (folderId: string) => {
-    return folderCounts[folderId] ?? 0;
+  // ===== РЕНДЕР КНОПОК ДЛЯ ДОКУМЕНТА =====
+  const renderActionButtons = (doc: Document) => {
+    if (doc.signature_type === 'HAND') {
+      return (
+        <Tooltip title="Скачать документ">
+          <IconButton 
+            size="small" 
+            sx={{ color: '#4c6ef5' }}
+            onClick={() => {
+              window.open(downloadSignedCopy(doc.uuid), '_blank');
+              addInfo('Скачивание документа', `Документ "${doc.name}" скачивается`);
+            }}
+          >
+            <DownloadIcon fontSize="small" />
+          </IconButton>
+        </Tooltip>
+      );
+    }
+
+    return (
+      <>
+        <Tooltip title="Скачать архив с подлинником">
+          <IconButton 
+            size="small" 
+            sx={{ color: '#87879b' }} 
+            onClick={() => {
+              window.open(downloadArchive(doc.uuid), '_blank');
+              addInfo('Скачивание архива', `Архив документа "${doc.name}" скачивается`);
+            }}
+          >
+            <ArchiveIcon fontSize="small" />
+          </IconButton>
+        </Tooltip>
+        
+        <Tooltip title={doc.signed_copy_url ? "Скачать со штампом ЭП" : "Штамп не создан"}>
+          <IconButton 
+            size="small" 
+            sx={{ color: doc.signed_copy_url ? '#4c6ef5' : '#b0b3c3' }}
+            onClick={() => {
+              if (doc.signed_copy_url) {
+                window.open(downloadSignedCopy(doc.uuid), '_blank');
+                addInfo('Скачивание документа', `Документ "${doc.name}" со штампом скачивается`);
+              } else if (doc.status === 'signed' && doc.signature_type !== 'HAND') {
+                handleVisualizeStamp(doc.uuid);
+              }
+            }}
+            disabled={doc.status !== 'signed' && !doc.signed_copy_url}
+          >
+            <VerifiedIcon fontSize="small" />
+          </IconButton>
+        </Tooltip>
+      </>
+    );
   };
 
   const getStepContent = (step: number) => {
+    const isHand = uploadData.signatureType === 'HAND';
+    
     switch (step) {
       case 0:
         return (
           <Box>
             <Typography sx={{ fontFamily: 'Lato, sans-serif', fontSize: '14px', color: '#87879b', mb: 3 }}>
-              Выберите тип электронной подписи, который будет использован для документа
+              Выберите тип подписи, которой подписан документ
             </Typography>
             <RadioGroup
               value={uploadData.signatureType}
               onChange={(e) => {
                 const val = e.target.value as SignatureType;
-                if (val === 'PEP') {
-                  setError('Невозможно использовать ПЭП');
-                  return;
-                }
                 handleSignatureTypeSelect(val);
               }}
             >
@@ -1207,10 +1379,7 @@ const DocumentsPage: React.FC = () => {
                       },
                     }}
                     onClick={() => {
-                      if (isDisabled) {
-                        setError('Невозможно использовать ПЭП');
-                        return;
-                      }
+                      if (isDisabled) return;
                       handleSignatureTypeSelect(type.value as SignatureType);
                     }}
                   >
@@ -1294,7 +1463,7 @@ const DocumentsPage: React.FC = () => {
               )}
             </DropZoneUpload>
 
-            {(uploadData.signatureType === 'UNEP' || uploadData.signatureType === 'UKEP') && (
+            {!isHand && (uploadData.signatureType === 'UNEP' || uploadData.signatureType === 'UKEP') && (
               <>
                 <input
                   type="file"
@@ -1344,1245 +1513,1022 @@ const DocumentsPage: React.FC = () => {
         );
 
       case 2:
-        return (
-          <Box>
-            <Typography sx={{ fontFamily: 'Lato, sans-serif', fontSize: '14px', color: '#87879b', mb: 3 }}>
-              Проверка электронной подписи
-            </Typography>
-
-            {verificationResult.status === 'idle' && (
-              <Box sx={{ textAlign: 'center', py: 4 }}>
-                <PendingIcon sx={{ fontSize: '64px', color: '#ff9800', mb: 2 }} />
-                <Typography sx={{ fontFamily: 'Lato, sans-serif', fontSize: '16px', color: '#87879b' }}>
-                  Нажмите "Проверить", чтобы начать проверку подписи
-                </Typography>
-                <Button
-                  variant="contained"
-                  onClick={handleVerifySignature}
-                  sx={{ mt: 2 }}
-                >
-                  Проверить подпись
-                </Button>
-              </Box>
-            )}
-
-            {verificationResult.status === 'loading' && (
-              <Box sx={{ textAlign: 'center', py: 4 }}>
-                <CircularProgress size={48} sx={{ mb: 2 }} />
-                <Typography sx={{ fontFamily: 'Lato, sans-serif', fontSize: '16px', color: '#87879b' }}>
-                  Проверка подписи через Госключ...
-                </Typography>
-              </Box>
-            )}
-
-            {verificationResult.status === 'success' && (
-              <Box>
-                <Alert
-                  severity="success"
-                  sx={{ mb: 3 }}
-                >
-                  <Typography sx={{ fontFamily: 'Lato, sans-serif', fontWeight: 600 }}>
-                    Подпись подтверждена. Подпись была создана для проверяемого документа, и он после этого не был изменён.
-                  </Typography>
-                </Alert>
-
-                <Paper sx={{ p: 2, bgcolor: '#f9fafe', borderRadius: '8px' }}>
-                  <Typography sx={{ fontFamily: 'Lato, sans-serif', fontSize: '13px', fontWeight: 600, mb: 1.5 }}>
-                    Информация о подписи
-                  </Typography>
-                  
-                  <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5 }}>
-                    {(verificationResult.data?.signer_name) && (
-                      <Box sx={{ display: 'flex', justifyContent: 'space-between', py: 0.5, borderBottom: '1px solid #f0f0f0' }}>
-                        <Typography sx={{ fontFamily: 'Lato, sans-serif', fontSize: '13px', color: '#87879b' }}>
-                          Подписант
-                        </Typography>
-                        <Typography sx={{ fontFamily: 'Lato, sans-serif', fontSize: '13px', color: '#101025' }}>
-                          {verificationResult.data?.signer_name}
-                        </Typography>
-                      </Box>
-                    )}
-
-                    {(verificationResult.data?.signature_date) && (
-                      <Box sx={{ display: 'flex', justifyContent: 'space-between', py: 0.5, borderBottom: '1px solid #f0f0f0' }}>
-                        <Typography sx={{ fontFamily: 'Lato, sans-serif', fontSize: '13px', color: '#87879b' }}>
-                          Дата подписания
-                        </Typography>
-                        <Typography sx={{ fontFamily: 'Lato, sans-serif', fontSize: '13px', color: '#101025' }}>
-                          {formatDate(verificationResult.data?.signature_date)}
-                        </Typography>
-                      </Box>
-                    )}
-
-                    {(verificationResult.data?.certificate_serial) && (
-                      <Box sx={{ display: 'flex', justifyContent: 'space-between', py: 0.5, borderBottom: '1px solid #f0f0f0' }}>
-                        <Typography sx={{ fontFamily: 'Lato, sans-serif', fontSize: '13px', color: '#87879b' }}>
-                          Серийный номер сертификата
-                        </Typography>
-                        <Typography sx={{ fontFamily: 'Lato, sans-serif', fontSize: '13px', color: '#101025' }}>
-                          {verificationResult.data?.certificate_serial}
-                        </Typography>
-                      </Box>
-                    )}
-
-                    {(verificationResult.data?.hash_algorithm) && (
-                      <Box sx={{ display: 'flex', justifyContent: 'space-between', py: 0.5, borderBottom: '1px solid #f0f0f0' }}>
-                        <Typography sx={{ fontFamily: 'Lato, sans-serif', fontSize: '13px', color: '#87879b' }}>
-                          Алгоритм хеширования
-                        </Typography>
-                        <Typography sx={{ fontFamily: 'Lato, sans-serif', fontSize: '13px', color: '#101025' }}>
-                          {verificationResult.data?.hash_algorithm}
-                        </Typography>
-                      </Box>
-                    )}
-
-                    {(verificationResult.data?.ocsp_status) && (
-                      <Box sx={{ display: 'flex', justifyContent: 'space-between', py: 0.5, borderBottom: '1px solid #f0f0f0' }}>
-                        <Typography sx={{ fontFamily: 'Lato, sans-serif', fontSize: '13px', color: '#87879b' }}>
-                          OCSP
-                        </Typography>
-                        <Typography sx={{ fontFamily: 'Lato, sans-serif', fontSize: '13px', color: '#4caf50' }}>
-                          {verificationResult.data?.ocsp_status}
-                        </Typography>
-                      </Box>
-                    )}
-
-                    <Box sx={{ display: 'flex', justifyContent: 'space-between', py: 0.5 }}>
-                      <Typography sx={{ fontFamily: 'Lato, sans-serif', fontSize: '13px', color: '#87879b' }}>
-                        Детали
-                      </Typography>
-                      <Typography sx={{ fontFamily: 'Lato, sans-serif', fontSize: '13px', color: '#101025' }}>
-                        {verificationResult.data?.verification_details?.replace?.(/Go.?Gost/gi, 'сервер ГОСТ') || 'Подпись проверена через сервер ГОСТ'}
-                      </Typography>
-                    </Box>
-                  </Box>
-                </Paper>
-              </Box>
-            )}
-
-            {verificationResult.status === 'error' && (
-              <Box>
-                <Alert
-                  severity="error"
-                  sx={{ mb: 2 }}
-                >
-                  <Typography sx={{ fontFamily: 'Lato, sans-serif', fontWeight: 600 }}>
-                    {verificationResult.error}
-                  </Typography>
-                </Alert>
-                <Button
-                  variant="outlined"
-                  onClick={handleVerifySignature}
-                  sx={{ mt: 1 }}
-                >
-                  Попробовать снова
-                </Button>
-              </Box>
-            )}
-          </Box>
-        );
+        if (isHand) {
+          return getMetadataStep();
+        }
+        return getVerificationStep();
 
       case 3:
-        return (
-          <Box>
-            <Typography sx={{ fontFamily: 'Lato, sans-serif', fontSize: '14px', color: '#87879b', mb: 2 }}>
-              Визуализация штампа на документе
-            </Typography>
-
-            <FormControlLabel
-              control={
-                <Checkbox
-                  checked={uploadData.visualizeStamp}
-                  onChange={(e) => {
-                    setUploadData(prev => ({ ...prev, visualizeStamp: e.target.checked }));
-                    if (!e.target.checked) {
-                      setShowStampPreview(false);
-                    } else {
-                      setShowStampPreview(true);
-                      stampPosition.current = { x: 100, y: 50 };
-                      setStampSize(FIXED_STAMP_SIZE);
-                    }
-                  }}
-                  sx={{
-                    color: '#87879b',
-                    '&.Mui-checked': {
-                      color: '#4c6ef5',
-                    },
-                  }}
-                />
-              }
-              label={
-                <Typography sx={{ fontFamily: 'Lato, sans-serif', fontSize: '13px', fontWeight: 500, color: '#101025' }}>
-                  Визуализировать штамп ЭП по 63-ФЗ
-                </Typography>
-              }
-            />
-
-            {showStampPreview && (
-              <Box sx={{ mt: 3 }}>
-                <Typography sx={{ fontFamily: 'Lato, sans-serif', fontSize: '12px', color: '#87879b', mb: 1 }}>
-                  Штамп
-                </Typography>
-
-                <Box sx={{ display: 'flex', gap: 1, mb: 1, flexWrap: 'wrap', alignItems: 'center' }}>
-                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                    <Typography sx={{ fontFamily: 'Lato, sans-serif', fontSize: '12px', color: '#87879b' }}>
-                      Размер: {stampSize}%
-                    </Typography>
-                    <IconButton size="small" onClick={handleStampReset} sx={{ color: '#4c6ef5' }}>
-                      <CenterFocusStrongIcon fontSize="small" />
-                    </IconButton>
-                  </Box>
-
-                  {numPages && numPages > 1 && (
-                    <Box sx={{ display: 'flex', gap: 0.5, alignItems: 'center', ml: 2 }}>
-                      <IconButton 
-                        size="small" 
-                        onClick={() => setPageNumber(prev => Math.max(prev - 1, 1))}
-                        disabled={pageNumber <= 1}
-                        sx={{ color: '#87879b' }}
-                      >
-                        <ArrowBackIcon fontSize="small" />
-                      </IconButton>
-                      <Typography sx={{ fontFamily: 'Lato, sans-serif', fontSize: '12px', color: '#87879b' }}>
-                        {pageNumber} / {numPages}
-                      </Typography>
-                      <IconButton 
-                        size="small" 
-                        onClick={() => setPageNumber(prev => Math.min(prev + 1, numPages))}
-                        disabled={pageNumber >= numPages}
-                        sx={{ color: '#87879b' }}
-                      >
-                        <ArrowForwardIcon fontSize="small" />
-                      </IconButton>
-                    </Box>
-                  )}
-                </Box>
-
-                <PreviewContainer
-                  ref={previewRef}
-                  onMouseMove={handleStampMouseMove}
-                  onMouseUp={handleStampMouseUp}
-                  onMouseLeave={handleStampMouseUp}
-                >
-                  <Box
-                    sx={{
-                      width: '100%',
-                      minHeight: '500px',
-                      backgroundColor: '#e8e8e8',
-                      display: 'flex',
-                      justifyContent: 'center',
-                      alignItems: 'flex-start',
-                      padding: '8px',
-                      position: 'relative',
-                    }}
-                  >
-                    <PDFDocument
-                      file={pdfFileUrl}
-                      onLoadSuccess={onDocumentLoadSuccess}
-                      loading={
-                        <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '400px' }}>
-                          <CircularProgress size={40} />
-                        </Box>
-                      }
-                      error={
-                        <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '400px' }}>
-                          <Typography sx={{ fontFamily: 'Lato, sans-serif', color: '#e53935' }}>
-                            Не удалось загрузить PDF
-                          </Typography>
-                        </Box>
-                      }
-                    >
-                      <Box ref={pageWrapRef} sx={{ position: 'relative', display: 'inline-block', boxShadow: '0 2px 12px rgba(0,0,0,0.15)' }}>
-                        <Page
-                          pageNumber={pageNumber}
-                          scale={1}
-                          renderTextLayer={true}
-                          renderAnnotationLayer={true}
-                          width={previewPageWidth}
-                          onLoadSuccess={onPageLoadSuccess}
-                        />
-                        
-                        <StampContainer
-                          ref={stampRef}
-                          sx={{
-                            width: `${stampBaseWidthPx}px`,
-                            height: `${stampBaseHeightPx}px`,
-                            transform: `translate(${stampPosition.current.x}px, ${stampPosition.current.y}px) scale(${stampSize / 100})`,
-                            transformOrigin: 'top left',
-                            cursor: isDraggingStamp.current ? 'grabbing' : 'grab',
-                            boxShadow: isDraggingStamp.current ? '0 8px 32px rgba(0,0,0,0.3)' : '0 4px 16px rgba(0,0,0,0.15)',
-                            padding: '0',
-                            backgroundColor: 'transparent',
-                            border: 'none',
-                            minWidth: 'auto',
-                          }}
-                          onMouseDown={handleStampMouseDown}
-                          onMouseUp={handleStampMouseUp}
-                        >
-                          <img
-                            src={uploadData.customStampUrl || DEFAULT_STAMP_URL}
-                            alt="Штамп ЭП"
-                            style={{
-                              width: '100%',
-                              height: '100%',
-                              objectFit: 'contain',
-                              pointerEvents: 'none',
-                              display: 'block',
-                            }}
-                          />
-                        </StampContainer>
-                      </Box>
-                    </PDFDocument>
-                  </Box>
-                </PreviewContainer>
-              </Box>
-            )}
-          </Box>
-        );
+        if (isHand) {
+          return getSaveStep();
+        }
+        return getVisualizationStep();
 
       case 4:
-        return (
-          <Box>
-            <Typography sx={{ fontFamily: 'Lato, sans-serif', fontSize: '14px', color: '#87879b', mb: 3 }}>
-              Заполните метаданные документа
-            </Typography>
-
-            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-              <Box sx={{ display: 'flex', gap: 2 }}>
-                <FormControl fullWidth size="small">
-                  <InputLabel sx={{ fontFamily: 'Lato, sans-serif' }}>Папка</InputLabel>
-                  <Select
-                    value={uploadData.folder}
-                    onChange={(e) => {
-                      const folder = e.target.value as FolderType;
-                      setUploadData(prev => ({
-                        ...prev,
-                        folder,
-                        // Автоподстановка типа документа по папке
-                        documentType: FOLDER_TO_TYPE[folder] || prev.documentType,
-                      }));
-                    }}
-                    input={<OutlinedInput label="Папка" />}
-                    sx={{ borderRadius: '8px', fontFamily: 'Lato, sans-serif' }}
-                  >
-                    <MenuItem value="orders">Приказы</MenuItem>
-                    <MenuItem value="regulations">Распоряжения</MenuItem>
-                    <MenuItem value="provisions">Положения</MenuItem>
-                    <MenuItem value="incoming">Входящие</MenuItem>
-                    <MenuItem value="outgoing">Исходящие</MenuItem>
-                    <MenuItem value="tasks">Поручения</MenuItem>
-                  </Select>
-                </FormControl>
-
-                <StyledTextField
-                  fullWidth
-                  label="Тип документа"
-                  value={uploadData.documentType}
-                  size="small"
-                  disabled
-                  placeholder="Определяется папкой"
-                />
-              </Box>
-
-              <StyledTextField
-                fullWidth
-                label="Наименование"
-                value={uploadData.name}
-                onChange={handleFieldChange('name')}
-                size="small"
-                required
-                placeholder="Введите наименование документа"
-              />
-
-              <Box sx={{ display: 'flex', gap: 2 }}>
-                <StyledTextField
-                  fullWidth
-                  label="Регистрационный номер"
-                  value={uploadData.registrationNumber}
-                  onChange={handleFieldChange('registrationNumber')}
-                  size="small"
-                  required
-                  placeholder="П-2026-001"
-                />
-
-                <DatePicker
-                  label="Дата"
-                  value={dayjs(uploadData.date)}
-                  onChange={(date: Dayjs | null) => {
-                    if (date) {
-                      setUploadData(prev => ({ ...prev, date: date.format('YYYY-MM-DD') }));
-                    }
-                  }}
-                  format="DD.MM.YYYY"
-                  slotProps={{
-                    textField: {
-                      fullWidth: true,
-                      size: 'small',
-                    },
-                  }}
-                />
-              </Box>
-
-              <Box sx={{ display: 'flex', gap: 2 }}>
-                <StyledTextField
-                  fullWidth
-                  label="Подписант"
-                  value={uploadData.signer}
-                  size="small"
-                  required
-                  disabled
-                  placeholder="Заполняется из проверки подписи"
-                  slotProps={{
-                    input: {
-                      startAdornment: (
-                        <InputAdornment position="start">
-                          <PersonIcon sx={{ fontSize: '18px', color: '#87879b' }} />
-                        </InputAdornment>
-                      ),
-                    },
-                  }}
-                />
-
-                <StyledTextField
-                  fullWidth
-                  label="Исполнитель"
-                  value={uploadData.executor}
-                  onChange={handleFieldChange('executor')}
-                  size="small"
-                  placeholder="Петрова А.С."
-                  slotProps={{
-                    input: {
-                      startAdornment: (
-                        <InputAdornment position="start">
-                          <BusinessIcon sx={{ fontSize: '18px', color: '#87879b' }} />
-                        </InputAdornment>
-                      ),
-                    },
-                  }}
-                />
-              </Box>
-
-              <StyledTextField
-                fullWidth
-                label="ФИО подписанта (полное)"
-                value={uploadData.signerFullName}
-                size="small"
-                disabled
-                placeholder="Заполняется из проверки подписи"
-              />
-
-              <StyledTextField
-                fullWidth
-                label="Ознакомлены"
-                value={uploadData.familiarized.join(', ')}
-                size="small"
-                placeholder="Введите ФИО через запятую"
-                slotProps={{
-                  input: {
-                    startAdornment: (
-                      <InputAdornment position="start">
-                        <GroupIcon sx={{ fontSize: '18px', color: '#87879b' }} />
-                      </InputAdornment>
-                    ),
-                  },
-                }}
-              />
-            </Box>
-          </Box>
-        );
+        return getMetadataStep();
 
       case 5:
-        return (
-          <Box sx={{ textAlign: 'center', py: 3 }}>
-            <CheckCircleIcon sx={{ fontSize: '64px', color: '#4caf50', mb: 2 }} />
-            <Typography sx={{ fontFamily: 'Lato, sans-serif', fontSize: '20px', fontWeight: 700, color: '#101025' }}>
-              Готово к сохранению!
-            </Typography>
-            <Box sx={{ mt: 2, textAlign: 'left', bgcolor: '#f9fafe', p: 2, borderRadius: '8px' }}>
-              <Typography sx={{ fontFamily: 'Lato, sans-serif', fontSize: '14px', fontWeight: 600, mb: 1 }}>
-                Проверьте данные:
-              </Typography>
-              <Typography sx={{ fontFamily: 'Lato, sans-serif', fontSize: '13px', color: '#87879b' }}>
-                <strong>Тип подписи:</strong> {signatureTypes.find(t => t.value === uploadData.signatureType)?.label}
-              </Typography>
-              <Typography sx={{ fontFamily: 'Lato, sans-serif', fontSize: '13px', color: '#87879b' }}>
-                <strong>Файл:</strong> {uploadData.pdfFile?.name || 'Не выбран'}
-              </Typography>
-              {(uploadData.signatureType === 'UNEP' || uploadData.signatureType === 'UKEP') && (
-                <>
-                  <Typography sx={{ fontFamily: 'Lato, sans-serif', fontSize: '13px', color: '#87879b' }}>
-                    <strong>SIG файл:</strong> {uploadData.sigFile?.name || 'Не выбран'}
-                  </Typography>
-                  <Typography sx={{ fontFamily: 'Lato, sans-serif', fontSize: '13px', color: '#87879b' }}>
-                    <strong>Статус проверки:</strong> {verificationResult.status === 'success' ? 'Подпись подтверждена' : 'Подпись не подтверждена'}
-                  </Typography>
-                  <Typography sx={{ fontFamily: 'Lato, sans-serif', fontSize: '13px', color: '#87879b' }}>
-                    <strong>Визуализация штампа:</strong> {uploadData.visualizeStamp ? 'Включена' : 'Отключена'}
-                  </Typography>
-                </>
-              )}
-              <Typography sx={{ fontFamily: 'Lato, sans-serif', fontSize: '13px', color: '#87879b' }}>
-                <strong>Наименование:</strong> {uploadData.name || 'Не указано'}
-              </Typography>
-              <Typography sx={{ fontFamily: 'Lato, sans-serif', fontSize: '13px', color: '#87879b' }}>
-                <strong>Рег. номер:</strong> {uploadData.registrationNumber || 'Не указан'}
-              </Typography>
-              <Typography sx={{ fontFamily: 'Lato, sans-serif', fontSize: '13px', color: '#87879b' }}>
-                <strong>Дата:</strong> {uploadData.date ? dayjs(uploadData.date).format('DD.MM.YYYY') : 'Не указана'}
-              </Typography>
-              <Typography sx={{ fontFamily: 'Lato, sans-serif', fontSize: '13px', color: '#87879b' }}>
-                <strong>Подписант:</strong> {uploadData.signer || 'Не указан'}
-              </Typography>
-            </Box>
-          </Box>
-        );
+        return getSaveStep();
 
       default:
         return null;
     }
   };
 
-  if (loading && documents.length === 0) {
-  return (
-    <LocalizationProvider dateAdapter={AdapterDayjs} adapterLocale="ru">
-    <PageContainer>
-        <Box sx={{ display: 'flex', justifyContent: 'center', py: 8 }}>
-          <CircularProgress />
-        </Box>
-      </PageContainer>
-    </LocalizationProvider>
-    );
-  }
-
-  return (
-    <LocalizationProvider dateAdapter={AdapterDayjs} adapterLocale="ru">
-    <PageContainer>
-      {/* Заголовок */}
-      <Typography
-        variant="h4"
-        sx={{
-          fontFamily: 'Lato, sans-serif',
-          fontWeight: 700,
-          fontSize: '24px',
-          color: '#101025',
-          mb: 3,
-        }}
-      >
-        Документы
+  const getVerificationStep = () => (
+    <Box>
+      <Typography sx={{ fontFamily: 'Lato, sans-serif', fontSize: '14px', color: '#87879b', mb: 3 }}>
+        Проверка электронной подписи
       </Typography>
 
-      {/* Папки */}
-      <Box sx={{ mb: 3 }}>
-        <Tabs
-          value={activeFolder}
-          onChange={(_, val) => {
-            setActiveFolder(val);
-            setPage(1);
-          }}
-          variant="scrollable"
-          scrollButtons="auto"
-          sx={{
-            '& .MuiTab-root': {
-              fontFamily: 'Lato, sans-serif',
-              textTransform: 'none',
-              fontSize: '14px',
-              fontWeight: 500,
-              minHeight: '40px',
-              padding: '6px 16px',
-              borderRadius: '8px 8px 0 0',
-              color: '#87879b',
-              transition: 'all 0.3s ease',
-              '&.Mui-selected': {
-                color: '#4c6ef5',
-              },
-            },
-            '& .MuiTabs-indicator': {
-              backgroundColor: '#4c6ef5',
-              height: '3px',
-              borderRadius: '3px 3px 0 0',
-              transition: 'all 0.3s ease',
-            },
-          }}
-        >
-          {folderTabs.map((tab) => {
-            const count = getFolderCount(tab.id);
-            return (
-              <Tab
-                key={tab.id}
-                value={tab.id}
-                label={
-                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                    {tab.icon}
-                    <span>{tab.label}</span>
-                    <Chip
-                      label={count}
-                      size="small"
-                      sx={{
-                        height: '18px',
-                        fontSize: '10px',
-                        fontWeight: 600,
-                        backgroundColor: activeFolder === tab.id ? '#4c6ef5' : '#f4f4f8',
-                        color: activeFolder === tab.id ? '#ffffff' : '#87879b',
-                        '& .MuiChip-label': {
-                          padding: '0 6px',
-                        },
-                        transition: 'all 0.3s ease',
-                      }}
-                    />
-                  </Box>
-                }
-              />
-            );
-          })}
-        </Tabs>
-      </Box>
+      {verificationResult.status === 'idle' && (
+        <Box sx={{ textAlign: 'center', py: 4 }}>
+          <PendingIcon sx={{ fontSize: '64px', color: '#ff9800', mb: 2 }} />
+          <Typography sx={{ fontFamily: 'Lato, sans-serif', fontSize: '16px', color: '#87879b' }}>
+            Нажмите "Проверить", чтобы начать проверку подписи
+          </Typography>
+          <Button variant="contained" onClick={handleVerifySignature} sx={{ mt: 2 }}>
+            Проверить подпись
+          </Button>
+        </Box>
+      )}
 
-      {/* Уведомления */}
-      <Snackbar
-        open={!!error || !!success}
-        autoHideDuration={5000}
-        onClose={() => { setError(null); setSuccess(null); }}
-        anchorOrigin={{ vertical: 'top', horizontal: 'right' }}
-      >
-        <Alert severity={error ? 'error' : 'success'} onClose={() => { setError(null); setSuccess(null); }}>
-          {error || success}
-        </Alert>
-      </Snackbar>
+      {verificationResult.status === 'loading' && (
+        <Box sx={{ textAlign: 'center', py: 4 }}>
+          <CircularProgress size={48} sx={{ mb: 2 }} />
+          <Typography sx={{ fontFamily: 'Lato, sans-serif', fontSize: '16px', color: '#87879b' }}>
+            Проверка подписи через Госключ...
+          </Typography>
+        </Box>
+      )}
 
-      {/* Панель инструментов */}
-      <ToolbarContainer>
-        <ToolbarLeft>
-          <Tooltip title="Обновить">
-            <ToolbarButton size="small" onClick={loadDocuments}>
-              <RefreshIcon fontSize="small" />
-            </ToolbarButton>
-          </Tooltip>
+      {verificationResult.status === 'success' && (
+        <Box>
+          <Alert severity="success" sx={{ mb: 3 }}>
+            <Typography sx={{ fontFamily: 'Lato, sans-serif', fontWeight: 600 }}>
+              Подпись подтверждена. Подпись была создана для проверяемого документа, и он после этого не был изменён.
+            </Typography>
+          </Alert>
 
-          <Divider orientation="vertical" flexItem sx={{ mx: 0.5 }} />
+          <Paper sx={{ p: 2, bgcolor: '#f9fafe', borderRadius: '8px' }}>
+            <Typography sx={{ fontFamily: 'Lato, sans-serif', fontSize: '13px', fontWeight: 600, mb: 1.5 }}>
+              Информация о подписи
+            </Typography>
+            
+            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5 }}>
+              {verificationResult.data?.signer_name && (
+                <Box sx={{ display: 'flex', justifyContent: 'space-between', py: 0.5, borderBottom: '1px solid #f0f0f0' }}>
+                  <Typography sx={{ fontFamily: 'Lato, sans-serif', fontSize: '13px', color: '#87879b' }}>Подписант</Typography>
+                  <Typography sx={{ fontFamily: 'Lato, sans-serif', fontSize: '13px', color: '#101025' }}>
+                    {verificationResult.data.signer_name}
+                  </Typography>
+                </Box>
+              )}
+              {verificationResult.data?.signature_date && (
+                <Box sx={{ display: 'flex', justifyContent: 'space-between', py: 0.5, borderBottom: '1px solid #f0f0f0' }}>
+                  <Typography sx={{ fontFamily: 'Lato, sans-serif', fontSize: '13px', color: '#87879b' }}>Дата подписания</Typography>
+                  <Typography sx={{ fontFamily: 'Lato, sans-serif', fontSize: '13px', color: '#101025' }}>
+                    {formatDate(verificationResult.data.signature_date)}
+                  </Typography>
+                </Box>
+              )}
+              {verificationResult.data?.certificate_serial && (
+                <Box sx={{ display: 'flex', justifyContent: 'space-between', py: 0.5, borderBottom: '1px solid #f0f0f0' }}>
+                  <Typography sx={{ fontFamily: 'Lato, sans-serif', fontSize: '13px', color: '#87879b' }}>Серийный номер сертификата</Typography>
+                  <Typography sx={{ fontFamily: 'Lato, sans-serif', fontSize: '13px', color: '#101025' }}>
+                    {verificationResult.data.certificate_serial}
+                  </Typography>
+                </Box>
+              )}
+            </Box>
+          </Paper>
+        </Box>
+      )}
 
-          <Tooltip title="Загрузить">
-            <ToolbarButton size="small" onClick={handleOpenUploadModal}>
-              <CloudUploadIcon fontSize="small" />
-            </ToolbarButton>
-          </Tooltip>
+      {verificationResult.status === 'error' && (
+        <Box>
+          <Alert severity="error" sx={{ mb: 2 }}>
+            <Typography sx={{ fontFamily: 'Lato, sans-serif', fontWeight: 600 }}>{verificationResult.error}</Typography>
+          </Alert>
+          <Button variant="outlined" onClick={handleVerifySignature} sx={{ mt: 1 }}>
+            Попробовать снова
+          </Button>
+        </Box>
+      )}
+    </Box>
+  );
 
-          <Tooltip title="Открыть">
-            <ToolbarButton size="small" disabled={selectedDocuments.length === 0}>
-              <OpenIcon fontSize="small" />
-            </ToolbarButton>
-          </Tooltip>
+  const getVisualizationStep = () => (
+    <Box>
+      <Typography sx={{ fontFamily: 'Lato, sans-serif', fontSize: '14px', color: '#87879b', mb: 2 }}>
+        Визуализация штампа на документе
+      </Typography>
 
-          <Tooltip title="Удалить">
-            <ToolbarButton size="small" disabled={selectedDocuments.length === 0} onClick={() => setIsDeleteModalOpen(true)}>
-              <DeleteIcon fontSize="small" />
-            </ToolbarButton>
-          </Tooltip>
-
-          <Tooltip title="Отправить">
-            <ToolbarButton size="small" disabled={selectedDocuments.length === 0}>
-              <SendIcon fontSize="small" />
-            </ToolbarButton>
-          </Tooltip>
-
-          <Tooltip title="Выгрузка в папку Пед.ID">
-            <ToolbarButton size="small" disabled={selectedDocuments.length === 0}>
-              <FolderIcon fontSize="small" />
-            </ToolbarButton>
-          </Tooltip>
-
-          <Divider orientation="vertical" flexItem sx={{ mx: 0.5 }} />
-
-          <SearchField
-            placeholder="Поиск по номеру или подписанту"
-            size="small"
-            value={searchQuery}
+      <FormControlLabel
+        control={
+          <Checkbox
+            checked={uploadData.visualizeStamp}
             onChange={(e) => {
-              setSearchQuery(e.target.value);
-              setPage(1);
+              setUploadData(prev => ({ ...prev, visualizeStamp: e.target.checked }));
+              if (!e.target.checked) {
+                setShowStampPreview(false);
+              } else {
+                setShowStampPreview(true);
+                stampPosition.current = { x: 100, y: 50 };
+                setStampSize(FIXED_STAMP_SIZE);
+              }
             }}
+            sx={{ color: '#87879b', '&.Mui-checked': { color: '#4c6ef5' } }}
+          />
+        }
+        label={
+          <Typography sx={{ fontFamily: 'Lato, sans-serif', fontSize: '13px', fontWeight: 500, color: '#101025' }}>
+            Визуализировать штамп ЭП по 63-ФЗ
+          </Typography>
+        }
+      />
+
+      {showStampPreview && (
+        <Box sx={{ mt: 3 }}>
+          <Typography sx={{ fontFamily: 'Lato, sans-serif', fontSize: '12px', color: '#87879b', mb: 1 }}>Штамп</Typography>
+
+          <Box sx={{ display: 'flex', gap: 1, mb: 1, flexWrap: 'wrap', alignItems: 'center' }}>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+              <Typography sx={{ fontFamily: 'Lato, sans-serif', fontSize: '12px', color: '#87879b' }}>
+                Размер: {stampSize}%
+              </Typography>
+              <IconButton size="small" onClick={handleStampReset} sx={{ color: '#4c6ef5' }}>
+                <CenterFocusStrongIcon fontSize="small" />
+              </IconButton>
+            </Box>
+
+            {numPages && numPages > 1 && (
+              <Box sx={{ display: 'flex', gap: 0.5, alignItems: 'center', ml: 2 }}>
+                <IconButton size="small" onClick={() => setPageNumber(prev => Math.max(prev - 1, 1))} disabled={pageNumber <= 1} sx={{ color: '#87879b' }}>
+                  <ArrowBackIcon fontSize="small" />
+                </IconButton>
+                <Typography sx={{ fontFamily: 'Lato, sans-serif', fontSize: '12px', color: '#87879b' }}>
+                  {pageNumber} / {numPages}
+                </Typography>
+                <IconButton size="small" onClick={() => setPageNumber(prev => Math.min(prev + 1, numPages))} disabled={pageNumber >= numPages} sx={{ color: '#87879b' }}>
+                  <ArrowForwardIcon fontSize="small" />
+                </IconButton>
+              </Box>
+            )}
+          </Box>
+
+          <PreviewContainer ref={previewRef} onMouseMove={handleStampMouseMove} onMouseUp={handleStampMouseUp} onMouseLeave={handleStampMouseUp}>
+            <Box sx={{ width: '100%', minHeight: '500px', backgroundColor: '#e8e8e8', display: 'flex', justifyContent: 'center', alignItems: 'flex-start', padding: '8px', position: 'relative' }}>
+              <PDFDocument
+                file={pdfFileUrl}
+                onLoadSuccess={onDocumentLoadSuccess}
+                loading={<Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '400px' }}><CircularProgress size={40} /></Box>}
+                error={<Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '400px' }}>
+                  <Typography sx={{ fontFamily: 'Lato, sans-serif', color: '#e53935' }}>Не удалось загрузить PDF</Typography>
+                </Box>}
+              >
+                <Box ref={pageWrapRef} sx={{ position: 'relative', display: 'inline-block', boxShadow: '0 2px 12px rgba(0,0,0,0.15)' }}>
+                  <Page pageNumber={pageNumber} scale={1} renderTextLayer={true} renderAnnotationLayer={true} width={previewPageWidth} onLoadSuccess={onPageLoadSuccess} />
+                  <StampContainer
+                    ref={stampRef}
+                    sx={{
+                      width: `${stampBaseWidthPx}px`,
+                      height: `${stampBaseHeightPx}px`,
+                      transform: `translate(${stampPosition.current.x}px, ${stampPosition.current.y}px) scale(${stampSize / 100})`,
+                      transformOrigin: 'top left',
+                      cursor: isDraggingStamp.current ? 'grabbing' : 'grab',
+                      boxShadow: isDraggingStamp.current ? '0 8px 32px rgba(0,0,0,0.3)' : '0 4px 16px rgba(0,0,0,0.15)',
+                      padding: '0',
+                      backgroundColor: 'transparent',
+                      border: 'none',
+                      minWidth: 'auto',
+                    }}
+                    onMouseDown={handleStampMouseDown}
+                    onMouseUp={handleStampMouseUp}
+                  >
+                    <img src={uploadData.customStampUrl || DEFAULT_STAMP_URL} alt="Штамп ЭП" style={{ width: '100%', height: '100%', objectFit: 'contain', pointerEvents: 'none', display: 'block' }} />
+                  </StampContainer>
+                </Box>
+              </PDFDocument>
+            </Box>
+          </PreviewContainer>
+        </Box>
+      )}
+    </Box>
+  );
+
+  const getMetadataStep = () => (
+    <Box>
+      <Typography sx={{ fontFamily: 'Lato, sans-serif', fontSize: '14px', color: '#87879b', mb: 3 }}>
+        Заполните метаданные документа
+      </Typography>
+
+      <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+        <Box sx={{ display: 'flex', gap: 2 }}>
+          <FormControl fullWidth size="small">
+            <InputLabel sx={{ fontFamily: 'Lato, sans-serif' }}>Папка</InputLabel>
+            <Select
+              value={uploadData.folder}
+              onChange={(e) => {
+                const folder = e.target.value as FolderType;
+                setUploadData(prev => ({
+                  ...prev,
+                  folder,
+                  documentType: FOLDER_TO_TYPE[folder] || prev.documentType,
+                }));
+              }}
+              input={<OutlinedInput label="Папка" />}
+              sx={{ borderRadius: '8px', fontFamily: 'Lato, sans-serif' }}
+            >
+              <MenuItem value="orders">Приказы</MenuItem>
+              <MenuItem value="regulations">Распоряжения</MenuItem>
+              <MenuItem value="provisions">Положения</MenuItem>
+              <MenuItem value="incoming">Входящие</MenuItem>
+              <MenuItem value="outgoing">Исходящие</MenuItem>
+              <MenuItem value="tasks">Поручения</MenuItem>
+            </Select>
+          </FormControl>
+
+          <StyledTextField
+            fullWidth
+            label="Тип документа"
+            value={uploadData.documentType}
+            size="small"
+            disabled
+            placeholder="Определяется папкой"
+          />
+        </Box>
+
+        <StyledTextField
+          fullWidth
+          label="Наименование"
+          value={uploadData.name}
+          onChange={handleFieldChange('name')}
+          size="small"
+          required
+          placeholder="Введите наименование документа"
+        />
+
+        <Box sx={{ display: 'flex', gap: 2 }}>
+          <StyledTextField
+            fullWidth
+            label="Регистрационный номер"
+            value={uploadData.registrationNumber}
+            onChange={handleFieldChange('registrationNumber')}
+            size="small"
+            required
+            placeholder="П-2026-001"
+          />
+
+          <DatePicker
+            label="Дата"
+            value={dayjs(uploadData.date)}
+            onChange={(date: Dayjs | null) => {
+              if (date) {
+                setUploadData(prev => ({ ...prev, date: date.format('YYYY-MM-DD') }));
+              }
+            }}
+            format="DD.MM.YYYY"
+            slotProps={{ textField: { fullWidth: true, size: 'small' } }}
+          />
+        </Box>
+
+        <Box sx={{ display: 'flex', gap: 2 }}>
+          <StyledTextField
+            fullWidth
+            label="Подписант"
+            value={uploadData.signer}
+            onChange={handleFieldChange('signer')}
+            size="small"
+            required
+            placeholder="Введите ФИО подписанта"
             slotProps={{
               input: {
                 startAdornment: (
                   <InputAdornment position="start">
-                    <SearchIcon sx={{ fontSize: '18px', color: '#b0b3c3' }} />
-                  </InputAdornment>
-                ),
-                endAdornment: searchQuery && (
-                  <InputAdornment position="end">
-                    <IconButton size="small" onClick={() => setSearchQuery('')}>
-                      ✕
-                    </IconButton>
+                    <PersonIcon sx={{ fontSize: '18px', color: '#87879b' }} />
                   </InputAdornment>
                 ),
               },
             }}
-            sx={{ width: '280px' }}
           />
-        </ToolbarLeft>
 
-        <ToolbarRight>
-          <StyledChip label={`Всего: ${total}`} size="small" />
-          
-          <Tooltip title="Дополнительные действия">
-            <IconButton size="small" onClick={handleMenuOpen} sx={{ color: '#87879b' }}>
-              <MoreVertIcon />
-            </IconButton>
-          </Tooltip>
-          
-          <Menu anchorEl={anchorEl} open={Boolean(anchorEl)} onClose={handleMenuClose}>
-            <MenuItem onClick={handleMenuClose}>
-              <ListItemIcon><FolderIcon fontSize="small" /></ListItemIcon>
-              <ListItemText>Новая папка</ListItemText>
-            </MenuItem>
-            <MenuItem onClick={handleMenuClose}>
-              <ListItemIcon><CloudUploadIcon fontSize="small" /></ListItemIcon>
-              <ListItemText>Импорт</ListItemText>
-            </MenuItem>
-          </Menu>
-        </ToolbarRight>
-      </ToolbarContainer>
-
-      {/* Список документов */}
-      <Fade in={!isPending} timeout={300}>
-        <Box>
-          {documents.length === 0 ? (
-            <EmptyStateContainer>
-              <EmptyStateIcon>
-                <FileIcon />
-              </EmptyStateIcon>
-              <Typography
-                variant="h6"
-                sx={{
-                  fontFamily: 'Lato, sans-serif',
-                  fontWeight: 600,
-                  fontSize: '18px',
-                  color: '#101025',
-                }}
-              >
-                Нет данных
-              </Typography>
-              <Typography
-                variant="body2"
-                sx={{
-                  fontFamily: 'Lato, sans-serif',
-                  color: '#87879b',
-                  fontSize: '14px',
-                  mt: 1,
-                }}
-              >
-                Загрузите первый документ
-              </Typography>
-              <UploadButton startIcon={<CloudUploadIcon />} onClick={handleOpenUploadModal}>
-                Загрузить документ
-              </UploadButton>
-            </EmptyStateContainer>
-          ) : (
-            <TableContainer component={Paper} sx={{ borderRadius: '12px', border: '1px solid #eaebf0', boxShadow: 'none' }}>
-              <Table>
-                <TableHead>
-                  <TableRow>
-                    <TableCell padding="checkbox">
-                      <Checkbox
-                        checked={isAllSelected}
-                        onChange={handleSelectAll}
-                        sx={{ color: '#b0b3c3' }}
-                      />
-                    </TableCell>
-                    <TableCell>Название / Рег. номер</TableCell>
-                    <TableCell>Подписант</TableCell>
-                    <TableCell>Тип подписи</TableCell>
-                    <TableCell>Статус</TableCell>
-                    <TableCell>Дата</TableCell>
-                    <TableCell align="right">Действия</TableCell>
-                  </TableRow>
-                </TableHead>
-                <TableBody>
-                  {documents.map((doc) => {
-                    const isSelected = selectedDocuments.includes(doc.uuid);
-                    const signatureLabel = getSignatureLabel(doc.signature_type, doc.goskey_valid);
-                    const statusLabel = getStatusLabel(doc.status);
-                    
-                    const displayName = doc.name || 'Без названия';
-                    const displaySigner = doc.signer_full_name || doc.signer || 'Не указан';
-                    const displayRegNumber = doc.registration_number || '—';
-                    const displayType = doc.type || 'Документ';
-                    
-                    return (
-                      <TableRow
-                        key={doc.uuid}
-                        hover
-                        selected={isSelected}
-                        sx={{
-                          transition: 'background-color 0.2s ease',
-                          '&:hover': {
-                            backgroundColor: '#f9fafe',
-                          },
-                        }}
-                      >
-                        <TableCell padding="checkbox">
-                          <Checkbox
-                            checked={isSelected}
-                            onChange={() => {
-                              setSelectedDocuments(prev =>
-                                prev.includes(doc.uuid)
-                                  ? prev.filter(id => id !== doc.uuid)
-                                  : [...prev, doc.uuid]
-                              );
-                            }}
-                            sx={{ color: '#b0b3c3' }}
-                          />
-                        </TableCell>
-                        <TableCell>
-                          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                            <PdfIcon sx={{ color: '#e53935', fontSize: '20px' }} />
-                            <Box>
-                              <Typography
-                                sx={{
-                                  fontFamily: 'Lato, sans-serif',
-                                  fontSize: '14px',
-                                  color: '#101025',
-                                  fontWeight: 500,
-                                }}
-                              >
-                                {displayName}
-                              </Typography>
-                              <Typography
-                                sx={{
-                                  fontFamily: 'Lato, sans-serif',
-                                  fontSize: '12px',
-                                  color: '#87879b',
-                                }}
-                              >
-                                {displayRegNumber} • {displayType}
-                              </Typography>
-                            </Box>
-                          </Box>
-                        </TableCell>
-                        <TableCell>
-                          <Typography sx={{ fontFamily: 'Lato, sans-serif', fontSize: '13px', color: '#101025' }}>
-                            {displaySigner}
-                          </Typography>
-                        </TableCell>
-                        <TableCell>
-                          <SignatureTypeText
-                            type={doc.signature_type}
-                            valid={doc.goskey_valid}
-                          >
-                            {signatureLabel}
-                          </SignatureTypeText>
-                        </TableCell>
-                        <TableCell>
-                          <StatusChip status={doc.status} label={statusLabel} size="small" />
-                        </TableCell>
-                        <TableCell>
-                          <Typography sx={{ fontFamily: 'Lato, sans-serif', fontSize: '13px', color: '#87879b' }}>
-                            {formatDate(doc.signature_date || doc.created_at)}
-                          </Typography>
-                        </TableCell>
-                        <TableCell align="right">
-                          <Tooltip title="Скачать архив с подлинником">
-                            <IconButton 
-                              size="small" 
-                              sx={{ color: '#87879b' }} 
-                              onClick={() => window.open(downloadArchive(doc.uuid), '_blank')}
-                            >
-                              <ArchiveIcon fontSize="small" />
-                            </IconButton>
-                          </Tooltip>
-                          
-                          <Tooltip title={doc.signed_copy_url ? "Скачать со штампом ЭП" : "Штамп не создан"}>
-                            <IconButton 
-                              size="small" 
-                              sx={{ color: doc.signed_copy_url ? '#4c6ef5' : '#b0b3c3' }}
-                              onClick={() => {
-                                if (doc.signed_copy_url) {
-                                  window.open(downloadSignedCopy(doc.uuid), '_blank');
-                                } else if (doc.status === 'signed') {
-                                  handleVisualizeStamp(doc.uuid);
-                                }
-                              }}
-                              disabled={doc.status !== 'signed' && !doc.signed_copy_url}
-                            >
-                              <VerifiedIcon fontSize="small" />
-                            </IconButton>
-                          </Tooltip>
-                          
-                          <Tooltip title="Ещё">
-                            <IconButton 
-                              size="small" 
-                              sx={{ color: '#87879b' }}
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                setRowMenuAnchor(e.currentTarget);
-                                setRowMenuDoc(doc);
-                              }}
-                            >
-                              <MoreVertIcon fontSize="small" />
-                            </IconButton>
-                          </Tooltip>
-                        </TableCell>
-                      </TableRow>
-                    );
-                  })}
-                </TableBody>
-              </Table>
-            </TableContainer>
-          )}
+          <StyledTextField
+            fullWidth
+            label="Исполнитель"
+            value={uploadData.executor}
+            onChange={handleFieldChange('executor')}
+            size="small"
+            placeholder="Петрова А.С."
+            slotProps={{
+              input: {
+                startAdornment: (
+                  <InputAdornment position="start">
+                    <BusinessIcon sx={{ fontSize: '18px', color: '#87879b' }} />
+                  </InputAdornment>
+                ),
+              },
+            }}
+          />
         </Box>
-      </Fade>
 
-      {/* Пагинация */}
-      {total > pageSize && (
-        <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', gap: 2, mt: 3, mb: 2 }}>
-          <Typography sx={{ fontFamily: 'Lato, sans-serif', fontSize: '13px', color: '#87879b' }}>
-            Всего: {total}
-          </Typography>
-          <Pagination
-            count={Math.ceil(total / pageSize)}
-            page={page}
-            onChange={(_, value) => setPage(value)}
-            color="primary"
-            shape="rounded"
+        <StyledTextField
+          fullWidth
+          label="ФИО подписанта (полное)"
+          value={uploadData.signerFullName}
+          onChange={handleFieldChange('signerFullName')}
+          size="small"
+          placeholder="Петров Петр Петрович"
+        />
+
+        <StyledTextField
+          fullWidth
+          label="Ознакомлены"
+          value={uploadData.familiarized.join(', ')}
+          onChange={(e) => {
+            const names = e.target.value.split(',').map(s => s.trim()).filter(Boolean);
+            setUploadData(prev => ({ ...prev, familiarized: names }));
+          }}
+          size="small"
+          placeholder="Введите ФИО через запятую"
+          slotProps={{
+            input: {
+              startAdornment: (
+                <InputAdornment position="start">
+                  <GroupIcon sx={{ fontSize: '18px', color: '#87879b' }} />
+                </InputAdornment>
+              ),
+            },
+          }}
+        />
+      </Box>
+    </Box>
+  );
+
+  const getSaveStep = () => (
+    <Box sx={{ textAlign: 'center', py: 3 }}>
+      <CheckCircleIcon sx={{ fontSize: '64px', color: '#4caf50', mb: 2 }} />
+      <Typography sx={{ fontFamily: 'Lato, sans-serif', fontSize: '20px', fontWeight: 700, color: '#101025' }}>
+        Готово к сохранению!
+      </Typography>
+      <Box sx={{ mt: 2, textAlign: 'left', bgcolor: '#f9fafe', p: 2, borderRadius: '8px' }}>
+        <Typography sx={{ fontFamily: 'Lato, sans-serif', fontSize: '14px', fontWeight: 600, mb: 1 }}>
+          Проверьте данные:
+        </Typography>
+        <Typography sx={{ fontFamily: 'Lato, sans-serif', fontSize: '13px', color: '#87879b' }}>
+          <strong>Тип подписи:</strong> {signatureTypes.find(t => t.value === uploadData.signatureType)?.label}
+        </Typography>
+        <Typography sx={{ fontFamily: 'Lato, sans-serif', fontSize: '13px', color: '#87879b' }}>
+          <strong>Файл:</strong> {uploadData.pdfFile?.name || 'Не выбран'}
+        </Typography>
+        {(uploadData.signatureType === 'UNEP' || uploadData.signatureType === 'UKEP') && (
+          <>
+            <Typography sx={{ fontFamily: 'Lato, sans-serif', fontSize: '13px', color: '#87879b' }}>
+              <strong>SIG файл:</strong> {uploadData.sigFile?.name || 'Не выбран'}
+            </Typography>
+            <Typography sx={{ fontFamily: 'Lato, sans-serif', fontSize: '13px', color: '#87879b' }}>
+              <strong>Статус проверки:</strong> {verificationResult.status === 'success' ? 'Подпись подтверждена' : 'Подпись не подтверждена'}
+            </Typography>
+            <Typography sx={{ fontFamily: 'Lato, sans-serif', fontSize: '13px', color: '#87879b' }}>
+              <strong>Визуализация штампа:</strong> {uploadData.visualizeStamp ? 'Включена' : 'Отключена'}
+            </Typography>
+          </>
+        )}
+        <Typography sx={{ fontFamily: 'Lato, sans-serif', fontSize: '13px', color: '#87879b' }}>
+          <strong>Наименование:</strong> {uploadData.name || 'Не указано'}
+        </Typography>
+        <Typography sx={{ fontFamily: 'Lato, sans-serif', fontSize: '13px', color: '#87879b' }}>
+          <strong>Рег. номер:</strong> {uploadData.registrationNumber || 'Не указан'}
+        </Typography>
+        <Typography sx={{ fontFamily: 'Lato, sans-serif', fontSize: '13px', color: '#87879b' }}>
+          <strong>Дата:</strong> {uploadData.date ? dayjs(uploadData.date).format('DD.MM.YYYY') : 'Не указана'}
+        </Typography>
+        <Typography sx={{ fontFamily: 'Lato, sans-serif', fontSize: '13px', color: '#87879b' }}>
+          <strong>Подписант:</strong> {uploadData.signer || 'Не указан'}
+        </Typography>
+      </Box>
+    </Box>
+  );
+
+  // ===== ОТОБРАЖЕНИЕ СТРАНИЦЫ =====
+  
+  // Если лицензия неактивна - показываем блокировку
+  if (licenseValid === false) {
+    return (
+      <LocalizationProvider dateAdapter={AdapterDayjs} adapterLocale="ru">
+        <PageContainer>
+          <Box
             sx={{
-              '& .MuiPaginationItem-root': {
-                fontFamily: 'Lato, sans-serif',
-                fontSize: '14px',
-                fontWeight: 500,
-              },
+              display: 'flex',
+              flexDirection: 'column',
+              alignItems: 'center',
+              justifyContent: 'center',
+              minHeight: '400px',
+              padding: '40px',
+              textAlign: 'center',
             }}
-          />
-        </Box>
-      )}
-
-      {/* ===== МОДАЛКА ЗАГРУЗКИ (ПОШАГОВАЯ) ===== */}
-      <Modal
-        open={isUploadModalOpen}
-        onClose={handleCloseUploadModal}
-        closeAfterTransition
-      >
-        <Fade in={isUploadModalOpen}>
-          <ModalContainer>
-            <ModalHeader>
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
-                <Typography
-                  variant="h6"
-                  sx={{
-                    fontFamily: 'Lato, sans-serif',
-                    fontWeight: 700,
-                    fontSize: '18px',
-                    color: '#101025',
-                  }}
-                >
-                  Загрузка документа
-                </Typography>
-                <Chip
-                  label={`Шаг ${activeStep + 1} из ${steps.length}`}
-                  size="small"
-                  sx={{
-                    backgroundColor: '#f4f4f8',
-                    color: '#87879b',
-                    fontFamily: 'Lato, sans-serif',
-                    fontSize: '11px',
-                    fontWeight: 600,
-                  }}
-                />
-              </Box>
-              <IconButton onClick={handleCloseUploadModal} size="small" sx={{ color: '#87879b' }}>
-                <CloseIcon fontSize="small" />
-              </IconButton>
-            </ModalHeader>
-
-            <Box sx={{ px: 4, pt: 2 }}>
-              <Stepper activeStep={activeStep} alternativeLabel>
-                {steps.map((step, index) => (
-                  <Step key={step.label}>
-                    <StepLabel
-                      slotProps={{
-                        stepIcon: {
-                          icon: (
-                            <Box
-                              sx={{
-                                width: 32,
-                                height: 32,
-                                borderRadius: '50%',
-                                display: 'flex',
-                                alignItems: 'center',
-                                justifyContent: 'center',
-                                backgroundColor: index <= activeStep ? '#4c6ef5' : '#f4f4f8',
-                                color: index <= activeStep ? '#ffffff' : '#87879b',
-                                transition: 'all 0.3s ease',
-                              }}
-                            >
-                              {step.icon}
-                            </Box>
-                          ),
-                        },
-                      }}
-                    >
-                      <Typography sx={{ fontFamily: 'Lato, sans-serif', fontSize: '11px', color: '#87879b' }}>
-                        {step.label}
-                      </Typography>
-                    </StepLabel>
-                  </Step>
-                ))}
-              </Stepper>
-            </Box>
-
-            <ModalBody>
-              {getStepContent(activeStep)}
-            </ModalBody>
-
-            <ModalFooter>
-              <BackButton
-                onClick={handleBack}
-                disabled={activeStep === 0}
-                startIcon={<ArrowBackIcon />}
-              >
-                Назад
-              </BackButton>
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
-                {uploadLoading && <CircularProgress size={24} />}
-                <NextButton
-                  onClick={handleNext}
-                  disabled={!canProceed() || uploadLoading}
-                  endIcon={activeStep === steps.length - 1 ? <CheckCircleIcon /> : <ArrowForwardIcon />}
-                >
-                  {activeStep === steps.length - 1 ? 'Сохранить' : 'Далее'}
-                </NextButton>
-              </Box>
-            </ModalFooter>
-          </ModalContainer>
-        </Fade>
-      </Modal>
-
-      {/* ===== МЕНЮ СТРОКИ (Ещё) ===== */}
-      <Menu
-        anchorEl={rowMenuAnchor}
-        open={Boolean(rowMenuAnchor)}
-        onClose={() => { setRowMenuAnchor(null); setRowMenuDoc(null); }}
-      >
-        <MenuItem onClick={() => rowMenuDoc && handleOpenEditModal(rowMenuDoc)}>
-          <ListItemIcon><EditIcon fontSize="small" /></ListItemIcon>
-          <ListItemText>Редактировать метаданные</ListItemText>
-        </MenuItem>
-        <MenuItem onClick={() => {
-          if (rowMenuDoc) {
-            setSelectedDocuments([rowMenuDoc.uuid]);
-            setRowMenuAnchor(null);
-            setIsDeleteModalOpen(true);
-          }
-        }}>
-          <ListItemIcon><DeleteIcon fontSize="small" /></ListItemIcon>
-          <ListItemText>Удалить</ListItemText>
-        </MenuItem>
-      </Menu>
-
-      {/* ===== МОДАЛКА ПОДТВЕРЖДЕНИЯ УДАЛЕНИЯ ===== */}
-      <Modal
-        open={isDeleteModalOpen}
-        onClose={() => setIsDeleteModalOpen(false)}
-        closeAfterTransition
-      >
-        <Fade in={isDeleteModalOpen}>
-          <Box sx={{
-            position: 'absolute',
-            top: '50%',
-            left: '50%',
-            transform: 'translate(-50%, -50%)',
-            width: '90%',
-            maxWidth: '440px',
-            backgroundColor: '#ffffff',
-            borderRadius: '16px',
-            boxShadow: '0 8px 32px rgba(0, 0, 0, 0.12)',
-            overflow: 'hidden',
-          }}>
-            <Box sx={{ p: 3, textAlign: 'center' }}>
-              <Box sx={{
-                width: 64,
-                height: 64,
+          >
+            <Box
+              sx={{
+                width: 80,
+                height: 80,
                 borderRadius: '50%',
                 backgroundColor: '#ffebee',
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
-                margin: '0 auto 16px',
-              }}>
-                <WarningIcon sx={{ fontSize: 36, color: '#e53935' }} />
-              </Box>
-              <Typography sx={{ fontFamily: 'Lato, sans-serif', fontSize: '18px', fontWeight: 700, color: '#101025', mb: 1 }}>
-                Подтвердите удаление
-              </Typography>
-              <Typography sx={{ fontFamily: 'Lato, sans-serif', fontSize: '14px', color: '#87879b' }}>
-                Вы собираетесь удалить {selectedDocuments.length} документ(ов). Это действие нельзя отменить.
-              </Typography>
+                mb: 3,
+              }}
+            >
+              <LockIcon sx={{ fontSize: 40, color: '#e53935' }} />
             </Box>
-            <Box sx={{
-              p: 2,
-              backgroundColor: '#fafafa',
-              display: 'flex',
-              justifyContent: 'flex-end',
-              gap: 1,
-            }}>
-              <Button
-                onClick={() => setIsDeleteModalOpen(false)}
-                sx={{
-                  fontFamily: 'Lato, sans-serif',
-                  textTransform: 'none',
-                  fontWeight: 600,
-                  color: '#87879b',
-                  '&:hover': { backgroundColor: '#f4f4f8' },
-                }}
-              >
-                Отмена
-              </Button>
-              <Button
-                onClick={handleDeleteSelected}
-                sx={{
-                  fontFamily: 'Lato, sans-serif',
-                  textTransform: 'none',
-                  fontWeight: 600,
-                  backgroundColor: '#e53935',
-                  color: '#ffffff',
-                  borderRadius: '8px',
-                  '&:hover': { backgroundColor: '#c62828' },
-                }}
-              >
-                Удалить
-              </Button>
-            </Box>
+            <Typography
+              variant="h5"
+              sx={{
+                fontFamily: 'Lato, sans-serif',
+                fontWeight: 700,
+                color: '#101025',
+                mb: 1,
+              }}
+            >
+              Доступ ограничен
+            </Typography>
+            <Typography
+              sx={{
+                fontFamily: 'Lato, sans-serif',
+                color: '#87879b',
+                fontSize: '16px',
+                maxWidth: '500px',
+                mb: 3,
+              }}
+            >
+              {licenseError || 'Для доступа к документам необходима активная лицензия. Обратитесь к администратору.'}
+            </Typography>
+            <Button
+              variant="contained"
+              onClick={() => window.location.href = '/about'}
+              sx={{
+                backgroundColor: '#4c6ef5',
+                borderRadius: '8px',
+                textTransform: 'none',
+                fontFamily: 'Lato, sans-serif',
+                fontWeight: 600,
+                padding: '10px 32px',
+                '&:hover': { backgroundColor: '#364fc7' },
+              }}
+            >
+              На главную
+            </Button>
+          </Box>
+        </PageContainer>
+      </LocalizationProvider>
+    );
+  }
+
+  // Загрузка
+  if (licenseLoading || (loading && documents.length === 0)) {
+    return (
+      <LocalizationProvider dateAdapter={AdapterDayjs} adapterLocale="ru">
+        <PageContainer>
+          <Box sx={{ display: 'flex', justifyContent: 'center', py: 8 }}>
+            <CircularProgress />
+          </Box>
+        </PageContainer>
+      </LocalizationProvider>
+    );
+  }
+
+  // Основной рендер
+  return (
+    <LocalizationProvider dateAdapter={AdapterDayjs} adapterLocale="ru">
+      <PageContainer>
+        <Typography variant="h4" sx={{ fontFamily: 'Lato, sans-serif', fontWeight: 700, fontSize: '24px', color: '#101025', mb: 3 }}>
+          Документы
+        </Typography>
+
+        <Box sx={{ mb: 3 }}>
+          <Tabs
+            value={activeFolder}
+            onChange={(_, val) => {
+              setActiveFolder(val);
+              setPage(1);
+            }}
+            variant="scrollable"
+            scrollButtons="auto"
+            sx={{
+              '& .MuiTab-root': {
+                fontFamily: 'Lato, sans-serif',
+                textTransform: 'none',
+                fontSize: '14px',
+                fontWeight: 500,
+                minHeight: '40px',
+                padding: '6px 16px',
+                borderRadius: '8px 8px 0 0',
+                color: '#87879b',
+                transition: 'all 0.3s ease',
+                '&.Mui-selected': { color: '#4c6ef5' },
+              },
+              '& .MuiTabs-indicator': {
+                backgroundColor: '#4c6ef5',
+                height: '3px',
+                borderRadius: '3px 3px 0 0',
+                transition: 'all 0.3s ease',
+              },
+            }}
+          >
+            {folderTabs.map((tab) => {
+              const count = getFolderCount(tab.id);
+              return (
+                <Tab
+                  key={tab.id}
+                  value={tab.id}
+                  label={
+                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                      {tab.icon}
+                      <span>{tab.label}</span>
+                      <Chip
+                        label={count}
+                        size="small"
+                        sx={{
+                          height: '18px',
+                          fontSize: '10px',
+                          fontWeight: 600,
+                          backgroundColor: activeFolder === tab.id ? '#4c6ef5' : '#f4f4f8',
+                          color: activeFolder === tab.id ? '#ffffff' : '#87879b',
+                          '& .MuiChip-label': { padding: '0 6px' },
+                          transition: 'all 0.3s ease',
+                        }}
+                      />
+                    </Box>
+                  }
+                />
+              );
+            })}
+          </Tabs>
+        </Box>
+
+        <Snackbar
+          open={!!error || !!success}
+          autoHideDuration={5000}
+          onClose={() => { setError(null); setSuccess(null); }}
+          anchorOrigin={{ vertical: 'top', horizontal: 'right' }}
+        >
+          <Alert severity={error ? 'error' : 'success'} onClose={() => { setError(null); setSuccess(null); }}>
+            {error || success}
+          </Alert>
+        </Snackbar>
+
+        <ToolbarContainer>
+          <ToolbarLeft>
+            <Tooltip title="Обновить">
+              <ToolbarButton size="small" onClick={loadDocuments}>
+                <RefreshIcon fontSize="small" />
+              </ToolbarButton>
+            </Tooltip>
+
+            <Divider orientation="vertical" flexItem sx={{ mx: 0.5 }} />
+
+            <Tooltip title="Загрузить">
+              <ToolbarButton size="small" onClick={handleOpenUploadModal}>
+                <CloudUploadIcon fontSize="small" />
+              </ToolbarButton>
+            </Tooltip>
+
+            <Tooltip title="Удалить">
+              <ToolbarButton size="small" disabled={selectedDocuments.length === 0} onClick={() => setIsDeleteModalOpen(true)}>
+                <DeleteIcon fontSize="small" />
+              </ToolbarButton>
+            </Tooltip>
+
+            <Divider orientation="vertical" flexItem sx={{ mx: 0.5 }} />
+
+            <SearchField
+              placeholder="Поиск по номеру или подписанту"
+              size="small"
+              value={searchQuery}
+              onChange={(e) => {
+                setSearchQuery(e.target.value);
+                setPage(1);
+              }}
+              slotProps={{
+                input: {
+                  startAdornment: (
+                    <InputAdornment position="start">
+                      <SearchIcon sx={{ fontSize: '18px', color: '#b0b3c3' }} />
+                    </InputAdornment>
+                  ),
+                  endAdornment: searchQuery && (
+                    <InputAdornment position="end">
+                      <IconButton size="small" onClick={() => setSearchQuery('')}>✕</IconButton>
+                    </InputAdornment>
+                  ),
+                },
+              }}
+              sx={{ width: '280px' }}
+            />
+          </ToolbarLeft>
+
+          <ToolbarRight>
+            <StyledChip label={`Всего: ${total}`} size="small" />
+            
+            <Tooltip title="Дополнительные действия">
+              <IconButton size="small" onClick={handleMenuOpen} sx={{ color: '#87879b' }}>
+                <MoreVertIcon />
+              </IconButton>
+            </Tooltip>
+            
+            <Menu anchorEl={anchorEl} open={Boolean(anchorEl)} onClose={handleMenuClose}>
+              <MenuItem onClick={handleMenuClose}>
+                <ListItemIcon><FolderIcon fontSize="small" /></ListItemIcon>
+                <ListItemText>Новая папка</ListItemText>
+              </MenuItem>
+              <MenuItem onClick={handleMenuClose}>
+                <ListItemIcon><CloudUploadIcon fontSize="small" /></ListItemIcon>
+                <ListItemText>Импорт</ListItemText>
+              </MenuItem>
+            </Menu>
+          </ToolbarRight>
+        </ToolbarContainer>
+
+        <Fade in={!isPending} timeout={300}>
+          <Box>
+            {documents.length === 0 ? (
+              <EmptyStateContainer>
+                <EmptyStateIcon><FileIcon /></EmptyStateIcon>
+                <Typography variant="h6" sx={{ fontFamily: 'Lato, sans-serif', fontWeight: 600, fontSize: '18px', color: '#101025' }}>
+                  Нет данных
+                </Typography>
+                <Typography variant="body2" sx={{ fontFamily: 'Lato, sans-serif', color: '#87879b', fontSize: '14px', mt: 1 }}>
+                  Загрузите первый документ
+                </Typography>
+                <UploadButton startIcon={<CloudUploadIcon />} onClick={handleOpenUploadModal}>
+                  Загрузить документ
+                </UploadButton>
+              </EmptyStateContainer>
+            ) : (
+              <TableContainer component={Paper} sx={{ borderRadius: '12px', border: '1px solid #eaebf0', boxShadow: 'none' }}>
+                <Table>
+                  <TableHead>
+                    <TableRow>
+                      <TableCell padding="checkbox">
+                        <Checkbox checked={isAllSelected} onChange={handleSelectAll} sx={{ color: '#b0b3c3' }} />
+                      </TableCell>
+                      <TableCell>Название / Рег. номер</TableCell>
+                      <TableCell>Подписант</TableCell>
+                      <TableCell>Тип подписи</TableCell>
+                      <TableCell>Статус</TableCell>
+                      <TableCell>Дата</TableCell>
+                      <TableCell align="right">Действия</TableCell>
+                    </TableRow>
+                  </TableHead>
+                  <TableBody>
+                    {documents.map((doc) => {
+                      const isSelected = selectedDocuments.includes(doc.uuid);
+                      const signatureLabel = getSignatureLabel(doc.signature_type, doc.goskey_valid);
+                      const statusLabel = getStatusLabel(doc.status);
+                      
+                      const displayName = doc.name || 'Без названия';
+                      const displaySigner = doc.signer_full_name || doc.signer || 'Не указан';
+                      const displayRegNumber = doc.registration_number || '—';
+                      const displayType = doc.type || 'Документ';
+                      
+                      const dateToShow = (doc as any).created_at_str || doc.created_at;
+                      
+                      return (
+                        <TableRow
+                          key={doc.uuid}
+                          hover
+                          selected={isSelected}
+                          sx={{
+                            transition: 'background-color 0.2s ease',
+                            '&:hover': { backgroundColor: '#f9fafe' },
+                          }}
+                        >
+                          <TableCell padding="checkbox">
+                            <Checkbox
+                              checked={isSelected}
+                              onChange={() => {
+                                setSelectedDocuments(prev =>
+                                  prev.includes(doc.uuid)
+                                    ? prev.filter(id => id !== doc.uuid)
+                                    : [...prev, doc.uuid]
+                                );
+                              }}
+                              sx={{ color: '#b0b3c3' }}
+                            />
+                          </TableCell>
+                          <TableCell>
+                            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                              <PdfIcon sx={{ color: '#e53935', fontSize: '20px' }} />
+                              <Box>
+                                <Typography sx={{ fontFamily: 'Lato, sans-serif', fontSize: '14px', color: '#101025', fontWeight: 500 }}>
+                                  {displayName}
+                                </Typography>
+                                <Typography sx={{ fontFamily: 'Lato, sans-serif', fontSize: '12px', color: '#87879b' }}>
+                                  {displayRegNumber} • {displayType}
+                                </Typography>
+                              </Box>
+                            </Box>
+                          </TableCell>
+                          <TableCell>
+                            <Typography sx={{ fontFamily: 'Lato, sans-serif', fontSize: '13px', color: '#101025' }}>
+                              {displaySigner}
+                            </Typography>
+                          </TableCell>
+                          <TableCell>
+                            <SignatureTypeText type={doc.signature_type} valid={doc.goskey_valid}>
+                              {signatureLabel}
+                            </SignatureTypeText>
+                          </TableCell>
+                          <TableCell>
+                            <StatusChip status={doc.status} label={statusLabel} size="small" />
+                          </TableCell>
+                          <TableCell>
+                            <Typography sx={{ fontFamily: 'Lato, sans-serif', fontSize: '13px', color: '#87879b' }}>
+                              {formatDate(dateToShow)}
+                            </Typography>
+                          </TableCell>
+                          <TableCell align="right">
+                            {renderActionButtons(doc)}
+                            <Tooltip title="Ещё">
+                              <IconButton
+                                size="small"
+                                sx={{ color: '#87879b' }}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setRowMenuAnchor(e.currentTarget);
+                                  setRowMenuDoc(doc);
+                                }}
+                              >
+                                <MoreVertIcon fontSize="small" />
+                              </IconButton>
+                            </Tooltip>
+                          </TableCell>
+                        </TableRow>
+                      );
+                    })}
+                  </TableBody>
+                </Table>
+              </TableContainer>
+            )}
           </Box>
         </Fade>
-      </Modal>
 
-      {/* ===== МОДАЛКА РЕДАКТИРОВАНИЯ МЕТАДАННЫХ ===== */}
-      <Modal
-        open={isEditModalOpen}
-        onClose={() => setIsEditModalOpen(false)}
-        closeAfterTransition
-      >
-        <Fade in={isEditModalOpen}>
-          <ModalContainer>
-            <ModalHeader>
-              <Typography variant="h6" sx={{ fontFamily: 'Lato, sans-serif', fontWeight: 700, fontSize: '18px', color: '#101025' }}>
-                Редактирование метаданных
-              </Typography>
-              <IconButton onClick={() => setIsEditModalOpen(false)} size="small" sx={{ color: '#87879b' }}>
-                <CloseIcon fontSize="small" />
-              </IconButton>
-            </ModalHeader>
-            <ModalBody>
-              <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-                <Box sx={{ display: 'flex', gap: 2 }}>
-                  <FormControl fullWidth size="small">
-                    <InputLabel sx={{ fontFamily: 'Lato, sans-serif' }}>Папка</InputLabel>
-                    <Select
-                      value={editFormData.folder}
-                      onChange={(e) => handleEditFolderChange(e.target.value as FolderType)}
-                      input={<OutlinedInput label="Папка" />}
-                      sx={{ borderRadius: '8px', fontFamily: 'Lato, sans-serif' }}
-                    >
-                      <MenuItem value="orders">Приказы</MenuItem>
-                      <MenuItem value="regulations">Распоряжения</MenuItem>
-                      <MenuItem value="provisions">Положения</MenuItem>
-                      <MenuItem value="incoming">Входящие</MenuItem>
-                      <MenuItem value="outgoing">Исходящие</MenuItem>
-                      <MenuItem value="tasks">Поручения</MenuItem>
-                    </Select>
-                  </FormControl>
+        {total > pageSize && (
+          <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', gap: 2, mt: 3, mb: 2 }}>
+            <Typography sx={{ fontFamily: 'Lato, sans-serif', fontSize: '13px', color: '#87879b' }}>
+              Всего: {total}
+            </Typography>
+            <Pagination
+              count={Math.ceil(total / pageSize)}
+              page={page}
+              onChange={(_, value) => setPage(value)}
+              color="primary"
+              shape="rounded"
+              sx={{
+                '& .MuiPaginationItem-root': {
+                  fontFamily: 'Lato, sans-serif',
+                  fontSize: '14px',
+                  fontWeight: 500,
+                },
+              }}
+            />
+          </Box>
+        )}
+
+        {/* Модалка загрузки */}
+        <Modal open={isUploadModalOpen} onClose={handleCloseUploadModal} closeAfterTransition>
+          <Fade in={isUploadModalOpen}>
+            <ModalContainer>
+              <ModalHeader>
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+                  <Typography variant="h6" sx={{ fontFamily: 'Lato, sans-serif', fontWeight: 700, fontSize: '18px', color: '#101025' }}>
+                    Загрузка документа
+                  </Typography>
+                  <Chip
+                    label={`Шаг ${activeStep + 1} из ${steps.length}`}
+                    size="small"
+                    sx={{ backgroundColor: '#f4f4f8', color: '#87879b', fontFamily: 'Lato, sans-serif', fontSize: '11px', fontWeight: 600 }}
+                  />
+                </Box>
+                <IconButton onClick={handleCloseUploadModal} size="small" sx={{ color: '#87879b' }}>
+                  <CloseIcon fontSize="small" />
+                </IconButton>
+              </ModalHeader>
+
+              <Box sx={{ px: 4, pt: 2 }}>
+                <Stepper activeStep={activeStep} alternativeLabel>
+                  {steps.map((step, index) => (
+                    <Step key={step.label}>
+                      <StepLabel
+                        slotProps={{
+                          stepIcon: {
+                            icon: (
+                              <Box
+                                sx={{
+                                  width: 32,
+                                  height: 32,
+                                  borderRadius: '50%',
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  justifyContent: 'center',
+                                  backgroundColor: index <= activeStep ? '#4c6ef5' : '#f4f4f8',
+                                  color: index <= activeStep ? '#ffffff' : '#87879b',
+                                  transition: 'all 0.3s ease',
+                                }}
+                              >
+                                {step.icon}
+                              </Box>
+                            ),
+                          },
+                        }}
+                      >
+                        <Typography sx={{ fontFamily: 'Lato, sans-serif', fontSize: '11px', color: '#87879b' }}>
+                          {step.label}
+                        </Typography>
+                      </StepLabel>
+                    </Step>
+                  ))}
+                </Stepper>
+              </Box>
+
+              <ModalBody>{getStepContent(activeStep)}</ModalBody>
+
+              <ModalFooter>
+                <BackButton onClick={handleBack} disabled={activeStep === 0} startIcon={<ArrowBackIcon />}>
+                  Назад
+                </BackButton>
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+                  {uploadLoading && <CircularProgress size={24} />}
+                  <NextButton
+                    onClick={handleNext}
+                    disabled={!canProceed() || uploadLoading}
+                    endIcon={activeStep === steps.length - 1 ? <CheckCircleIcon /> : <ArrowForwardIcon />}
+                  >
+                    {activeStep === steps.length - 1 ? 'Сохранить' : 'Далее'}
+                  </NextButton>
+                </Box>
+              </ModalFooter>
+            </ModalContainer>
+          </Fade>
+        </Modal>
+
+        {/* Меню строки */}
+        <Menu anchorEl={rowMenuAnchor} open={Boolean(rowMenuAnchor)} onClose={() => { setRowMenuAnchor(null); setRowMenuDoc(null); }}>
+          <MenuItem onClick={() => rowMenuDoc && handleOpenEditModal(rowMenuDoc)}>
+            <ListItemIcon><EditIcon fontSize="small" /></ListItemIcon>
+            <ListItemText>Редактировать метаданные</ListItemText>
+          </MenuItem>
+          <MenuItem onClick={() => {
+            if (rowMenuDoc) {
+              setSelectedDocuments([rowMenuDoc.uuid]);
+              setRowMenuAnchor(null);
+              setIsDeleteModalOpen(true);
+            }
+          }}>
+            <ListItemIcon><DeleteIcon fontSize="small" /></ListItemIcon>
+            <ListItemText>Удалить</ListItemText>
+          </MenuItem>
+        </Menu>
+
+        {/* Модалка удаления */}
+        <Modal open={isDeleteModalOpen} onClose={() => setIsDeleteModalOpen(false)} closeAfterTransition>
+          <Fade in={isDeleteModalOpen}>
+            <Box sx={{
+              position: 'absolute',
+              top: '50%',
+              left: '50%',
+              transform: 'translate(-50%, -50%)',
+              width: '90%',
+              maxWidth: '440px',
+              backgroundColor: '#ffffff',
+              borderRadius: '16px',
+              boxShadow: '0 8px 32px rgba(0, 0, 0, 0.12)',
+              overflow: 'hidden',
+            }}>
+              <Box sx={{ p: 3, textAlign: 'center' }}>
+                <Box sx={{ width: 64, height: 64, borderRadius: '50%', backgroundColor: '#ffebee', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 16px' }}>
+                  <WarningIcon sx={{ fontSize: 36, color: '#e53935' }} />
+                </Box>
+                <Typography sx={{ fontFamily: 'Lato, sans-serif', fontSize: '18px', fontWeight: 700, color: '#101025', mb: 1 }}>
+                  Подтвердите удаление
+                </Typography>
+                <Typography sx={{ fontFamily: 'Lato, sans-serif', fontSize: '14px', color: '#87879b' }}>
+                  Вы собираетесь удалить {selectedDocuments.length} документ(ов). Это действие нельзя отменить.
+                </Typography>
+              </Box>
+              <Box sx={{ p: 2, backgroundColor: '#fafafa', display: 'flex', justifyContent: 'flex-end', gap: 1 }}>
+                <Button onClick={() => setIsDeleteModalOpen(false)} sx={{ fontFamily: 'Lato, sans-serif', textTransform: 'none', fontWeight: 600, color: '#87879b', '&:hover': { backgroundColor: '#f4f4f8' } }}>
+                  Отмена
+                </Button>
+                <Button onClick={handleDeleteSelected} sx={{ fontFamily: 'Lato, sans-serif', textTransform: 'none', fontWeight: 600, backgroundColor: '#e53935', color: '#ffffff', borderRadius: '8px', '&:hover': { backgroundColor: '#c62828' } }}>
+                  Удалить
+                </Button>
+              </Box>
+            </Box>
+          </Fade>
+        </Modal>
+
+        {/* Модалка редактирования */}
+        <Modal open={isEditModalOpen} onClose={() => setIsEditModalOpen(false)} closeAfterTransition>
+          <Fade in={isEditModalOpen}>
+            <ModalContainer>
+              <ModalHeader>
+                <Typography variant="h6" sx={{ fontFamily: 'Lato, sans-serif', fontWeight: 700, fontSize: '18px', color: '#101025' }}>
+                  Редактирование метаданных
+                </Typography>
+                <IconButton onClick={() => setIsEditModalOpen(false)} size="small" sx={{ color: '#87879b' }}>
+                  <CloseIcon fontSize="small" />
+                </IconButton>
+              </ModalHeader>
+              <ModalBody>
+                <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                  <Box sx={{ display: 'flex', gap: 2 }}>
+                    <FormControl fullWidth size="small">
+                      <InputLabel sx={{ fontFamily: 'Lato, sans-serif' }}>Папка</InputLabel>
+                      <Select
+                        value={editFormData.folder}
+                        onChange={(e) => handleEditFolderChange(e.target.value as FolderType)}
+                        input={<OutlinedInput label="Папка" />}
+                        sx={{ borderRadius: '8px', fontFamily: 'Lato, sans-serif' }}
+                      >
+                        <MenuItem value="orders">Приказы</MenuItem>
+                        <MenuItem value="regulations">Распоряжения</MenuItem>
+                        <MenuItem value="provisions">Положения</MenuItem>
+                        <MenuItem value="incoming">Входящие</MenuItem>
+                        <MenuItem value="outgoing">Исходящие</MenuItem>
+                        <MenuItem value="tasks">Поручения</MenuItem>
+                      </Select>
+                    </FormControl>
+                    <StyledTextField fullWidth label="Тип документа" value={editFormData.type} size="small" disabled />
+                  </Box>
+                  <StyledTextField fullWidth label="Наименование" value={editFormData.name} onChange={handleEditFieldChange('name')} size="small" required />
+                  <Box sx={{ display: 'flex', gap: 2 }}>
+                    <StyledTextField fullWidth label="Регистрационный номер" value={editFormData.registrationNumber} onChange={handleEditFieldChange('registrationNumber')} size="small" required />
+                    <DatePicker
+                      label="Дата"
+                      value={dayjs(editFormData.date)}
+                      onChange={(date: Dayjs | null) => {
+                        if (date) {
+                          setEditFormData(prev => ({ ...prev, date: date.format('YYYY-MM-DD') }));
+                        }
+                      }}
+                      format="DD.MM.YYYY"
+                      slotProps={{ textField: { fullWidth: true, size: 'small' } }}
+                    />
+                  </Box>
                   <StyledTextField
                     fullWidth
-                    label="Тип документа"
-                    value={editFormData.type}
+                    label="Подписант"
+                    value={editData?.signer_full_name || editData?.signer || ''}
                     size="small"
                     disabled
+                    slotProps={{
+                      input: {
+                        startAdornment: (
+                          <InputAdornment position="start">
+                            <PersonIcon sx={{ fontSize: '18px', color: '#87879b' }} />
+                          </InputAdornment>
+                        ),
+                      },
+                    }}
                   />
-                </Box>
-                <StyledTextField
-                  fullWidth
-                  label="Наименование"
-                  value={editFormData.name}
-                  onChange={handleEditFieldChange('name')}
-                  size="small"
-                  required
-                />
-                <Box sx={{ display: 'flex', gap: 2 }}>
                   <StyledTextField
                     fullWidth
-                    label="Регистрационный номер"
-                    value={editFormData.registrationNumber}
-                    onChange={handleEditFieldChange('registrationNumber')}
+                    label="Исполнитель"
+                    value={editFormData.executor}
+                    onChange={handleEditFieldChange('executor')}
                     size="small"
-                    required
-                  />
-                  <DatePicker
-                    label="Дата"
-                    value={dayjs(editFormData.date)}
-                    onChange={(date: Dayjs | null) => {
-                      if (date) {
-                        setEditFormData(prev => ({ ...prev, date: date.format('YYYY-MM-DD') }));
-                      }
-                    }}
-                    format="DD.MM.YYYY"
+                    placeholder="Петрова А.С."
                     slotProps={{
-                      textField: { fullWidth: true, size: 'small' },
+                      input: {
+                        startAdornment: (
+                          <InputAdornment position="start">
+                            <BusinessIcon sx={{ fontSize: '18px', color: '#87879b' }} />
+                          </InputAdornment>
+                        ),
+                      },
                     }}
                   />
                 </Box>
-                <StyledTextField
-                  fullWidth
-                  label="Подписант"
-                  value={editData?.signer_full_name || editData?.signer || ''}
-                  size="small"
-                  disabled
-                  slotProps={{
-                    input: {
-                      startAdornment: (
-                        <InputAdornment position="start">
-                          <PersonIcon sx={{ fontSize: '18px', color: '#87879b' }} />
-                        </InputAdornment>
-                      ),
-                    },
-                  }}
-                />
-                <StyledTextField
-                  fullWidth
-                  label="Исполнитель"
-                  value={editFormData.executor}
-                  onChange={handleEditFieldChange('executor')}
-                  size="small"
-                  placeholder="Петрова А.С."
-                  slotProps={{
-                    input: {
-                      startAdornment: (
-                        <InputAdornment position="start">
-                          <BusinessIcon sx={{ fontSize: '18px', color: '#87879b' }} />
-                        </InputAdornment>
-                      ),
-                    },
-                  }}
-                />
-              </Box>
-            </ModalBody>
-            <ModalFooter>
-              <BackButton onClick={() => setIsEditModalOpen(false)} startIcon={<ArrowBackIcon />}>
-                Отмена
-              </BackButton>
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
-                {editLoading && <CircularProgress size={24} />}
-                <NextButton
-                  onClick={handleSaveEdit}
-                  disabled={editLoading || editFormData.name.trim().length === 0 || editFormData.registrationNumber.trim().length === 0}
-                  endIcon={<CheckCircleIcon />}
-                >
-                  Сохранить
-                </NextButton>
-              </Box>
-            </ModalFooter>
-          </ModalContainer>
-        </Fade>
-      </Modal>
-    </PageContainer>
+              </ModalBody>
+              <ModalFooter>
+                <BackButton onClick={() => setIsEditModalOpen(false)} startIcon={<ArrowBackIcon />}>Отмена</BackButton>
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+                  {editLoading && <CircularProgress size={24} />}
+                  <NextButton
+                    onClick={handleSaveEdit}
+                    disabled={editLoading || editFormData.name.trim().length === 0 || editFormData.registrationNumber.trim().length === 0}
+                    endIcon={<CheckCircleIcon />}
+                  >
+                    Сохранить
+                  </NextButton>
+                </Box>
+              </ModalFooter>
+            </ModalContainer>
+          </Fade>
+        </Modal>
+      </PageContainer>
     </LocalizationProvider>
   );
 };
