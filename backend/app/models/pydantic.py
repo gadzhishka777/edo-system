@@ -1,4 +1,3 @@
-# backend/app/models/pydantic.py
 from pydantic import BaseModel, Field
 from datetime import datetime
 from typing import Optional, List, Dict, Any, Union
@@ -33,7 +32,7 @@ class DocumentBase(BaseModel):
     signer_full_name: Optional[str] = None
     signer_inn: Optional[str] = None
     executor: Optional[str] = None
-    signature_type: SignatureType = SignatureType.NONE
+    signature_type: SignatureType = SignatureType.NONE  # ✅ Автоматически включает HAND
 
 class DocumentCreate(DocumentBase):
     pass
@@ -84,19 +83,38 @@ class DocumentResponse(BaseModel):
     signature_date: Optional[datetime] = None
     original_file_name: str
     original_file_size: int
-    signature_type: SignatureType
+    signature_type: SignatureType  # ✅ Автоматически включает HAND
     goskey_valid: Optional[bool] = None
-    goskey_data: Optional[Union[Dict[str, Any], str]] = None  # ✅ разрешаем и dict и str
+    goskey_data: Optional[Union[Dict[str, Any], str]] = None
     status: DocumentStatus
     transferred_to_ped_id: bool
     ped_id_link: Optional[str] = None
     has_sig_file: bool
     signed_copy_url: Optional[str] = None
+    owner_org_id: Optional[int] = None
     
     class Config:
         from_attributes = True
-        # ✅ Добавляем возможность принимать строку
         arbitrary_types_allowed = True
+
+    # ✅ Добавляем метод для получения отображаемого имени типа подписи
+    def get_signature_display_name(self) -> str:
+        mapping = {
+            SignatureType.NONE: "Без подписи",
+            SignatureType.HAND: "Собственноручная",
+            SignatureType.PEP: "ПЭП",
+            SignatureType.UNEP: "УНЭП",
+            SignatureType.UKEP: "УКЭП",
+        }
+        return mapping.get(self.signature_type, "Неизвестно")
+    
+    # ✅ Проверка, является ли подпись электронной
+    def is_electronic_signature(self) -> bool:
+        return self.signature_type in [SignatureType.PEP, SignatureType.UNEP, SignatureType.UKEP]
+    
+    # ✅ Проверка, является ли подпись собственноручной
+    def is_handwritten_signature(self) -> bool:
+        return self.signature_type == SignatureType.HAND
 
 # ===== Проверка подписи =====
 class SignatureVerifyRequest(BaseModel):
@@ -105,7 +123,7 @@ class SignatureVerifyRequest(BaseModel):
 class SignatureVerifyResponse(BaseModel):
     document_uuid: str
     signature_valid: bool
-    signature_type: SignatureType
+    signature_type: SignatureType  # ✅ Автоматически включает HAND
     signer_name: str
     signer_inn: str
     signature_date: str

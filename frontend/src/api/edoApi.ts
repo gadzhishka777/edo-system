@@ -144,7 +144,7 @@ export const authApi = {
 };
 
 export type DocumentStatus = 'draft' | 'pending' | 'signed' | 'rejected';
-export type SignatureType = 'none' | 'PEP' | 'UNEP' | 'UKEP';
+export type SignatureType = 'none' | 'HAND' | 'PEP' | 'UNEP' | 'UKEP';
 export type FolderType = 'orders' | 'regulations' | 'provisions' | 'incoming' | 'outgoing' | 'tasks';
 
 export interface Document {

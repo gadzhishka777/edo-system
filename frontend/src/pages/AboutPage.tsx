@@ -390,7 +390,7 @@ const AboutPage: React.FC = () => {
                 color: '#101025',
               }}
             >
-              Подсистема Электронного документооборота 0.0.3
+              Типовое облачное решение для ведения электронного документооборота
             </Typography>
             <Typography
               variant="body2"
@@ -446,7 +446,7 @@ const AboutPage: React.FC = () => {
         <AccordionSummary expandIcon={<ExpandMoreIcon />}>
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, width: '100%', flexWrap: 'wrap' }}>
             <Typography sx={{ fontFamily: 'Lato, sans-serif', fontWeight: 600, fontSize: '16px', color: '#101025' }}>
-              Лицензия МИС Пед.ID: Подсистема ЭДО 0.0.3
+              Лицензия ТОР ЭДО
             </Typography>
             <Box sx={{ display: 'flex', gap: 1, ml: { xs: 0, sm: 'auto' } }}>
               <Tooltip 
@@ -470,7 +470,7 @@ const AboutPage: React.FC = () => {
           <Box sx={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
             <InfoRow>
               <InfoLabel>Продукт</InfoLabel>
-              <InfoValue>{licenseInfo?.product || 'МИС Пед.ID'}</InfoValue>
+              <InfoValue>{licenseInfo?.product || 'ТОР ЭДО'}</InfoValue>
             </InfoRow>
             <InfoRow>
               <InfoLabel>Тип решения</InfoLabel>
@@ -482,7 +482,7 @@ const AboutPage: React.FC = () => {
             </InfoRow>
             <InfoRow>
               <InfoLabel>Версия</InfoLabel>
-              <InfoValue>0.0.3</InfoValue>
+              <InfoValue>0.2</InfoValue>
             </InfoRow>
             <InfoRow>
               <InfoLabel>Статус лицензии</InfoLabel>

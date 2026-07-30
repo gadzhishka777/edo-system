@@ -134,10 +134,10 @@ export const Sidebar: React.FC<SidebarProps> = ({ open, onClose, mobile = false 
       <LogoContainer>
         {/* ✅ Прямоугольник на всю ширину */}
         <LogoBox>
-          <LogoText variant="caption">Подсистема ЭДО</LogoText>
+          <LogoText variant="caption">ТОР ЭДО</LogoText>
           <LogoSubText variant="caption">электронный документооборот</LogoSubText>
         </LogoBox>
-        <VersionText variant="caption">v0.0.3</VersionText>
+        <VersionText variant="caption">v0.2</VersionText>
       </LogoContainer>
 
       <List sx={{ flex: 1, px: 1 }}>

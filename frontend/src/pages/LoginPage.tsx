@@ -10,6 +10,7 @@ import {
   TextField,
   Alert,
   CircularProgress,
+  Divider,
 } from '@mui/material';
 import { styled } from '@mui/material/styles';
 import { ArrowBack as ArrowBackIcon, Visibility, VisibilityOff } from '@mui/icons-material';
@@ -60,33 +61,6 @@ const LoginCard = styled(Paper)({
   borderRadius: '16px',
   padding: '40px 32px',
   boxShadow: '0 4px 6px -2px rgba(41, 41, 64, 0.04), 0 10px 15px -3px rgba(41, 41, 64, 0.08)',
-});
-
-const BackButtonWrapper = styled(Box)({
-  marginBottom: '40px',
-});
-
-const StyledBackButton = styled(Button)({
-  display: 'inline-flex',
-  alignItems: 'center',
-  gap: '8px',
-  padding: '7px 16px 9px',
-  borderRadius: '12px',
-  backgroundColor: 'rgba(255, 255, 255, 0.48)',
-  color: '#292940',
-  fontFamily: 'Lato, sans-serif',
-  fontSize: '15px',
-  fontWeight: 700,
-  textTransform: 'none',
-  transition: 'background 0.2s',
-  '&:hover': {
-    backgroundColor: 'rgba(255, 255, 255, 0.64)',
-  },
-  '& svg': {
-    fill: '#292940',
-    width: '20px',
-    height: '20px',
-  },
 });
 
 const TitleWrapper = styled(Box)({
@@ -200,9 +174,54 @@ const SubmitButton = styled(Button)({
   },
 });
 
+// ===== СТИЛИ ДЛЯ РАЗДЕЛИТЕЛЯ =====
+const StyledDivider = styled(Divider)({
+  margin: '24px 0 24px 0',
+  '&::before, &::after': {
+    borderColor: '#d6d6df',
+    borderWidth: '1px',
+  },
+  '& .MuiDivider-wrapper': {
+    color: '#87879b',
+    fontFamily: 'Lato, sans-serif',
+    fontSize: '14px',
+    fontWeight: 400,
+    padding: '0 16px',
+  },
+});
+
+// ===== КАЧЕСТВЕННАЯ КНОПКА-КАРТИНКА ПЕД.ID =====
+const PedIdImageButton = styled('img')({
+  width: '100%',
+  maxWidth: '360px', // Чуть больше для лучшего отображения
+  height: '48px', // Немного увеличил высоту
+  display: 'block',
+  margin: '0 auto',
+  borderRadius: '8px',
+  border: '1px solid #e0e0e0', // Очень тонкая, едва заметная обводка
+  cursor: 'pointer',
+  transition: 'opacity 0.2s ease',
+  objectFit: 'contain',
+  backgroundColor: 'transparent',
+  padding: '4px 12px',
+  // Убираем всякие эффекты, делаем как в Figma
+  '&:hover': {
+    opacity: 0.85, // Только легкое затемнение при наведении
+  },
+});
+
+// ===== КОНТЕЙНЕР ДЛЯ ЦЕНТРИРОВАНИЯ КАРТИНКИ =====
+const PedIdWrapper = styled(Box)({
+  display: 'flex',
+  justifyContent: 'center',
+  alignItems: 'center',
+  width: '100%',
+  padding: '4px 0',
+});
+
 // ===== ПРОПСЫ ДЛЯ КОМПОНЕНТА =====
 interface LoginPageProps {
-  onLogin: () => void;  // Функция для входа
+  onLogin: () => void;
 }
 
 // ===== КОМПОНЕНТ СТРАНИЦЫ =====
@@ -252,15 +271,19 @@ const LoginPage: React.FC<LoginPageProps> = ({ onLogin }) => {
     if (errors.password) setErrors({ ...errors, password: '' });
   };
 
+  const handlePedIdLogin = () => {
+    // Здесь логика входа через Пед.ID
+    console.log('Вход через Пед.ID');
+    // Например: window.location.href = 'https://ped-id.ru/auth';
+  };
+
   return (
     <PageWrapper>
       <LoginBackground>
         <LoginContainer>
           <LoginCard elevation={0}>
-            
-
             <TitleWrapper>
-              <MainTitle variant="h1">МИС "Пед.ID": Подсистема ЭДО</MainTitle>
+              <MainTitle variant="h1">ТОР ЭДО</MainTitle>
             </TitleWrapper>
 
             <form onSubmit={handleSubmit}>
@@ -330,6 +353,8 @@ const LoginPage: React.FC<LoginPageProps> = ({ onLogin }) => {
                 <span>{loading ? 'Вход...' : 'Войти'}</span>
               </SubmitButton>
             </form>
+
+            
           </LoginCard>
         </LoginContainer>
       </LoginBackground>

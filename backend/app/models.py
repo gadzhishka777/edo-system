@@ -6,6 +6,7 @@ from app.database import Base
 
 class SignatureType(str, enum.Enum):
     NONE = "none"
+    HAND = "HAND"  # ← ДОБАВЛЯЕМ
     PEP = "PEP"
     UNEP = "UNEP"
     UKEP = "UKEP"
@@ -38,6 +39,22 @@ class User(Base):
     
     documents = relationship("Document", back_populates="creator")
 
+
+class Organization(Base):
+    __tablename__ = "organizations"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    uuid = Column(String(36), unique=True, index=True, nullable=False)
+    name = Column(String(255), nullable=False)
+    inn = Column(String(12))
+    kpp = Column(String(9))
+    address = Column(String(500))
+    contact_person = Column(String(255))
+    contact_email = Column(String(255))
+    is_active = Column(Boolean, default=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+
 class Document(Base):
     __tablename__ = "documents"
     
@@ -46,7 +63,7 @@ class Document(Base):
     
     # Основная информация
     name = Column(String(500), nullable=False)
-    type = Column(String(100), nullable=False)  # Приказ, Распоряжение и т.д.
+    type = Column(String(100), nullable=False)
     folder = Column(SQLEnum(FolderType), nullable=False)
     registration_number = Column(String(100), nullable=False)
     
@@ -64,13 +81,13 @@ class Document(Base):
     original_file_name = Column(String(500), nullable=False)
     original_file_size = Column(Integer, nullable=False)
     original_file_path = Column(String(500), nullable=False)
-    signature_file_path = Column(String(500), nullable=True)  # .sig файл
-    signed_copy_path = Column(String(500), nullable=True)     # PDF со штампом
+    signature_file_path = Column(String(500), nullable=True)
+    signed_copy_path = Column(String(500), nullable=True)
     
     # Электронная подпись
     signature_type = Column(SQLEnum(SignatureType), default=SignatureType.NONE)
     goskey_valid = Column(Boolean, nullable=True)
-    goskey_data = Column(Text, nullable=True)  # JSON с данными проверки
+    goskey_data = Column(Text, nullable=True)
     
     # Статус
     status = Column(SQLEnum(DocumentStatus), default=DocumentStatus.DRAFT)
@@ -86,4 +103,10 @@ class Document(Base):
     creator_id = Column(Integer, ForeignKey("users.id"))
     creator = relationship("User", back_populates="documents")
     
-    created_at_str = Column(String(50))  # Для обратной совместимости
+    created_at_str = Column(String(50))  # Для отображения в формате DD.MM.YYYY
+    
+    # Принадлежность организации
+    owner_org_id = Column(Integer, ForeignKey("organizations.id"), nullable=True, index=True)
+    owner_org = relationship("Organization")
+    
+    has_sig_file = Column(Boolean, default=False)

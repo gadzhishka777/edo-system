@@ -28,6 +28,7 @@ import {
   CircularProgress,
   Alert,
   Snackbar,
+  AlertTitle,
 } from '@mui/material';
 import { DatePicker } from '@mui/x-date-pickers/DatePicker';
 import { LocalizationProvider } from '@mui/x-date-pickers/LocalizationProvider';
@@ -53,6 +54,7 @@ import {
   Business as BusinessIcon,
   Refresh as RefreshIcon,
   Warning as WarningIcon,
+  Construction as ConstructionIcon,
 } from '@mui/icons-material';
 import {
   getContacts,
@@ -181,6 +183,23 @@ const CancelButton = styled(Button)({
 const SaveButton = styled(Button)({
   textTransform: 'none', fontFamily: 'Lato, sans-serif', fontWeight: 600, backgroundColor: '#4c6ef5',
   color: '#ffffff', padding: '6px 28px', borderRadius: '6px', fontSize: '13px', '&:hover': { backgroundColor: '#364fc7' },
+});
+
+// Стили для предупреждения
+const WarningBanner = styled(Paper)({
+  padding: '16px 20px',
+  borderRadius: '12px',
+  backgroundColor: '#fff8e1',
+  border: '1px solid #ffcc02',
+  display: 'flex',
+  alignItems: 'center',
+  gap: '12px',
+  marginBottom: '24px',
+  '& .MuiAlert-root': {
+    padding: 0,
+    backgroundColor: 'transparent',
+    flex: 1,
+  },
 });
 
 const formatPhoneNumber = (value: string): string => {
@@ -360,6 +379,19 @@ const ContactsPage: React.FC = () => {
           Контакты
         </Typography>
 
+        {/* ПРЕДУПРЕЖДЕНИЕ О РАЗРАБОТКЕ */}
+        <WarningBanner elevation={0}>
+          <ConstructionIcon sx={{ fontSize: '28px', color: '#f57c00' }} />
+          <Alert severity="warning" icon={false}>
+            <AlertTitle sx={{ fontFamily: 'Lato, sans-serif', fontWeight: 700, fontSize: '14px', color: '#e65100' }}>
+              Раздел "Контакты" в доработке
+            </AlertTitle>
+            <Typography sx={{ fontFamily: 'Lato, sans-serif', fontSize: '13px', color: '#bf6a00' }}>
+              Обмен документами недоступен. Ожидайте обновлений в ближайшее время.
+            </Typography>
+          </Alert>
+        </WarningBanner>
+
         <Snackbar
           open={!!error || !!success}
           autoHideDuration={5000}
@@ -436,7 +468,7 @@ const ContactsPage: React.FC = () => {
                   Список контактов пуст
                 </Typography>
                 <Typography sx={{ fontFamily: 'Lato, sans-serif', color: '#87879b', fontSize: '14px', mb: 3 }}>
-                  Создайте контакт, чтобы начать общение
+                  Создайте контакт, чтобы начать обмен документами
                 </Typography>
                 <Button variant="contained" startIcon={<PersonAddIcon />} onClick={() => handleOpenModal()}
                   sx={{ backgroundColor: '#4c6ef5', borderRadius: '8px', textTransform: 'none', fontFamily: 'Lato, sans-serif', fontWeight: 600, padding: '10px 24px', '&:hover': { backgroundColor: '#364fc7' } }}>

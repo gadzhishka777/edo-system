@@ -152,12 +152,7 @@ const Footer: React.FC = () => {
               <FooterLogos>
                 <FooterItem>
                   <FooterText variant="caption">
-                    Администрация МРОО "СНПМ"
-                  </FooterText>
-                </FooterItem>
-                <FooterItem>
-                  <FooterText variant="caption">
-                    Департамент информационных технологий
+                    Межрегиональная общественная организация «Содружество наставников, педагогов и молодежи» 
                   </FooterText>
                 </FooterItem>
               </FooterLogos>
@@ -177,7 +172,7 @@ const Footer: React.FC = () => {
 
             <FooterBottom>
               <FooterVersionText variant="caption">
-                Версия 0.0.3
+                Версия 0.2
               </FooterVersionText>
             </FooterBottom>
           </FooterContent>

@@ -10,6 +10,22 @@ import { Header } from './components/Layout/Header';
 import { Sidebar } from './components/Layout/Sidebar';
 import Footer from './components/Layout/Footer';
 import { authApi } from './api/edoApi';
+import { EventProvider } from './context/EventContext';
+import { useLicenseCheck } from './hooks/useLicenseCheck';
+
+// Компонент для проверки лицензии при загрузке приложения
+const LicenseChecker: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+  const { checkLicense, loading } = useLicenseCheck();
+  
+  useEffect(() => {
+    // Проверяем лицензию при загрузке, если пользователь авторизован
+    if (authApi.isAuthenticated()) {
+      checkLicense();
+    }
+  }, [checkLicense]);
+
+  return <>{children}</>;
+};
 
 function App() {
   const [isAuthenticated, setIsAuthenticated] = useState(authApi.isAuthenticated());
@@ -19,7 +35,16 @@ function App() {
     setIsAuthenticated(authApi.isAuthenticated());
   }, []);
 
-  const handleLogin = () => setIsAuthenticated(true);
+  const handleLogin = () => {
+    setIsAuthenticated(true);
+    // После входа проверяем лицензию
+    setTimeout(() => {
+      if (authApi.isAuthenticated()) {
+        // Используем хук через компонент LicenseChecker
+        window.dispatchEvent(new Event('check-license'));
+      }
+    }, 500);
+  };
 
   const handleLogout = async () => {
     await authApi.logout();
@@ -30,36 +55,40 @@ function App() {
 
   return (
     <BrowserRouter>
-      <Box sx={{ display: 'flex', flexDirection: 'column', minHeight: '100vh' }}>
-        <Routes>
-          <Route path="/login" element={<LoginPage onLogin={handleLogin} />} />
-          <Route
-            path="/*"
-            element={
-              isAuthenticated ? (
-                <Box sx={{ display: 'flex', flex: 1 }}>
-                  <Sidebar open={sidebarOpen} onClose={() => setSidebarOpen(false)} />
-                  <Box sx={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: '100vh' }}>
-                    <Header onMenuToggle={handleToggleSidebar} onLogout={handleLogout} />
-                    <Box sx={{ mt: '64px', flex: 1, backgroundColor: '#f4f4f8' }}>
-                      <Routes>
-                        <Route path="/" element={<Navigate to="/about" replace />} />
-                        <Route path="/documents" element={<DocumentsPage />} />
-                        <Route path="/mail" element={<MailPage />} />
-                        <Route path="/contacts" element={<ContactsPage />} />
-                        <Route path="/about" element={<AboutPage />} />
-                      </Routes>
+      <EventProvider>
+        <LicenseChecker>
+          <Box sx={{ display: 'flex', flexDirection: 'column', minHeight: '100vh' }}>
+            <Routes>
+              <Route path="/login" element={<LoginPage onLogin={handleLogin} />} />
+              <Route
+                path="/*"
+                element={
+                  isAuthenticated ? (
+                    <Box sx={{ display: 'flex', flex: 1 }}>
+                      <Sidebar open={sidebarOpen} onClose={() => setSidebarOpen(false)} />
+                      <Box sx={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: '100vh' }}>
+                        <Header onMenuToggle={handleToggleSidebar} onLogout={handleLogout} />
+                        <Box sx={{ mt: '64px', flex: 1, backgroundColor: '#f4f4f8' }}>
+                          <Routes>
+                            <Route path="/" element={<Navigate to="/about" replace />} />
+                            <Route path="/documents" element={<DocumentsPage />} />
+                            <Route path="/mail" element={<MailPage />} />
+                            <Route path="/contacts" element={<ContactsPage />} />
+                            <Route path="/about" element={<AboutPage />} />
+                          </Routes>
+                        </Box>
+                        <Footer />
+                      </Box>
                     </Box>
-                    <Footer />
-                  </Box>
-                </Box>
-              ) : (
-                <Navigate to="/login" replace />
-              )
-            }
-          />
-        </Routes>
-      </Box>
+                  ) : (
+                    <Navigate to="/login" replace />
+                  )
+                }
+              />
+            </Routes>
+          </Box>
+        </LicenseChecker>
+      </EventProvider>
     </BrowserRouter>
   );
 }
