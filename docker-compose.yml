@@ -1,0 +1,63 @@
+version: "3.8"
+
+services:
+  # ===== Backend (FastAPI) =====
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: edo-backend
+    restart: unless-stopped
+    env_file:
+      - ./backend/.env
+    environment:
+      - GOST_API_URL=http://gost:8080
+    volumes:
+      - ./backend/uploads:/app/uploads
+      - ./backend/signed_docs:/app/signed_docs
+      - ./backend/edo.db:/app/edo.db
+      - frontend-stamps:/app/frontend/public/stamps
+    ports:
+      - "8000:8000"
+    depends_on:
+      - gost
+    networks:
+      - edo-network
+
+  # ===== Frontend (React → nginx static) =====
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: edo-frontend
+    restart: unless-stopped
+    ports:
+      - "3000:80"
+    volumes:
+      - frontend-stamps:/usr/share/nginx/html/stamps
+    networks:
+      - edo-network
+
+  # ===== Go GOST — сервис проверки ЭП =====
+  gost:
+    build:
+      context: ./go-gost-main
+      dockerfile: Dockerfile
+    container_name: edo-gost
+    restart: unless-stopped
+    env_file:
+      - ./go-gost-main/.env
+    environment:
+      - APP_ENV=prod
+    ports:
+      - "8080:8080"
+    networks:
+      - edo-network
+
+networks:
+  edo-network:
+    driver: bridge
+
+volumes:
+  frontend-stamps:
+    driver: local

@@ -1,5 +1,5 @@
 // src/hooks/useLicenseCheck.ts
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import { useEvents } from '../context/EventContext';
 import { authApi } from '../api/edoApi';
 import dayjs from 'dayjs';
@@ -22,6 +22,12 @@ export const useLicenseCheck = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [notified, setNotified] = useState(false);
+  const notifiedRef = useRef(notified);
+
+  // Синхронизируем ref с state
+  useEffect(() => {
+    notifiedRef.current = notified;
+  }, [notified]);
 
   const checkLicense = useCallback(async () => {
     try {
@@ -38,7 +44,7 @@ export const useLicenseCheck = () => {
         info.days_until_expire = daysLeft;
         
         // Проверяем разные сценарии только если еще не уведомляли
-        if (!notified) {
+        if (!notifiedRef.current) {
           if (daysLeft === 0) {
             addWarning(
               'Внимание! Лицензия истекает сегодня!',
@@ -98,12 +104,14 @@ export const useLicenseCheck = () => {
     } finally {
       setLoading(false);
     }
-  }, [addWarning, addSuccess, addError, addInfo, notified]);
+  }, []); // пустые зависимости — React setters стабильны, не вызывают ре-рендеров
 
-  // Проверяем лицензию при монтировании
+  // Автоматическая проверка при монтировании
   useEffect(() => {
-    checkLicense();
-  }, [checkLicense]);
+    if (authApi.isAuthenticated()) {
+      checkLicense();
+    }
+  }, []);
 
   return {
     licenseInfo,

@@ -1,6 +1,6 @@
 import axios from 'axios';
 
-const API_BASE_URL = process.env.REACT_APP_API_URL || 'http://localhost:8000';
+const API_BASE_URL = process.env.REACT_APP_API_URL || '';
 
 const apiClient = axios.create({
   baseURL: API_BASE_URL,
@@ -170,6 +170,7 @@ export interface Document {
   ped_id_link?: string;
   has_sig_file: boolean;
   signed_copy_url?: string;
+  custom_folder_id?: number | null;
 }
 
 export interface PaginatedResponse {
@@ -184,13 +185,15 @@ export const getDocuments = async (
   page: number = 1,
   size: number = 20,
   folder?: FolderType,
-  search?: string
+  search?: string,
+  customFolderId?: number,
 ): Promise<PaginatedResponse> => {
   const params = new URLSearchParams();
   params.append('page', String(page));
   params.append('size', String(size));
   if (folder) params.append('folder', folder);
   if (search) params.append('search', search);
+  if (customFolderId) params.append('custom_folder_id', String(customFolderId));
 
   const response = await apiClient.get(`/api/documents?${params.toString()}`);
   return response.data;
@@ -213,6 +216,7 @@ export const uploadDocument = async (
     signer_inn?: string;
     executor?: string;
     signature_type: SignatureType;
+    custom_folder_id?: number | null;
   }
 ): Promise<Document> => {
   const formData = new FormData();
@@ -226,6 +230,7 @@ export const uploadDocument = async (
   if (data.signer_inn) formData.append('signer_inn', data.signer_inn);
   if (data.executor) formData.append('executor', data.executor);
   formData.append('signature_type', data.signature_type);
+  if (data.custom_folder_id) formData.append('custom_folder_id', String(data.custom_folder_id));
 
   const response = await apiClient.post('/api/documents/upload', formData, {
     headers: { 'Content-Type': 'multipart/form-data' },
@@ -291,6 +296,7 @@ export const updateDocument = async (
     signer_inn?: string;
     executor?: string;
     created_at?: string;
+    custom_folder_id?: number | null;
   }
 ): Promise<Document> => {
   const response = await apiClient.put(`/api/documents/${uuid}`, data);
@@ -494,6 +500,35 @@ export const updateContact = async (uuid: string, data: Partial<Contact>): Promi
 
 export const deleteContact = async (uuid: string): Promise<void> => {
   await apiClient.delete(`/api/contacts/${uuid}`);
+};
+
+// ===== Штампы (маппинг подписант → штамп) =====
+export const getStampMapping = async (): Promise<Record<string, string>> => {
+  const response = await apiClient.get(`/api/documents/stamps/mapping`);
+  return response.data;
+};
+
+// ===== Кастомные папки =====
+export interface CustomFolder {
+  id: number;
+  uuid: string;
+  name: string;
+  created_at: string;
+}
+
+export const getCustomFolders = async (): Promise<{ items: CustomFolder[]; total: number }> => {
+  const response = await apiClient.get(`/api/documents/folders/custom`);
+  return response.data;
+};
+
+export const createCustomFolder = async (name: string): Promise<CustomFolder & { message: string }> => {
+  const response = await apiClient.post(`/api/documents/folders/custom`, { name });
+  return response.data;
+};
+
+export const deleteCustomFolder = async (uuid: string): Promise<{ message: string }> => {
+  const response = await apiClient.delete(`/api/documents/folders/custom/${uuid}`);
+  return response.data;
 };
 
 export default apiClient;

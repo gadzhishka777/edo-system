@@ -78,3 +78,29 @@ class Document(Base):
 
     # Принадлежность организации (свой реестр у каждой организации)
     owner_org_id = Column(Integer, ForeignKey("organizations.id"), nullable=True, index=True)
+
+    # Кастомная папка (если документ в пользовательской папке)
+    custom_folder_id = Column(Integer, ForeignKey("custom_folders.id"), nullable=True, index=True)
+
+
+class StampMapping(Base):
+    """Маппинг: ключевое слово подписанта → файл штампа."""
+    __tablename__ = "stamp_mappings"
+
+    id = Column(Integer, primary_key=True, index=True)
+    uuid = Column(String(36), unique=True, index=True, nullable=False)
+    signer_keyword = Column(String(255), unique=True, index=True, nullable=False)
+    stamp_url = Column(String(500), nullable=False)
+    stamp_filename = Column(String(255), nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+
+class CustomFolder(Base):
+    """Пользовательская папка документов (создаётся организацией)."""
+    __tablename__ = "custom_folders"
+
+    id = Column(Integer, primary_key=True, index=True)
+    uuid = Column(String(36), unique=True, index=True, nullable=False)
+    org_id = Column(Integer, ForeignKey("organizations.id"), nullable=False, index=True)
+    name = Column(String(255), nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())

@@ -12,7 +12,7 @@ from sqlalchemy import select, func, and_, or_
 
 from app.database import get_async_db
 # Импортируем все из app.models (главный файл)
-from app.models import Document, DocumentStatus, SignatureType, FolderType, Organization, User
+from app.models import Document, DocumentStatus, SignatureType, FolderType, Organization, User, StampMapping, CustomFolder
 from app.models.mail import MailMessage, MailStatus
 from app.models.pydantic import (
     DocumentCreate, DocumentUpdate, DocumentResponse,
@@ -56,6 +56,103 @@ async def _accessible_doc(doc_uuid: str, org: Organization, db: AsyncSession) ->
     raise HTTPException(403, "Нет доступа к этому документу")
 
 
+# ===================== МАППИНГ ШТАМПОВ =====================
+
+
+@router.get("/stamps/mapping")
+async def get_stamp_mapping(
+    db: AsyncSession = Depends(get_async_db),
+):
+    """Получение маппинга подписант → штамп (публичный, без авторизации)."""
+    result = await db.execute(select(StampMapping))
+    stamps = result.scalars().all()
+    mapping = {}
+    for s in stamps:
+        mapping[s.signer_keyword.lower()] = s.stamp_url
+    return mapping
+
+
+# ===================== КАСТОМНЫЕ ПАПКИ =====================
+
+
+@router.get("/folders/custom")
+async def list_custom_folders(
+    db: AsyncSession = Depends(get_async_db),
+    org: Organization = Depends(get_current_org),
+):
+    """Список кастомных папок организации."""
+    result = await db.execute(
+        select(CustomFolder)
+        .where(CustomFolder.org_id == org.id)
+        .order_by(CustomFolder.created_at.desc())
+    )
+    folders = result.scalars().all()
+    return {
+        "items": [{
+            "id": f.id,
+            "uuid": f.uuid,
+            "name": f.name,
+            "created_at": f.created_at.isoformat() if f.created_at else None,
+        } for f in folders],
+        "total": len(folders),
+    }
+
+
+@router.post("/folders/custom")
+async def create_custom_folder(
+    data: dict,
+    db: AsyncSession = Depends(get_async_db),
+    org: Organization = Depends(get_current_org),
+):
+    """Создание кастомной папки."""
+    name = (data.get("name") or "").strip()
+    if not name:
+        raise HTTPException(400, "Название папки обязательно")
+    if len(name) > 100:
+        raise HTTPException(400, "Название не должно превышать 100 символов")
+
+    folder = CustomFolder(
+        uuid=str(uuid.uuid4()),
+        org_id=org.id,
+        name=name,
+    )
+    db.add(folder)
+    await db.commit()
+    await db.refresh(folder)
+    return {
+        "id": folder.id,
+        "uuid": folder.uuid,
+        "name": folder.name,
+        "message": f"Папка «{name}» создана",
+    }
+
+
+@router.delete("/folders/custom/{folder_uuid}")
+async def delete_custom_folder(
+    folder_uuid: str,
+    db: AsyncSession = Depends(get_async_db),
+    org: Organization = Depends(get_current_org),
+):
+    """Удаление кастомной папки. Документы в ней перемещаются в «all»."""
+    result = await db.execute(
+        select(CustomFolder).where(CustomFolder.uuid == folder_uuid, CustomFolder.org_id == org.id)
+    )
+    folder = result.scalar_one_or_none()
+    if not folder:
+        raise HTTPException(404, "Папка не найдена")
+
+    # Сбрасываем custom_folder_id у документов этой папки
+    docs_result = await db.execute(
+        select(Document).where(Document.custom_folder_id == folder.id)
+    )
+    for doc in docs_result.scalars().all():
+        doc.custom_folder_id = None
+
+    await db.delete(folder)
+    await db.commit()
+    return {"message": f"Папка «{folder.name}» удалена"}
+
+
 @router.post("/upload", response_model=DocumentResponse)
 async def upload_document(
     file: UploadFile = File(...),
@@ -68,6 +165,7 @@ async def upload_document(
     signer_inn: Optional[str] = Form(None),
     executor: Optional[str] = Form(None),
     signature_type: SignatureType = Form(SignatureType.NONE),
+    custom_folder_id: Optional[int] = Form(None),
     db: AsyncSession = Depends(get_async_db),
     org: Organization = Depends(get_current_org),
 ):
@@ -114,6 +212,7 @@ async def upload_document(
         created_at_str=now.strftime("%d.%m.%Y"),
         creator_id=1,
         owner_org_id=org.id,
+        custom_folder_id=custom_folder_id,
     )
     
     db.add(doc)
@@ -260,6 +359,7 @@ async def get_documents(
     search: Optional[str] = None,
     status: Optional[DocumentStatus] = None,
     signature_type: Optional[SignatureType] = None,
+    custom_folder_id: Optional[int] = Query(None),
     db: AsyncSession = Depends(get_async_db),
     org: Organization = Depends(get_current_org),
 ):
@@ -271,6 +371,10 @@ async def get_documents(
     filters = [Document.owner_org_id == org.id]
     if folder:
         filters.append(Document.folder == folder)
+        # Системная папка — документы без кастомной папки
+        filters.append(Document.custom_folder_id.is_(None))
+    if custom_folder_id:
+        filters.append(Document.custom_folder_id == custom_folder_id)
     if status:
         filters.append(Document.status == status)
     if signature_type:
@@ -326,9 +430,10 @@ async def get_folder_counts(
 ):
     """Получение количества документов по каждой папке (своей организации)"""
     
+    # Системные папки (только документы без custom_folder_id)
     query = (
         select(Document.folder, func.count())
-        .where(Document.owner_org_id == org.id)
+        .where(Document.owner_org_id == org.id, Document.custom_folder_id.is_(None))
         .group_by(Document.folder)
     )
     result = await db.execute(query)
@@ -338,6 +443,17 @@ async def get_folder_counts(
     total = 0
     for folder, cnt in rows:
         counts[folder] = cnt
+        total += cnt
+    
+    # Кастомные папки
+    custom_query = (
+        select(Document.custom_folder_id, func.count())
+        .where(Document.owner_org_id == org.id, Document.custom_folder_id.isnot(None))
+        .group_by(Document.custom_folder_id)
+    )
+    custom_result = await db.execute(custom_query)
+    for cf_id, cnt in custom_result.all():
+        counts[f"custom_{cf_id}"] = cnt
         total += cnt
     
     counts["all"] = total

@@ -17,10 +17,15 @@ build/
 # Файлы окружения
 .env
 .env.local
+.env.production
+
+# Docker volumes
+edo.db
 
 # Загруженные файлы
 uploads/
 signed/
+signed_docs/
 archives/
 
 # IDE

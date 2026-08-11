@@ -47,6 +47,7 @@ class DocumentUpdate(BaseModel):
     signer_inn: Optional[str] = None
     executor: Optional[str] = None
     created_at: Optional[datetime] = None
+    custom_folder_id: Optional[int] = None
 
 
 class VisualizeRequest(BaseModel):
@@ -92,6 +93,7 @@ class DocumentResponse(BaseModel):
     has_sig_file: bool
     signed_copy_url: Optional[str] = None
     owner_org_id: Optional[int] = None
+    custom_folder_id: Optional[int] = None
     
     class Config:
         from_attributes = True

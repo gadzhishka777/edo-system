@@ -1,14 +1,15 @@
 # backend/app/services/signature_service.py
 import httpx
 import json
-import os
 from typing import Dict, Any, Optional
 from datetime import datetime
 
+from app.config import settings
+
 # Настройки Go GOST
-GOST_API_URL = os.getenv("GOST_API_URL", "http://localhost:8080")
-GOST_API_KEY = os.getenv("GOST_API_KEY", "")
-GOST_TIMEOUT = int(os.getenv("GOST_TIMEOUT", "30"))
+GOST_API_URL = settings.GOST_API_URL
+GOST_API_KEY = settings.GOST_API_KEY
+GOST_TIMEOUT = settings.GOST_TIMEOUT
 
 async def verify_signature(
     document_content: bytes,

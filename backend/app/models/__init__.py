@@ -1,9 +1,8 @@
 # backend/app/models/__init__.py
 from app.models.base import Base
-from app.models.document import Document, DocumentStatus, SignatureType, FolderType
-from app.models.user import User
+from app.models.document import Document, DocumentStatus, SignatureType, FolderType, StampMapping, CustomFolder
+from app.models.user import User, AdminUser
 from app.models.mail import MailMessage, MailDirection, MailStatus, Organization, Contact, License
-from app.models.user import User
 from app.models.pydantic import (
     DocumentCreate,
     DocumentUpdate,
@@ -34,7 +33,10 @@ __all__ = [
     "DocumentStatus",
     "SignatureType",
     "FolderType",
+    "StampMapping",
+    "CustomFolder",
     "User",
+    "AdminUser",
     "MailMessage",
     "MailDirection",
     "MailStatus",

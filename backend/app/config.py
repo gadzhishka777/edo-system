@@ -21,12 +21,17 @@ class Settings(BaseSettings):
     # Папки для файлов
     UPLOAD_DIR: str = str(BASE_DIR / "uploads")
     SIGNED_DIR: str = str(BASE_DIR / "signed_docs")
+    STAMPS_DIR: str = str(BASE_DIR.parent / "frontend" / "public" / "stamps")
     
     # Безопасность
     SECRET_KEY: str = os.getenv("SECRET_KEY", "edo-secret-key-change-in-production-2026")
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 30  # 30 минут
     REFRESH_TOKEN_EXPIRE_DAYS: int = 7  # 7 дней
+    
+    # Администратор по умолчанию
+    ADMIN_DEFAULT_USERNAME: str = os.getenv("ADMIN_DEFAULT_USERNAME", "admin")
+    ADMIN_DEFAULT_PASSWORD: str = os.getenv("ADMIN_DEFAULT_PASSWORD", "admin123")
 
     # Лицензирование
     LICENSE_KEY: str = os.getenv("LICENSE_KEY", "EDO-PROD-2026-SNPM-001")
@@ -34,8 +39,14 @@ class Settings(BaseSettings):
     LICENSE_MAX_DOCS: int = 10000
     LICENSE_EXPIRE_DATE: str = "2027-12-31"
     
-    # CORS
-    CORS_ORIGINS: list = ["http://localhost:3000", "http://127.0.0.1:3000"]
+    # CORS — список разрешённых origins через запятую в env
+    # По умолчанию localhost для разработки; для prod задать CORS_ORIGINS в .env
+    CORS_ORIGINS: list = ["http://localhost:3000", "http://127.0.0.1:3000", "http://localhost:8000"]
+    
+    # Go GOST
+    GOST_API_URL: str = os.getenv("GOST_API_URL", "http://localhost:8080")
+    GOST_API_KEY: str = os.getenv("GOST_API_KEY", "")
+    GOST_TIMEOUT: int = int(os.getenv("GOST_TIMEOUT", "30"))
     
     # Максимальный размер файла (50 МБ)
     MAX_FILE_SIZE: int = 50 * 1024 * 1024
@@ -59,3 +70,4 @@ settings = Settings()
 # Создаём папки
 os.makedirs(settings.UPLOAD_DIR, exist_ok=True)
 os.makedirs(settings.SIGNED_DIR, exist_ok=True)
+os.makedirs(settings.STAMPS_DIR, exist_ok=True)

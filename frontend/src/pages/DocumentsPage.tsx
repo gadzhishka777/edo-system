@@ -98,14 +98,22 @@ import {
   updateDocument,
   SignatureType,
   authApi,
+  getStampMapping,
+  getCustomFolders,
+  createCustomFolder,
+  deleteCustomFolder,
+  CustomFolder,
 } from '../api/edoApi';
 import { Document as PDFDocument, Page, pdfjs } from 'react-pdf';
 import 'react-pdf/dist/Page/TextLayer.css';
 import 'react-pdf/dist/Page/AnnotationLayer.css';
 import { useEvents } from '../context/EventContext';
 
-// Настройка worker для PDF.js
-pdfjs.GlobalWorkerOptions.workerSrc = `//cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js`;
+// Настройка worker для PDF.js (локальный файл вместо CDN)
+pdfjs.GlobalWorkerOptions.workerSrc = new URL(
+  'pdfjs-dist/build/pdf.worker.min.mjs',
+  import.meta.url,
+).toString();
 
 // ===== СТИЛИ =====
 const PageContainer = styled(Box)({
@@ -458,13 +466,7 @@ const signatureTypes: { value: SignatureType; label: string; description: string
   { value: 'UKEP', label: 'УКЭП (Госключ)', description: 'Усиленная квалифицированная ЭП через Госключ', disabled: false },
 ];
 
-// ===== МАППИНГ ПОДПИСАНТ → ШТАМП =====
-const STAMP_BY_SIGNER: Record<string, string> = {
-  'плахов': '/stamps/plakhov.png',
-  'валеев': '/stamps/valeev.png',
-  'солтанов': '/stamps/soltanov.png',
-};
-
+// ===== МАППИНГ ПОДПИСАНТ → ШТАМП (загружается с API) =====
 const DEFAULT_STAMP_URL = '/stamps/premium-stamp.png';
 const FIXED_STAMP_SIZE = 40;
 
@@ -493,6 +495,10 @@ const DocumentsPage: React.FC = () => {
   const [page, setPage] = useState(1);
   const [pageSize] = useState(20);
   const [folderCounts, setFolderCounts] = useState<Record<string, number>>({});
+  const [stampMapping, setStampMapping] = useState<Record<string, string>>({});
+  const [customFolders, setCustomFolders] = useState<CustomFolder[]>([]);
+  const [newFolderName, setNewFolderName] = useState('');
+  const [createFolderModalOpen, setCreateFolderModalOpen] = useState(false);
   const [anchorEl, setAnchorEl] = useState<null | HTMLElement>(null);
   const [isUploadModalOpen, setIsUploadModalOpen] = useState(false);
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
@@ -502,6 +508,7 @@ const DocumentsPage: React.FC = () => {
     name: '',
     type: '',
     folder: 'orders' as FolderType,
+    customFolderId: null as number | null,
     registrationNumber: '',
     date: dayjs().format('YYYY-MM-DD'),
     executor: '',
@@ -523,6 +530,7 @@ const DocumentsPage: React.FC = () => {
     pdfFile: null as File | null,
     sigFile: null as File | null,
     folder: 'orders' as FolderType,
+    customFolderId: null as number | null,
     documentType: '',
     name: '',
     registrationNumber: '',
@@ -628,8 +636,21 @@ const DocumentsPage: React.FC = () => {
     setLoading(true);
     setError(null);
     try {
-      const folder = activeFolder === 'all' ? undefined : activeFolder as FolderType;
-      const response = await getDocuments(page, pageSize, folder, searchQuery || undefined);
+      let folder: FolderType | undefined;
+      let customFolderId: number | undefined;
+      
+      if (activeFolder === 'all') {
+        folder = undefined;
+        customFolderId = undefined;
+      } else if (activeFolder.startsWith('custom_')) {
+        folder = undefined;
+        customFolderId = parseInt(activeFolder.replace('custom_', ''));
+      } else {
+        folder = activeFolder as FolderType;
+        customFolderId = undefined;
+      }
+      
+      const response = await getDocuments(page, pageSize, folder, searchQuery || undefined, customFolderId);
       
       startTransition(() => {
         setDocuments(response.items);
@@ -657,12 +678,45 @@ const DocumentsPage: React.FC = () => {
     }
   }, [licenseValid]);
 
+  // ===== ЗАГРУЗКА МАППИНГА ШТАМПОВ =====
+  const loadStampMapping = useCallback(async () => {
+    try {
+      const mapping = await getStampMapping();
+      setStampMapping(mapping || {});
+    } catch {
+      // тихо игнорируем — будет использоваться DEFAULT_STAMP_URL
+    }
+  }, []);
+
+  // ===== ЗАГРУЗКА КАСТОМНЫХ ПАПОК =====
+  const loadCustomFolders = useCallback(async () => {
+    if (licenseValid === false) return;
+    try {
+      const data = await getCustomFolders();
+      setCustomFolders(data.items || []);
+    } catch {
+      // тихо игнорируем
+    }
+  }, [licenseValid]);
+
   // Загружаем документы только когда лицензия проверена и активна
   useEffect(() => {
     if (licenseValid !== null) {
       loadDocuments();
     }
   }, [loadDocuments, licenseValid]);
+
+  // Загрузка маппинга штампов (один раз при монтировании)
+  useEffect(() => {
+    loadStampMapping();
+  }, [loadStampMapping]);
+
+  // Загрузка кастомных папок
+  useEffect(() => {
+    if (licenseValid !== null) {
+      loadCustomFolders();
+    }
+  }, [loadCustomFolders, licenseValid]);
 
   useEffect(() => {
     if (licenseValid !== null) {
@@ -678,24 +732,39 @@ const DocumentsPage: React.FC = () => {
 
   // ===== ФОРМАТИРОВАНИЕ ДАТЫ =====
   const formatDate = (dateStr: string | undefined | null): string => {
-    if (!dateStr) return '—';
+    if (!dateStr || dateStr === '') return '—';
     
     try {
+      // Уже в формате DD.MM.YYYY
       if (typeof dateStr === 'string' && /^\d{2}\.\d{2}\.\d{4}$/.test(dateStr)) {
         return dateStr;
       }
-      
-      const parsed = dayjs(dateStr);
-      
+
+      // Формат DD.MM.YYYY HH:MM:SS
+      if (typeof dateStr === 'string' && /^\d{2}\.\d{2}\.\d{4}\s+\d{2}:\d{2}/.test(dateStr)) {
+        return dateStr.split(/\s+/)[0];
+      }
+
+      // Go GOST SigningTime может возвращать дату в разных форматах
+      // Пробуем заменить точки/пробелы на стандартные разделители для ISO парсинга
+      let normalized = dateStr;
+      // "2026.01.15 10:30:00 UTC" → "2026-01-15T10:30:00Z"
+      const dotFormat = dateStr.match(/^(\d{4})\.(\d{2})\.(\d{2})\s+(\d{2}:\d{2}(?::\d{2})?)/);
+      if (dotFormat) {
+        normalized = `${dotFormat[1]}-${dotFormat[2]}-${dotFormat[3]}T${dotFormat[4]}`;
+      }
+
+      const parsed = dayjs(normalized);
+
       if (!parsed.isValid()) {
         return '—';
       }
-      
+
       const year = parsed.year();
       if (year < 2000 || year > 2100) {
         return '—';
       }
-      
+
       return parsed.format('DD.MM.YYYY');
     } catch (error) {
       return '—';
@@ -815,6 +884,7 @@ const DocumentsPage: React.FC = () => {
       name: doc.name || '',
       type: doc.type || '',
       folder: doc.folder,
+      customFolderId: doc.custom_folder_id ?? null,
       registrationNumber: doc.registration_number || '',
       date: doc.created_at ? dayjs(doc.created_at).format('YYYY-MM-DD') : dayjs().format('YYYY-MM-DD'),
       executor: doc.executor || '',
@@ -846,6 +916,7 @@ const DocumentsPage: React.FC = () => {
         registration_number: editFormData.registrationNumber,
         executor: editFormData.executor,
         created_at: editFormData.date ? `${editFormData.date}T00:00:00` : undefined,
+        custom_folder_id: editFormData.customFolderId,
       });
       setSuccess('Метаданные обновлены');
       addSuccess('Метаданные обновлены', `Документ "${editFormData.name}" успешно обновлен`);
@@ -940,6 +1011,7 @@ const DocumentsPage: React.FC = () => {
         signer_full_name: uploadData.signerFullName || uploadData.signer,
         executor: uploadData.executor || '',
         signature_type: uploadData.signatureType,
+        custom_folder_id: uploadData.customFolderId,
       });
 
       await uploadSignatureFile(doc.uuid, uploadData.sigFile);
@@ -985,7 +1057,7 @@ const DocumentsPage: React.FC = () => {
   function resolveStampUrl(signerName: string | undefined | null): string {
     if (!signerName) return DEFAULT_STAMP_URL;
     const lower = signerName.toLowerCase();
-    for (const [lastName, stampUrl] of Object.entries(STAMP_BY_SIGNER)) {
+    for (const [lastName, stampUrl] of Object.entries(stampMapping)) {
       if (lower.includes(lastName)) {
         return stampUrl;
       }
@@ -1009,6 +1081,7 @@ const DocumentsPage: React.FC = () => {
       pdfFile: null,
       sigFile: null,
       folder: 'orders',
+      customFolderId: null,
       documentType: FOLDER_TO_TYPE['orders'] || '',
       name: '',
       registrationNumber: '',
@@ -1130,6 +1203,7 @@ const DocumentsPage: React.FC = () => {
           signer_full_name: uploadData.signerFullName || uploadData.signer,
           executor: uploadData.executor || '',
           signature_type: uploadData.signatureType,
+          custom_folder_id: uploadData.customFolderId,
         });
         docUuid = doc.uuid;
         documentName = doc.name;
@@ -1153,6 +1227,7 @@ const DocumentsPage: React.FC = () => {
           created_at: uploadData.date
             ? `${uploadData.date}T00:00:00`
             : undefined,
+          custom_folder_id: uploadData.customFolderId,
         });
       }
       
@@ -1728,14 +1803,27 @@ const DocumentsPage: React.FC = () => {
           <FormControl fullWidth size="small">
             <InputLabel sx={{ fontFamily: 'Lato, sans-serif' }}>Папка</InputLabel>
             <Select
-              value={uploadData.folder}
+              value={uploadData.customFolderId ? `custom_${uploadData.customFolderId}` : uploadData.folder}
               onChange={(e) => {
-                const folder = e.target.value as FolderType;
-                setUploadData(prev => ({
-                  ...prev,
-                  folder,
-                  documentType: FOLDER_TO_TYPE[folder] || prev.documentType,
-                }));
+                const val = e.target.value as string;
+                if (val.startsWith('custom_')) {
+                  const cfId = parseInt(val.replace('custom_', ''));
+                  const cf = customFolders.find(f => f.id === cfId);
+                  setUploadData(prev => ({
+                    ...prev,
+                    customFolderId: cfId,
+                    folder: prev.folder,
+                    documentType: cf?.name || prev.documentType,
+                  }));
+                } else {
+                  const folder = val as FolderType;
+                  setUploadData(prev => ({
+                    ...prev,
+                    folder,
+                    customFolderId: null,
+                    documentType: FOLDER_TO_TYPE[folder] || prev.documentType,
+                  }));
+                }
               }}
               input={<OutlinedInput label="Папка" />}
               sx={{ borderRadius: '8px', fontFamily: 'Lato, sans-serif' }}
@@ -1746,6 +1834,14 @@ const DocumentsPage: React.FC = () => {
               <MenuItem value="incoming">Входящие</MenuItem>
               <MenuItem value="outgoing">Исходящие</MenuItem>
               <MenuItem value="tasks">Поручения</MenuItem>
+              {customFolders.length > 0 && (
+                <Box sx={{ px: 2, py: 0.5, fontSize: '11px', color: '#87879b', fontWeight: 600, textTransform: 'uppercase' }}>
+                  Пользовательские
+                </Box>
+              )}
+              {customFolders.map((cf) => (
+                <MenuItem key={cf.id} value={`custom_${cf.id}`}>{cf.name}</MenuItem>
+              ))}
             </Select>
           </FormControl>
 
@@ -2064,6 +2160,34 @@ const DocumentsPage: React.FC = () => {
                 />
               );
             })}
+            {customFolders.map((cf) => {
+              const count = getFolderCount(`custom_${cf.id}`);
+              return (
+                <Tab
+                  key={`custom_${cf.id}`}
+                  value={`custom_${cf.id}`}
+                  label={
+                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                      <FolderIcon />
+                      <span>{cf.name}</span>
+                      <Chip
+                        label={count}
+                        size="small"
+                        sx={{
+                          height: '18px',
+                          fontSize: '10px',
+                          fontWeight: 600,
+                          backgroundColor: activeFolder === `custom_${cf.id}` ? '#4c6ef5' : '#f4f4f8',
+                          color: activeFolder === `custom_${cf.id}` ? '#ffffff' : '#87879b',
+                          '& .MuiChip-label': { padding: '0 6px' },
+                          transition: 'all 0.3s ease',
+                        }}
+                      />
+                    </Box>
+                  }
+                />
+              );
+            })}
           </Tabs>
         </Box>
 
@@ -2138,10 +2262,34 @@ const DocumentsPage: React.FC = () => {
             </Tooltip>
             
             <Menu anchorEl={anchorEl} open={Boolean(anchorEl)} onClose={handleMenuClose}>
-              <MenuItem onClick={handleMenuClose}>
+              <MenuItem onClick={() => { handleMenuClose(); setCreateFolderModalOpen(true); }}>
                 <ListItemIcon><FolderIcon fontSize="small" /></ListItemIcon>
                 <ListItemText>Новая папка</ListItemText>
               </MenuItem>
+              {activeFolder.startsWith('custom_') && (
+                <MenuItem onClick={async () => {
+                  handleMenuClose();
+                  const cfId = activeFolder.replace('custom_', '');
+                  const cf = customFolders.find(f => String(f.id) === cfId);
+                  if (!cf) return;
+                  try {
+                    await deleteCustomFolder(cf.uuid);
+                    setSuccess(`Папка «${cf.name}» удалена`);
+                    addSuccess('Папка удалена', `Папка «${cf.name}» удалена`);
+                    setActiveFolder('all');
+                    await loadCustomFolders();
+                    await loadFolderCounts();
+                    await loadDocuments();
+                  } catch (err: any) {
+                    const errorMsg = err.response?.data?.detail || 'Ошибка удаления папки';
+                    setError(errorMsg);
+                    addError('Ошибка удаления папки', errorMsg);
+                  }
+                }}>
+                  <ListItemIcon><DeleteIcon fontSize="small" /></ListItemIcon>
+                  <ListItemText>Удалить текущую папку</ListItemText>
+                </MenuItem>
+              )}
               <MenuItem onClick={handleMenuClose}>
                 <ListItemIcon><CloudUploadIcon fontSize="small" /></ListItemIcon>
                 <ListItemText>Импорт</ListItemText>
@@ -2296,6 +2444,67 @@ const DocumentsPage: React.FC = () => {
           </Box>
         )}
 
+        {/* Модалка создания кастомной папки */}
+        <Modal open={createFolderModalOpen} onClose={() => setCreateFolderModalOpen(false)} closeAfterTransition>
+          <Fade in={createFolderModalOpen}>
+            <Box sx={{
+              position: 'absolute',
+              top: '50%',
+              left: '50%',
+              transform: 'translate(-50%, -50%)',
+              width: '90%',
+              maxWidth: '440px',
+              backgroundColor: '#ffffff',
+              borderRadius: '16px',
+              boxShadow: '0 8px 32px rgba(0, 0, 0, 0.12)',
+              overflow: 'hidden',
+            }}>
+              <ModalHeader>
+                <Typography variant="h6" sx={{ fontFamily: 'Lato, sans-serif', fontWeight: 700, fontSize: '18px', color: '#101025' }}>
+                  Новая папка
+                </Typography>
+                <IconButton onClick={() => setCreateFolderModalOpen(false)} size="small" sx={{ color: '#87879b' }}>
+                  <CloseIcon fontSize="small" />
+                </IconButton>
+              </ModalHeader>
+              <ModalBody>
+                <StyledTextField
+                  fullWidth
+                  label="Название папки"
+                  value={newFolderName}
+                  onChange={(e) => setNewFolderName(e.target.value)}
+                  size="small"
+                  autoFocus
+                  placeholder="Например: Договоры 2026"
+                />
+              </ModalBody>
+              <ModalFooter>
+                <BackButton onClick={() => setCreateFolderModalOpen(false)}>Отмена</BackButton>
+                <NextButton
+                  disabled={!newFolderName.trim()}
+                  onClick={async () => {
+                    try {
+                      await createCustomFolder(newFolderName.trim());
+                      setSuccess(`Папка «${newFolderName.trim()}» создана`);
+                      addSuccess('Папка создана', `Папка «${newFolderName.trim()}» успешно создана`);
+                      setNewFolderName('');
+                      setCreateFolderModalOpen(false);
+                      await loadCustomFolders();
+                      await loadFolderCounts();
+                    } catch (err: any) {
+                      const errorMsg = err.response?.data?.detail || 'Ошибка создания папки';
+                      setError(errorMsg);
+                      addError('Ошибка создания папки', errorMsg);
+                    }
+                  }}
+                >
+                  Создать
+                </NextButton>
+              </ModalFooter>
+            </Box>
+          </Fade>
+        </Modal>
+
         {/* Модалка загрузки */}
         <Modal open={isUploadModalOpen} onClose={handleCloseUploadModal} closeAfterTransition>
           <Fade in={isUploadModalOpen}>
@@ -2447,8 +2656,22 @@ const DocumentsPage: React.FC = () => {
                     <FormControl fullWidth size="small">
                       <InputLabel sx={{ fontFamily: 'Lato, sans-serif' }}>Папка</InputLabel>
                       <Select
-                        value={editFormData.folder}
-                        onChange={(e) => handleEditFolderChange(e.target.value as FolderType)}
+                        value={editFormData.customFolderId ? `custom_${editFormData.customFolderId}` : editFormData.folder}
+                        onChange={(e) => {
+                          const val = e.target.value as string;
+                          if (val.startsWith('custom_')) {
+                            const cfId = parseInt(val.replace('custom_', ''));
+                            const cf = customFolders.find(f => f.id === cfId);
+                            setEditFormData(prev => ({
+                              ...prev,
+                              customFolderId: cfId,
+                              type: cf?.name || prev.type,
+                            }));
+                          } else {
+                            handleEditFolderChange(val as FolderType);
+                            setEditFormData(prev => ({ ...prev, customFolderId: null }));
+                          }
+                        }}
                         input={<OutlinedInput label="Папка" />}
                         sx={{ borderRadius: '8px', fontFamily: 'Lato, sans-serif' }}
                       >
@@ -2458,6 +2681,14 @@ const DocumentsPage: React.FC = () => {
                         <MenuItem value="incoming">Входящие</MenuItem>
                         <MenuItem value="outgoing">Исходящие</MenuItem>
                         <MenuItem value="tasks">Поручения</MenuItem>
+                        {customFolders.length > 0 && (
+                          <Box sx={{ px: 2, py: 0.5, fontSize: '11px', color: '#87879b', fontWeight: 600, textTransform: 'uppercase' }}>
+                            Пользовательские
+                          </Box>
+                        )}
+                        {customFolders.map((cf) => (
+                          <MenuItem key={cf.id} value={`custom_${cf.id}`}>{cf.name}</MenuItem>
+                        ))}
                       </Select>
                     </FormControl>
                     <StyledTextField fullWidth label="Тип документа" value={editFormData.type} size="small" disabled />

@@ -25,6 +25,7 @@ class FolderType(str, enum.Enum):
     OUTGOING = "outgoing"
     TASKS = "tasks"
 
+
 class User(Base):
     __tablename__ = "users"
     

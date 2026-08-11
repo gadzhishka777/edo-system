@@ -6,6 +6,8 @@ import AboutPage from './pages/AboutPage';
 import MailPage from './pages/MailPage';
 import DocumentsPage from './pages/DocumentsPage';
 import ContactsPage from './pages/ContactsPage';
+import AdminPage from './pages/AdminPage';
+import AdminLoginPage from './pages/AdminLoginPage';
 import { Header } from './components/Layout/Header';
 import { Sidebar } from './components/Layout/Sidebar';
 import Footer from './components/Layout/Footer';
@@ -15,15 +17,7 @@ import { useLicenseCheck } from './hooks/useLicenseCheck';
 
 // Компонент для проверки лицензии при загрузке приложения
 const LicenseChecker: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const { checkLicense, loading } = useLicenseCheck();
-  
-  useEffect(() => {
-    // Проверяем лицензию при загрузке, если пользователь авторизован
-    if (authApi.isAuthenticated()) {
-      checkLicense();
-    }
-  }, [checkLicense]);
-
+  useLicenseCheck();
   return <>{children}</>;
 };
 
@@ -37,13 +31,6 @@ function App() {
 
   const handleLogin = () => {
     setIsAuthenticated(true);
-    // После входа проверяем лицензию
-    setTimeout(() => {
-      if (authApi.isAuthenticated()) {
-        // Используем хук через компонент LicenseChecker
-        window.dispatchEvent(new Event('check-license'));
-      }
-    }, 500);
   };
 
   const handleLogout = async () => {
@@ -60,6 +47,8 @@ function App() {
           <Box sx={{ display: 'flex', flexDirection: 'column', minHeight: '100vh' }}>
             <Routes>
               <Route path="/login" element={<LoginPage onLogin={handleLogin} />} />
+              <Route path="/admin/login" element={<AdminLoginPage />} />
+              <Route path="/admin" element={<AdminPage />} />
               <Route
                 path="/*"
                 element={
