@@ -172,7 +172,7 @@ const Footer: React.FC = () => {
 
             <FooterBottom>
               <FooterVersionText variant="caption">
-                Версия 0.2
+                Версия 0.4
               </FooterVersionText>
             </FooterBottom>
           </FooterContent>

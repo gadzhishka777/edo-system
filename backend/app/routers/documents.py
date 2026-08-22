@@ -4,6 +4,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 import shutil
+import re
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, Query
 from fastapi.responses import FileResponse
@@ -11,8 +12,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, and_, or_
 
 from app.database import get_async_db
-# Импортируем все из app.models (главный файл)
-from app.models import Document, DocumentStatus, SignatureType, FolderType, Organization, User, StampMapping, CustomFolder
+from app.models import Document, DocumentStatus, SignatureType, FolderType, Organization, StampMapping, CustomFolder
+from app.models.employee import Employee
 from app.models.mail import MailMessage, MailStatus
 from app.models.pydantic import (
     DocumentCreate, DocumentUpdate, DocumentResponse,
@@ -21,8 +22,9 @@ from app.models.pydantic import (
 from app.services.signature_service import verify_signature
 from app.services.pdf_service import generate_signed_copy
 from app.config import settings
-from app.core.dependencies import get_current_org, get_current_org_for_download
+from app.core.dependencies import get_current_org, get_current_org_for_download, get_current_employee
 from app.utils.file_utils import save_upload_file, delete_file
+from app.utils.search import build_smart_search
 
 router = APIRouter(prefix="/documents", tags=["documents"])
 
@@ -54,6 +56,92 @@ async def _accessible_doc(doc_uuid: str, org: Organization, db: AsyncSession) ->
         return doc
 
     raise HTTPException(403, "Нет доступа к этому документу")
+
+
+def _compute_metadata_outdated(doc: Document) -> bool:
+    """Документ требует обновления метаданных, если есть текстовые
+    Подписант/Исполнитель, не соотнесённые с сотрудниками организации."""
+    signer_text = (doc.signer_full_name or doc.signer or "").strip()
+    if not signer_text or doc.signer == "Не указан":
+        signer_text = ""
+    executor_text = (doc.executor or "").strip()
+    if not executor_text or doc.executor == "Не указан":
+        executor_text = ""
+    if signer_text and not doc.signed_by_employee_id:
+        return True
+    if executor_text and not doc.executor_employee_id:
+        return True
+    return False
+
+
+def _delete_document_files(doc: Document) -> None:
+    """Удаляет файлы документа с диска (best-effort)."""
+    for path in (doc.original_file_path, doc.signature_file_path, doc.signed_copy_path):
+        if path:
+            try:
+                delete_file(path)
+            except Exception:
+                pass
+
+
+def _parse_gost_date(value: str) -> Optional[datetime]:
+    """Парсит дату подписания из ГОСТ.
+
+    Поддерживаемые форматы: 'DD.MM.YYYY HH:MM[:SS] [UTC]', 'YYYY.MM.DD ...',
+    ISO-8601 ('2026-08-15T19:15:33Z' / '+00:00').
+    Возвращает None, если распознать дату не удалось.
+    """
+    if not value:
+        return None
+    raw = value.strip()
+
+    parsed: Optional[datetime] = None
+
+    # Формат ГОСТ: 15.08.2026 19:15:33 UTC
+    m = re.match(r"^(\d{2})\.(\d{2})\.(\d{4})(?:\s+(\d{1,2}):(\d{2})(?::(\d{2}))?)?", raw)
+    if m:
+        day, month, year, hh, mm, ss = m.groups()
+        try:
+            parsed = datetime(
+                int(year), int(month), int(day),
+                int(hh or 0), int(mm or 0), int(ss or 0),
+            )
+        except ValueError:
+            parsed = None
+
+    # Вариант: 2026.08.15 19:15:33 UTC
+    if parsed is None:
+        m = re.match(r"^(\d{4})\.(\d{2})\.(\d{2})(?:\s+(\d{1,2}):(\d{2})(?::(\d{2}))?)?", raw)
+        if m:
+            year, month, day, hh, mm, ss = m.groups()
+            try:
+                parsed = datetime(
+                    int(year), int(month), int(day),
+                    int(hh or 0), int(mm or 0), int(ss or 0),
+                )
+            except ValueError:
+                parsed = None
+
+    # ISO-подобные форматы: 2026-08-15T19:15:33Z / +00:00 / с пробелом
+    if parsed is None:
+        candidate = raw.replace(" UTC", "").replace("Z", "+00:00")
+        for variant in (candidate, candidate.replace(" ", "T")):
+            try:
+                parsed = datetime.fromisoformat(variant)
+                break
+            except ValueError:
+                continue
+
+    return parsed
+
+    # ISO-подобные форматы: 2026-08-15T19:15:33Z / +00:00 / с пробелом
+    candidate = raw.replace(" UTC", "").replace("Z", "+00:00")
+    for variant in (candidate, candidate.replace(" ", "T")):
+        try:
+            return datetime.fromisoformat(variant)
+        except ValueError:
+            continue
+    return None
 
 
 # ===================== МАППИНГ ШТАМПОВ =====================
@@ -166,8 +254,11 @@ async def upload_document(
     executor: Optional[str] = Form(None),
     signature_type: SignatureType = Form(SignatureType.NONE),
     custom_folder_id: Optional[int] = Form(None),
+    signer_employee_id: Optional[int] = Form(None),
+    executor_employee_id: Optional[int] = Form(None),
     db: AsyncSession = Depends(get_async_db),
     org: Organization = Depends(get_current_org),
+    employee: Employee = Depends(get_current_employee),
 ):
     """Загрузка нового документа. Для HAND (собственноручная подпись) не требуется SIG файл."""
     
@@ -210,10 +301,13 @@ async def upload_document(
         status=status,
         created_at=now,
         created_at_str=now.strftime("%d.%m.%Y"),
-        creator_id=1,
+        created_by_employee_id=employee.id,
+        signed_by_employee_id=signer_employee_id,
+        executor_employee_id=executor_employee_id,
         owner_org_id=org.id,
         custom_folder_id=custom_folder_id,
     )
+    doc.metadata_outdated = _compute_metadata_outdated(doc)
     
     db.add(doc)
     await db.commit()
@@ -328,26 +422,97 @@ async def verify_signature_endpoint(
     
     verification_result = await verify_signature(doc_content, sig_content, doc.signature_type.value)
     
-    doc.goskey_valid = verification_result["signature_valid"]
+    # Проверяем валидность подписи
+    if not verification_result["signature_valid"]:
+        # Отклонённые документы не храним — удаляем полностью
+        await _delete_document_files(doc)
+        await db.delete(doc)
+        await db.commit()
+
+        return {
+            "document_uuid": doc.uuid,
+            "signature_valid": False,
+            "signature_type": doc.signature_type,
+            "signer_name": verification_result.get("signer_name", ""),
+            "signer_inn": verification_result.get("signer_inn", ""),
+            "signature_date": verification_result.get("signature_date", ""),
+            "certificate_serial": verification_result.get("certificate_serial", ""),
+            "hash_algorithm": verification_result.get("hash_algorithm", ""),
+            "verification_details": verification_result.get("verification_details", ""),
+            "ocsp_status": verification_result.get("ocsp_status"),
+            "document_deleted": True,
+        }
+    
+    # Подпись валидна — ищем сотрудника по ФИО из ГОСТ
+    signer_name_from_gost = verification_result.get("signer_name", "")
+    signature_date_from_gost = verification_result.get("signature_date", "")
+    
+    matched_employee = None
+    if signer_name_from_gost:
+        # Нормализуем ФИО из ГОСТ: lowercase, strip, убираем лишние пробелы
+        normalized = " ".join(signer_name_from_gost.lower().split())
+        
+        # Ищем сотрудника в организации
+        employees_result = await db.execute(
+            select(Employee).where(
+                Employee.org_id == org.id,
+                Employee.is_active == True,
+            )
+        )
+        all_employees = employees_result.scalars().all()
+        
+        for emp in all_employees:
+            full_name = f"{emp.last_name} {emp.first_name}{' ' + emp.middle_name if emp.middle_name else ''}".strip().lower()
+            full_name = " ".join(full_name.split())
+            if full_name == normalized:
+                matched_employee = emp
+                break
+    
+    if not matched_employee:
+        # Не нашли сотрудника с таким ФИО — отклонённые документы не храним
+        await _delete_document_files(doc)
+        await db.delete(doc)
+        await db.commit()
+
+        return {
+            "document_uuid": doc.uuid,
+            "signature_valid": False,
+            "signature_type": doc.signature_type,
+            "signer_name": signer_name_from_gost,
+            "signer_inn": "",
+            "signature_date": "",
+            "certificate_serial": verification_result.get("certificate_serial", ""),
+            "hash_algorithm": verification_result.get("hash_algorithm", ""),
+            "verification_details": f"Подпись валидна, но сотрудник с ФИО «{signer_name_from_gost}» не найден в вашей организации. Обращение отклонено, документ удалён.",
+            "ocsp_status": verification_result.get("ocsp_status"),
+            "document_deleted": True,
+        }
+    
+    # Нашли сотрудника — фиксируем
+    doc.goskey_valid = True
     doc.goskey_data = json.dumps(verification_result)
-    doc.status = DocumentStatus.SIGNED if verification_result["signature_valid"] else DocumentStatus.REJECTED
-    if verification_result.get("signer_name"):
-        doc.signer = verification_result["signer_name"]
-        doc.signer_full_name = verification_result["signer_name"]
+    doc.status = DocumentStatus.SIGNED
+    doc.signed_by_employee_id = matched_employee.id
+    doc.signer = f"{matched_employee.last_name} {matched_employee.first_name}{' ' + (matched_employee.middle_name or '')}".strip()
+    doc.signer_full_name = doc.signer
+    doc.signature_date = _parse_gost_date(signature_date_from_gost) or datetime.now()
     
     await db.commit()
+    await db.refresh(doc)
     
     return {
         "document_uuid": doc.uuid,
-        "signature_valid": verification_result["signature_valid"],
+        "signature_valid": True,
         "signature_type": doc.signature_type,
-        "signer_name": verification_result["signer_name"],
-        "signer_inn": verification_result["signer_inn"],
-        "signature_date": verification_result["signature_date"],
-        "certificate_serial": verification_result["certificate_serial"],
-        "hash_algorithm": verification_result["hash_algorithm"],
-        "verification_details": verification_result["verification_details"],
+        "signer_name": doc.signer,
+        "signer_inn": "",
+        "signature_date": doc.signature_date.isoformat(),
+        "certificate_serial": verification_result.get("certificate_serial", ""),
+        "hash_algorithm": verification_result.get("hash_algorithm", ""),
+        "verification_details": verification_result.get("verification_details", ""),
         "ocsp_status": verification_result.get("ocsp_status"),
+        "matched_employee_id": matched_employee.id,
+        "matched_employee_name": f"{matched_employee.last_name} {matched_employee.first_name}",
     }
 
 
@@ -380,13 +545,18 @@ async def get_documents(
     if signature_type:
         filters.append(Document.signature_type == signature_type)
     if search:
-        filters.append(
-            or_(
-                Document.name.ilike(f"%{search}%"),
-                Document.registration_number.ilike(f"%{search}%"),
-                Document.signer.ilike(f"%{search}%"),
-            )
+        condition = build_smart_search(
+            [
+                Document.name,
+                Document.registration_number,
+                Document.signer,
+                Document.signer_full_name,
+                Document.executor,
+                Document.type,
+            ],
+            search,
         )
+        filters.append(condition)
     
     if filters:
         query = query.where(and_(*filters))
@@ -400,22 +570,89 @@ async def get_documents(
     count_result = await db.execute(count_query)
     total = count_result.scalar()
     
-    # Преобразуем данные для ответа
+    # Загружаем связи с сотрудниками для всех документов
+    emp_ids = set()
     for item in items:
+        if item.created_by_employee_id: emp_ids.add(item.created_by_employee_id)
+        if item.signed_by_employee_id: emp_ids.add(item.signed_by_employee_id)
+        if item.executor_employee_id: emp_ids.add(item.executor_employee_id)
+    
+    employees_map = {}
+    if emp_ids:
+        emp_result = await db.execute(
+            select(Employee).where(Employee.id.in_(list(emp_ids)))
+        )
+        for emp in emp_result.scalars().all():
+            full_name = f"{emp.last_name} {emp.first_name}{' ' + emp.middle_name if emp.middle_name else ''}".strip()
+            employees_map[emp.id] = {
+                "id": emp.id,
+                "full_name": full_name,
+            }
+    
+    # Преобразуем данные для ответа
+    items_list = []
+    for item in items:
+        doc_dict = {
+            "id": item.id,
+            "uuid": item.uuid,
+            "name": item.name,
+            "type": item.type,
+            "folder": item.folder,
+            "registration_number": item.registration_number,
+            "signer": item.signer,
+            "signer_full_name": item.signer_full_name or item.signer,
+            "signer_inn": item.signer_inn,
+            "executor": item.executor,
+            "created_at": item.created_at,
+            "signature_date": item.signature_date,
+            "original_file_name": item.original_file_name,
+            "original_file_size": item.original_file_size,
+            "signature_type": item.signature_type,
+            "goskey_valid": item.goskey_valid,
+            "status": item.status,
+            "transferred_to_ped_id": item.transferred_to_ped_id,
+            "ped_id_link": item.ped_id_link,
+            "has_sig_file": item.has_sig_file,
+            "owner_org_id": item.owner_org_id,
+            "custom_folder_id": item.custom_folder_id,
+            "metadata_outdated": item.metadata_outdated,
+            "created_by_employee_id": item.created_by_employee_id,
+            "signed_by_employee_id": item.signed_by_employee_id,
+            "signer_employee_id": item.signed_by_employee_id,
+            "executor_employee_id": item.executor_employee_id,
+        }
+        
         if item.goskey_data and isinstance(item.goskey_data, str):
             try:
-                item.goskey_data = json.loads(item.goskey_data)
+                doc_dict["goskey_data"] = json.loads(item.goskey_data)
             except:
-                item.goskey_data = None
+                doc_dict["goskey_data"] = None
         
         if item.signed_copy_path:
-            item.signed_copy_url = f"/api/documents/download/signed/{item.uuid}"
+            doc_dict["signed_copy_url"] = f"/api/documents/download/signed/{item.uuid}"
         
-        if not item.signer_full_name and item.signer:
-            item.signer_full_name = item.signer
+        # Подставляем имена сотрудников
+        if item.created_by_employee_id:
+            emp = employees_map.get(item.created_by_employee_id)
+            if emp:
+                doc_dict["created_by_employee_name"] = emp["full_name"]
+        if item.signed_by_employee_id:
+            emp = employees_map.get(item.signed_by_employee_id)
+            if emp:
+                doc_dict["signed_by_employee_name"] = emp["full_name"]
+        if item.signed_by_employee_id:
+            emp = employees_map.get(item.signed_by_employee_id)
+            if emp:
+                doc_dict["signer_employee_name"] = emp["full_name"]
+        if item.executor_employee_id:
+            emp = employees_map.get(item.executor_employee_id)
+            if emp:
+                doc_dict["executor_employee_name"] = emp["full_name"]
+        
+        items_list.append(doc_dict)
     
     return PaginatedResponse(
-        items=items,
+        items=items_list,
         total=total,
         page=page,
         size=size,
@@ -460,6 +697,32 @@ async def get_folder_counts(
     return counts
 
 
+# ===================== СОТРУДНИКИ ОРГАНИЗАЦИИ =====================
+
+@router.get("/employees")
+async def list_org_employees(
+    db: AsyncSession = Depends(get_async_db),
+    org: Organization = Depends(get_current_org),
+):
+    """Список сотрудников организации для выбора в документах."""
+    result = await db.execute(
+        select(Employee)
+        .where(Employee.org_id == org.id, Employee.is_active == True)
+        .order_by(Employee.last_name)
+    )
+    employees = result.scalars().all()
+    return [{
+        "id": e.id,
+        "uuid": e.uuid,
+        "last_name": e.last_name,
+        "first_name": e.first_name,
+        "middle_name": e.middle_name,
+        "full_name": f"{e.last_name} {e.first_name}{' ' + e.middle_name if e.middle_name else ''}".strip(),
+        "position": e.position,
+        "login": e.login,
+    } for e in employees]
+
+
 @router.get("/{doc_uuid}", response_model=DocumentResponse)
 async def get_document(
     doc_uuid: str,
@@ -492,9 +755,36 @@ async def update_document(
         raise HTTPException(403, "Редактировать может только владелец документа")
     
     update_data = data.model_dump(exclude_unset=True)
+
+    # API-поле signer_employee_id хранится в БД как signed_by_employee_id
+    if 'signer_employee_id' in update_data:
+        update_data['signed_by_employee_id'] = update_data.pop('signer_employee_id')
+
     for field, value in update_data.items():
         setattr(doc, field, value)
-    
+
+    # При выборе сотрудника фиксируем ФИО подписанта за ним
+    if update_data.get('signed_by_employee_id'):
+        emp_result = await db.execute(
+            select(Employee).where(Employee.id == update_data['signed_by_employee_id'])
+        )
+        emp = emp_result.scalar_one_or_none()
+        if emp:
+            full_name = f"{emp.last_name} {emp.first_name}{' ' + emp.middle_name if emp.middle_name else ''}".strip()
+            doc.signer = full_name
+            doc.signer_full_name = full_name
+
+    if update_data.get('executor_employee_id'):
+        emp_result = await db.execute(
+            select(Employee).where(Employee.id == update_data['executor_employee_id'])
+        )
+        emp = emp_result.scalar_one_or_none()
+        if emp:
+            doc.executor = f"{emp.last_name} {emp.first_name}{' ' + emp.middle_name if emp.middle_name else ''}".strip()
+
+    # Пересчитываем флаг устаревших метаданных
+    doc.metadata_outdated = _compute_metadata_outdated(doc)
+
     if 'created_at' in update_data and update_data['created_at']:
         doc.created_at_str = update_data['created_at'].strftime("%d.%m.%Y")
     

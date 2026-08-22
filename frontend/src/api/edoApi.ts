@@ -28,6 +28,10 @@ function clearTokens() {
   localStorage.removeItem('access_token');
   localStorage.removeItem('refresh_token');
   localStorage.removeItem('org_name');
+  localStorage.removeItem('org_id');
+  localStorage.removeItem('employee_id');
+  localStorage.removeItem('employee_name');
+  localStorage.removeItem('employee_roles');
 }
 
 // Добавляем access token к каждому запросу
@@ -103,12 +107,71 @@ apiClient.interceptors.response.use(
 );
 
 // ===== AUTH API =====
+export interface EmployeeLoginResponse {
+  access_token: string;
+  refresh_token: string;
+  token_type: string;
+  org_id: number;
+  org_name: string;
+  employee_id: number;
+  employee_name: string;
+  roles: string[];
+  profile_completed: boolean;
+}
+
+export interface EmployeeInfo {
+  id: number;
+  uuid: string;
+  org_id: number;
+  last_name: string;
+  first_name: string;
+  middle_name?: string;
+  position?: string;
+  department?: string;
+  roles: string[];
+  phone?: string;
+  email?: string;
+  birthday?: string;
+  notes?: string;
+  login: string;
+  is_active: boolean;
+  profile_completed: boolean;
+  created_at: string;
+  updated_at?: string;
+}
+
+export interface EmployeeRoleInfo {
+  value: string;
+  label: string;
+  category: string;
+}
+
+export interface EmployeeRoleListResponse {
+  roles: EmployeeRoleInfo[];
+}
+
+export interface ProfileCompleteRequest {
+  last_name: string;
+  first_name: string;
+  middle_name?: string;
+  position?: string;
+  department?: string;
+  roles: string[];
+  phone?: string;
+  email?: string;
+  birthday?: string;
+  notes?: string;
+}
+
 export const authApi = {
-  login: async (login: string, password: string) => {
+  login: async (login: string, password: string): Promise<EmployeeLoginResponse> => {
     const response = await apiClient.post('/api/auth/login', { login, password });
     setTokens(response.data.access_token, response.data.refresh_token);
     localStorage.setItem('org_name', response.data.org_name);
     localStorage.setItem('org_id', String(response.data.org_id));
+    localStorage.setItem('employee_id', String(response.data.employee_id));
+    localStorage.setItem('employee_name', response.data.employee_name);
+    localStorage.setItem('employee_roles', JSON.stringify(response.data.roles));
     return response.data;
   },
 
@@ -121,8 +184,24 @@ export const authApi = {
     clearTokens();
   },
 
-  getCurrentOrg: async () => {
+  getCurrentEmployee: async (): Promise<EmployeeInfo> => {
     const response = await apiClient.get('/api/auth/me');
+    return response.data;
+  },
+
+  getCurrentOrg: async (): Promise<any> => {
+    const response = await apiClient.get('/api/auth/me-org');
+    return response.data;
+  },
+
+  completeProfile: async (data: ProfileCompleteRequest): Promise<EmployeeLoginResponse> => {
+    const response = await apiClient.post('/api/auth/complete-profile', data);
+    setTokens(response.data.access_token, response.data.refresh_token);
+    localStorage.setItem('org_name', response.data.org_name);
+    localStorage.setItem('org_id', String(response.data.org_id));
+    localStorage.setItem('employee_id', String(response.data.employee_id));
+    localStorage.setItem('employee_name', response.data.employee_name);
+    localStorage.setItem('employee_roles', JSON.stringify(response.data.roles));
     return response.data;
   },
 
@@ -141,11 +220,28 @@ export const authApi = {
   },
 
   getOrgName: () => localStorage.getItem('org_name'),
+  getEmployeeName: () => localStorage.getItem('employee_name'),
+  getEmployeeId: () => localStorage.getItem('employee_id'),
+  getEmployeeRoles: (): string[] => {
+    const roles = localStorage.getItem('employee_roles');
+    return roles ? JSON.parse(roles) : [];
+  },
 };
 
 export type DocumentStatus = 'draft' | 'pending' | 'signed' | 'rejected';
 export type SignatureType = 'none' | 'HAND' | 'PEP' | 'UNEP' | 'UKEP';
 export type FolderType = 'orders' | 'regulations' | 'provisions' | 'incoming' | 'outgoing' | 'tasks';
+
+export interface DocumentEmployee {
+  id: number;
+  uuid: string;
+  last_name: string;
+  first_name: string;
+  middle_name?: string;
+  full_name: string;
+  position?: string;
+  login: string;
+}
 
 export interface Document {
   id: number;
@@ -171,6 +267,15 @@ export interface Document {
   has_sig_file: boolean;
   signed_copy_url?: string;
   custom_folder_id?: number | null;
+  metadata_outdated?: boolean;
+  created_by_employee_id?: number | null;
+  signed_by_employee_id?: number | null;
+  signer_employee_id?: number | null;
+  executor_employee_id?: number | null;
+  created_by_employee_name?: string | null;
+  signed_by_employee_name?: string | null;
+  signer_employee_name?: string | null;
+  executor_employee_name?: string | null;
 }
 
 export interface PaginatedResponse {
@@ -217,6 +322,8 @@ export const uploadDocument = async (
     executor?: string;
     signature_type: SignatureType;
     custom_folder_id?: number | null;
+    signer_employee_id?: number | null;
+    executor_employee_id?: number | null;
   }
 ): Promise<Document> => {
   const formData = new FormData();
@@ -231,6 +338,8 @@ export const uploadDocument = async (
   if (data.executor) formData.append('executor', data.executor);
   formData.append('signature_type', data.signature_type);
   if (data.custom_folder_id) formData.append('custom_folder_id', String(data.custom_folder_id));
+  if (data.signer_employee_id) formData.append('signer_employee_id', String(data.signer_employee_id));
+  if (data.executor_employee_id) formData.append('executor_employee_id', String(data.executor_employee_id));
 
   const response = await apiClient.post('/api/documents/upload', formData, {
     headers: { 'Content-Type': 'multipart/form-data' },
@@ -330,6 +439,32 @@ export const getFolderCounts = async (): Promise<Record<string, number>> => {
 
 export const deleteDocument = async (uuid: string): Promise<void> => {
   await apiClient.delete(`/api/documents/${uuid}`);
+};
+
+export const getDocumentEmployees = async (): Promise<DocumentEmployee[]> => {
+  const response = await apiClient.get(`/api/documents/employees`);
+  return response.data;
+};
+
+export const updateDocumentWithEmployees = async (
+  uuid: string,
+  data: {
+    name?: string;
+    type?: string;
+    folder?: FolderType;
+    registration_number?: string;
+    signer?: string;
+    signer_full_name?: string;
+    signer_inn?: string;
+    executor?: string;
+    created_at?: string;
+    custom_folder_id?: number | null;
+    signer_employee_id?: number | null;
+    executor_employee_id?: number | null;
+  }
+): Promise<Document> => {
+  const response = await apiClient.put(`/api/documents/${uuid}`, data);
+  return response.data;
 };
 
 // ===== Почта =====
@@ -531,4 +666,259 @@ export const deleteCustomFolder = async (uuid: string): Promise<{ message: strin
   return response.data;
 };
 
+// ===== Сотрудники =====
+export interface Employee {
+  id: number;
+  uuid: string;
+  org_id: number;
+  last_name: string;
+  first_name: string;
+  middle_name?: string;
+  position?: string;
+  department?: string;
+  roles: string[];
+  phone?: string;
+  email?: string;
+  birthday?: string;
+  notes?: string;
+  login: string;
+  is_active: boolean;
+  profile_completed: boolean;
+  created_at: string;
+  updated_at?: string;
+}
+
+export interface EmployeePaginatedResponse {
+  items: Employee[];
+  total: number;
+  page: number;
+  size: number;
+  pages: number;
+}
+
+export const getEmployees = async (
+  page: number = 1,
+  size: number = 20,
+  search?: string
+): Promise<EmployeePaginatedResponse> => {
+  const params = new URLSearchParams();
+  params.append('page', String(page));
+  params.append('size', String(size));
+  if (search) params.append('search', search);
+  const response = await apiClient.get(`/api/employees/?${params.toString()}`);
+  return response.data;
+};
+
+export const getEmployee = async (uuid: string): Promise<Employee> => {
+  const response = await apiClient.get(`/api/employees/${uuid}`);
+  return response.data;
+};
+
+export const createEmployee = async (data: {
+  last_name: string;
+  first_name: string;
+  middle_name?: string;
+  position?: string;
+  department?: string;
+  roles: string[];
+  phone?: string;
+  email?: string;
+  birthday?: string;
+  notes?: string;
+}): Promise<Employee & { generated_password: string; message: string }> => {
+  const response = await apiClient.post('/api/employees/', data);
+  return response.data;
+};
+
+export const updateEmployee = async (uuid: string, data: Partial<Employee>): Promise<Employee> => {
+  const response = await apiClient.put(`/api/employees/${uuid}`, data);
+  return response.data;
+};
+
+export const deactivateEmployee = async (uuid: string): Promise<{ message: string }> => {
+  const response = await apiClient.delete(`/api/employees/${uuid}`);
+  return response.data;
+};
+
+export const searchEmployees = async (q: string): Promise<Employee[]> => {
+  const response = await apiClient.get('/api/employees/search', { params: { q } });
+  return response.data;
+};
+
+export const getEmployeeRoles = async (): Promise<EmployeeRoleListResponse> => {
+  const response = await apiClient.get('/api/employees/roles');
+  return response.data;
+};
+
 export default apiClient;
+// ===== Обращения граждан (публичные + внутренний раздел) =====
+
+// Клиент БЕЗ авторизации — для публичной интернет-приёмной
+export const publicApiClient = axios.create({
+  baseURL: API_BASE_URL,
+  timeout: 60000,
+});
+
+export type AppealKind = 'complaint' | 'application' | 'suggestion';
+export type AppealApplicantType = 'citizen' | 'organization';
+export type AppealStatus = 'new' | 'registered' | 'on_execution' | 'answered' | 'redirected';
+
+export interface AppealTarget {
+  id: number;
+  name: string;
+}
+
+export interface AppealListItem {
+  id: number;
+  uuid: string;
+  system_number: string;
+  reg_number?: string | null;
+  applicant_type: AppealApplicantType;
+  kind: AppealKind;
+  status: AppealStatus;
+  content_preview: string;
+  created_at?: string;
+  registered_at?: string | null;
+  answered_at?: string | null;
+  executor_employee_id?: number | null;
+  executor_name?: string | null;
+  has_attachments: boolean;
+  is_redirected_in: boolean;
+  redirect_from_org_name?: string | null;
+  deadline?: string | null;
+  days_left?: number | null;
+  overdue: boolean;
+}
+
+export interface AppealHistoryEntry {
+  id: number;
+  employee_name?: string | null;
+  action: string;
+  comment?: string | null;
+  created_at?: string | null;
+}
+
+export interface AppealCard extends AppealListItem {
+  content: string;
+  internal_comment?: string | null;
+  reply_text?: string | null;
+  register_deadline_iso?: string | null;
+  applicant: {
+    full_name: string;
+    email: string;
+    phone?: string | null;
+    org_full_name?: string | null;
+    org_short_name?: string | null;
+    org_director?: string | null;
+  };
+  attachments: { id: number; file_name: string; file_size: number; uploaded_at?: string | null }[];
+  linked_documents: {
+    link_id: number;
+    document_uuid: string;
+    name: string;
+    registration_number: string;
+    original_file_name: string;
+    has_signed_copy: boolean;
+    signature_type?: string | null;
+  }[];
+  history: AppealHistoryEntry[];
+}
+
+// ===== Публичные методы =====
+
+export const getAppealTargets = async (): Promise<AppealTarget[]> => {
+  const r = await publicApiClient.get(`/api/public/appeals/targets`);
+  return r.data;
+};
+
+export const submitPublicAppeal = async (formData: FormData): Promise<{ message: string; system_number: string; register_deadline?: string }> => {
+  const r = await publicApiClient.post(`/api/public/appeals/`, formData, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+  });
+  return r.data;
+};
+
+export const checkAppealStatus = async (systemNumber: string, email: string) => {
+  const params = new URLSearchParams({ email });
+  const r = await publicApiClient.get(`/api/public/appeals/status/${encodeURIComponent(systemNumber)}?${params}`);
+  return r.data;
+};
+
+// ===== Внутренний раздел =====
+
+export interface AppealListParams {
+  page?: number;
+  size?: number;
+  status?: AppealStatus | '';
+  overdue?: boolean;
+  search?: string;
+}
+
+export const getAppeals = async (params: AppealListParams): Promise<PaginatedResponse & { items: AppealListItem[] }> => {
+  const q = new URLSearchParams();
+  q.append('page', String(params.page ?? 1));
+  q.append('size', String(params.size ?? 20));
+  if (params.status) q.append('status', params.status);
+  if (params.overdue) q.append('overdue', 'true');
+  if (params.search) q.append('search', params.search);
+  const response = await apiClient.get(`/api/appeals/?${q.toString()}`);
+  return response.data;
+};
+
+export const getAppealCard = async (uuid: string): Promise<AppealCard> => {
+  const response = await apiClient.get(`/api/appeals/${uuid}`);
+  return response.data;
+};
+
+export const registerAppeal = async (uuid: string, regNumber: string) => {
+  const response = await apiClient.post(`/api/appeals/${uuid}/register`, { reg_number: regNumber });
+  return response.data;
+};
+
+export const takeAppealToWork = async (uuid: string, executorId: number, comment?: string) => {
+  const response = await apiClient.post(`/api/appeals/${uuid}/take-work`, {
+    executor_id: executorId,
+    comment: comment || undefined,
+  });
+  return response.data;
+};
+
+export const redirectAppeal = async (uuid: string, targetOrgId: number, comment?: string) => {
+  const response = await apiClient.post(`/api/appeals/${uuid}/redirect`, {
+    target_org_id: targetOrgId,
+    comment: comment || undefined,
+  });
+  return response.data;
+};
+
+export const replyToAppeal = async (
+  uuid: string,
+  text: string,
+  linkIds: number[],
+): Promise<{ message: string; email_sent: boolean; warning?: string }> => {
+  const response = await apiClient.post(`/api/appeals/${uuid}/reply`, {
+    text,
+    link_ids: linkIds,
+  });
+  return response.data;
+};
+
+export const getLinkedDocuments = async (uuid: string) => {
+  const response = await apiClient.get(`/api/appeals/${uuid}/documents`);
+  return response.data as AppealCard['linked_documents'];
+};
+
+export const linkDocumentToAppeal = async (appealUuid: string, documentUuid: string) => {
+  const response = await apiClient.post(`/api/appeals/${appealUuid}/documents/${documentUuid}`);
+  return response.data;
+};
+
+export const unlinkDocumentFromAppeal = async (appealUuid: string, documentUuid: string) => {
+  const response = await apiClient.delete(`/api/appeals/${appealUuid}/documents/${documentUuid}`);
+  return response.data;
+};
+
+export const downloadAppealAttachment = (attachmentId: number): string => {
+  const token = getAccessToken();
+  return `${API_BASE_URL}/api/appeals/attachments/${attachmentId}/download${token ? `?token=${token}` : ''}`;
+};

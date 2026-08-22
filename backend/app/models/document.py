@@ -38,7 +38,7 @@ class Document(Base):
     folder = Column(SQLEnum(FolderType), nullable=False)
     registration_number = Column(String(100), nullable=False)
     
-    # Подписант и исполнитель
+    # Подписант и исполнитель (отображаемые текстовые поля)
     signer = Column(String(255), nullable=False)
     signer_full_name = Column(String(255))
     signer_inn = Column(String(12))
@@ -70,17 +70,28 @@ class Document(Base):
     transferred_to_ped_id = Column(Boolean, default=False)
     ped_id_link = Column(String(500), nullable=True)
     
-    # Связи
-    creator_id = Column(Integer, ForeignKey("users.id"))
+    # Связи с сотрудниками
+    created_by_employee_id = Column(Integer, ForeignKey("employees.id"), nullable=True, index=True)
+    signed_by_employee_id = Column(Integer, ForeignKey("employees.id"), nullable=True, index=True)
+    executor_employee_id = Column(Integer, ForeignKey("employees.id"), nullable=True, index=True)
+    
     created_at_str = Column(String(50))
     
     has_sig_file = Column(Boolean, default=False)
 
-    # Принадлежность организации (свой реестр у каждой организации)
+    # Принадлежность организации
     owner_org_id = Column(Integer, ForeignKey("organizations.id"), nullable=True, index=True)
 
-    # Кастомная папка (если документ в пользовательской папке)
+    # Кастомная папка
     custom_folder_id = Column(Integer, ForeignKey("custom_folders.id"), nullable=True, index=True)
+
+    # Флаг: старые метаданные (ручной ввод ФИО)
+    metadata_outdated = Column(Boolean, default=False, index=True)
+
+    # Связи
+    created_by_employee = relationship("Employee", foreign_keys=[created_by_employee_id])
+    signed_by_employee = relationship("Employee", foreign_keys=[signed_by_employee_id])
+    executor_employee = relationship("Employee", foreign_keys=[executor_employee_id])
 
 
 class StampMapping(Base):

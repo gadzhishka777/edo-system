@@ -232,6 +232,7 @@ const ContactsPage: React.FC = () => {
   const [page, setPage] = useState(1);
   const [pageSize] = useState(20);
   const [searchQuery, setSearchQuery] = useState('');
+  const [debouncedSearch, setDebouncedSearch] = useState('');
   const [selectedContacts, setSelectedContacts] = useState<string[]>([]);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editContact, setEditContact] = useState<Contact | null>(null);
@@ -255,7 +256,7 @@ const ContactsPage: React.FC = () => {
     setLoading(true);
     setError(null);
     try {
-      const response = await getContacts(page, pageSize, searchQuery || undefined);
+      const response = await getContacts(page, pageSize, debouncedSearch || undefined);
       startTransition(() => {
         setContacts(response.items);
         setTotal(response.total);
@@ -265,9 +266,20 @@ const ContactsPage: React.FC = () => {
     } finally {
       setLoading(false);
     }
-  }, [page, pageSize, searchQuery]);
+  }, [page, pageSize, debouncedSearch]);
 
   useEffect(() => { loadContacts(); }, [loadContacts]);
+
+  // Дебаунс поиска: запрос уходит через 400 мс после окончания ввода
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedSearch(searchQuery), 400);
+    return () => clearTimeout(t);
+  }, [searchQuery]);
+
+  // При изменении поискового запроса возвращаемся на первую страницу
+  useEffect(() => {
+    setPage(1);
+  }, [debouncedSearch]);
 
   const handleOpenModal = (contact?: Contact) => {
     if (contact) {

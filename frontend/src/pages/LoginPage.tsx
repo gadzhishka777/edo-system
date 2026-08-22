@@ -13,9 +13,18 @@ import {
   Divider,
 } from '@mui/material';
 import { styled } from '@mui/material/styles';
-import { ArrowBack as ArrowBackIcon, Visibility, VisibilityOff } from '@mui/icons-material';
+import {
+  ArrowBack as ArrowBackIcon,
+  Visibility,
+  VisibilityOff,
+  Engineering as EngineeringIcon,
+} from '@mui/icons-material';
+import dayjs from 'dayjs';
 import Footer from '../components/Layout/Footer';
 import { authApi } from '../api/edoApi';
+
+// Баннер плановых работ показывается только до конца указанной даты
+const MAINTENANCE_DATE = '2026-08-25';
 
 // ===== СТИЛИЗОВАННЫЕ КОМПОНЕНТЫ =====
 
@@ -249,9 +258,15 @@ const LoginPage: React.FC<LoginPageProps> = ({ onLogin }) => {
 
     setLoading(true);
     try {
-      await authApi.login(login.trim(), password);
+      const result = await authApi.login(login.trim(), password);
       onLogin();
-      navigate('/');
+      // Если профиль не заполнен И нет ФИО — переходим на страницу завершения
+      // Сотрудники, созданные администратором с ФИО, не должны сюда попадать
+      if (!result.profile_completed && !result.employee_name) {
+        navigate('/profile-complete');
+      } else {
+        navigate('/');
+      }
     } catch (err: any) {
       setAuthError(err.response?.data?.detail || 'Невозможно осуществить вход в систему.');
     } finally {
@@ -285,6 +300,23 @@ const LoginPage: React.FC<LoginPageProps> = ({ onLogin }) => {
             <TitleWrapper>
               <MainTitle variant="h1">ТОР ЭДО</MainTitle>
             </TitleWrapper>
+
+            {dayjs().isBefore(dayjs(MAINTENANCE_DATE).endOf('day')) && (
+              <Alert
+                severity="warning"
+                icon={<EngineeringIcon fontSize="inherit" />}
+                sx={{
+                  mb: 3,
+                  borderRadius: '12px',
+                  fontFamily: 'Lato, sans-serif',
+                  '& .MuiAlert-message': { fontSize: '13px', lineHeight: 1.5 },
+                }}
+              >
+                <strong>Плановые работы на узле.</strong>{' '}
+                24.08.2026 будут проходить плановые технические работы, система может работать с перебоями.
+                Приносим извинения за доставленные неудобства.
+              </Alert>
+            )}
 
             <form onSubmit={handleSubmit}>
               <Subtitle variant="subtitle1">Вход по логину и паролю</Subtitle>

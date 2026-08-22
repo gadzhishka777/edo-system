@@ -10,8 +10,9 @@ from sqlalchemy import select, func, and_, or_
 
 from app.database import get_async_db
 from app.config import settings
-from app.core.dependencies import get_current_org
+from app.core.dependencies import get_current_org, get_current_employee
 from app.models.mail import MailMessage, MailDirection, MailStatus, Organization
+from app.models.employee import Employee
 from app.models.document import Document, DocumentStatus, SignatureType, FolderType
 from app.models.pydantic import (
     MailMessageCreate,
@@ -20,6 +21,7 @@ from app.models.pydantic import (
     OrganizationResponse,
 )
 from app.services.signature_service import verify_signature
+from app.utils.search import build_smart_search
 
 router = APIRouter(prefix="/mail", tags=["mail"])
 
@@ -139,11 +141,14 @@ async def get_mail_messages(
 
     if search:
         filters.append(
-            or_(
-                MailMessage.sender_org_name.ilike(f"%{search}%"),
-                MailMessage.recipient_org_name.ilike(f"%{search}%"),
-                MailMessage.document_name.ilike(f"%{search}%"),
-                MailMessage.comment.ilike(f"%{search}%"),
+            build_smart_search(
+                [
+                    MailMessage.sender_org_name,
+                    MailMessage.recipient_org_name,
+                    MailMessage.document_name,
+                    MailMessage.comment,
+                ],
+                search,
             )
         )
 
@@ -174,8 +179,9 @@ async def send_mail(
     data: MailMessageCreate,
     db: AsyncSession = Depends(get_async_db),
     org: Organization = Depends(get_current_org),
+    employee: Employee = Depends(get_current_employee),
 ):
-    """Отправка письма (документа) от имени текущей организации"""
+    """Отправка письма (документа) от имени сотрудника текущей организации"""
 
     # Получаем организацию-получателя
     result = await db.execute(select(Organization).where(Organization.id == data.recipient_org_id))
@@ -208,6 +214,7 @@ async def send_mail(
         sender_org_name=org.name,
         recipient_org_id=recipient.id,
         recipient_org_name=recipient.name,
+        sender_employee_id=employee.id,
         document_uuid=data.document_uuid,
         document_name=data.document_name or (doc.name if doc else None),
         comment=data.comment,
@@ -229,6 +236,7 @@ async def save_draft(
     data: MailMessageCreate,
     db: AsyncSession = Depends(get_async_db),
     org: Organization = Depends(get_current_org),
+    employee: Employee = Depends(get_current_employee),
 ):
     """Сохранение черновика письма"""
 
@@ -244,6 +252,7 @@ async def save_draft(
         sender_org_name=org.name,
         recipient_org_id=recipient.id,
         recipient_org_name=recipient.name,
+        sender_employee_id=employee.id,
         document_uuid=data.document_uuid,
         document_name=data.document_name,
         comment=data.comment,
@@ -437,10 +446,17 @@ async def sign_and_reply(
     if not sig_content:
         raise HTTPException(400, "Файл подписи пуст")
 
-    # Проверяем подпись через Go GOST (не блокируем отправку при сбое сервиса)
+    # Проверяем подпись через Go GOST
     signature_type = SignatureType.UNEP
     verification = await verify_signature(doc_content, sig_content, signature_type.value)
     sig_valid = verification.get("signature_valid", False)
+
+    if not sig_valid:
+        # Отклонённые документы не создаём — сообщаем об ошибке проверки подписи
+        raise HTTPException(
+            400,
+            verification.get("verification_details") or "Подпись не прошла проверку. Письмо не отправлено.",
+        )
 
     # Создаём НОВЫЙ документ в реестре организации B
     new_uuid = str(uuid_lib.uuid4())

@@ -14,8 +14,10 @@ import { styled } from '@mui/material/styles';
 import {
   Mail as MailIcon,
   Description as DocumentsIcon,
+  Feedback as AppealsIcon,
   Contacts as ContactsIcon,
   Info as InfoIcon,
+  ListAlt as RegistriesIcon,
 } from '@mui/icons-material';
 
 const DRAWER_WIDTH = 280;
@@ -111,16 +113,46 @@ interface SidebarProps {
   mobile?: boolean;
 }
 
-const menuItems = [
+// Роли, которым доступен раздел «Реестры»
+const REGISTRIES_ROLES = ['org_admin', 'department_head', 'final_approver'];
+
+interface MenuItem {
+  path: string;
+  label: string;
+  icon: React.ComponentType;
+  requiredRoles?: string[];
+}
+
+const menuItems: MenuItem[] = [
   { path: '/mail', label: 'Почта', icon: MailIcon },
   { path: '/documents', label: 'Документы', icon: DocumentsIcon },
+  { path: '/appeals', label: 'Обращения', icon: AppealsIcon },
   { path: '/contacts', label: 'Контакты', icon: ContactsIcon },
+  {
+    path: '/registries/employees',
+    label: 'Реестры',
+    icon: RegistriesIcon,
+    requiredRoles: REGISTRIES_ROLES,
+  },
   { path: '/about', label: 'О приложении', icon: InfoIcon },
 ];
+
+function getUserRoles(): string[] {
+  try {
+    return JSON.parse(localStorage.getItem('employee_roles') || '[]');
+  } catch {
+    return [];
+  }
+}
 
 export const Sidebar: React.FC<SidebarProps> = ({ open, onClose, mobile = false }) => {
   const navigate = useNavigate();
   const location = useLocation();
+
+  const userRoles = getUserRoles();
+  const visibleItems = menuItems.filter(
+    item => !item.requiredRoles || item.requiredRoles.some(r => userRoles.includes(r)),
+  );
 
   const handleNavigate = (path: string) => {
     navigate(path);
@@ -137,11 +169,11 @@ export const Sidebar: React.FC<SidebarProps> = ({ open, onClose, mobile = false 
           <LogoText variant="caption">ТОР ЭДО</LogoText>
           <LogoSubText variant="caption">электронный документооборот</LogoSubText>
         </LogoBox>
-        <VersionText variant="caption">v0.2</VersionText>
+        <VersionText variant="caption">v0.4</VersionText>
       </LogoContainer>
 
       <List sx={{ flex: 1, px: 1 }}>
-        {menuItems.map((item) => {
+        {visibleItems.map((item) => {
           const isSelected = location.pathname === item.path;
           return (
             <ListItem key={item.path} disablePadding>

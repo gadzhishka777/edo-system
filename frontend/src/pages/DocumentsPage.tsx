@@ -95,7 +95,9 @@ import {
   uploadSignatureFile,
   verifySignature as verifySignatureApi,
   visualizeSignature,
-  updateDocument,
+  updateDocumentWithEmployees,
+  getDocumentEmployees,
+  type DocumentEmployee,
   SignatureType,
   authApi,
   getStampMapping,
@@ -109,11 +111,9 @@ import 'react-pdf/dist/Page/TextLayer.css';
 import 'react-pdf/dist/Page/AnnotationLayer.css';
 import { useEvents } from '../context/EventContext';
 
-// Настройка worker для PDF.js (локальный файл вместо CDN)
-pdfjs.GlobalWorkerOptions.workerSrc = new URL(
-  'pdfjs-dist/build/pdf.worker.min.mjs',
-  import.meta.url,
-).toString();
+// Настройка worker для PDF.js (CDN)
+// ВАЖНО: react-pdf 8.x использует pdfjs-dist 3.x, где worker — классический скрипт (.js), а не ES-модуль (.mjs)
+pdfjs.GlobalWorkerOptions.workerSrc = `https://unpkg.com/pdfjs-dist@${pdfjs.version}/build/pdf.worker.min.js`;
 
 // ===== СТИЛИ =====
 const PageContainer = styled(Box)({
@@ -250,7 +250,7 @@ const StatusChip = styled(Chip)<{ status: string }>(({ status }) => {
   };
 });
 
-const SignatureTypeText = styled(Typography)<{ type: string; valid?: boolean }>(({ type, valid }) => {
+const SignatureTypeText = styled(Typography, { shouldForwardProp: (prop) => prop !== 'type' && prop !== 'valid' })<{ type: string; valid?: boolean }>(({ type, valid }) => {
   const colors: Record<string, { bg: string; color: string }> = {
     HAND: { bg: '#e8f5e9', color: '#1b5e20' },
     PEP: { bg: '#e3f2fd', color: '#0d47a1' },
@@ -461,7 +461,7 @@ const StampContainer = styled(Box)({
 
 // ===== ТИПЫ ПОДПИСИ =====
 const signatureTypes: { value: SignatureType; label: string; description: string; disabled: boolean }[] = [
-  { value: 'HAND', label: 'Собственноручная подпись', description: 'Загрузка скана документа с живой подписью ручкой', disabled: false },
+  { value: 'HAND', label: 'Собственноручная подпись', description: 'Загрузка скана документа', disabled: false },
   { value: 'UNEP', label: 'УНЭП (Госключ)', description: 'Усиленная неквалифицированная ЭП через Госключ', disabled: false },
   { value: 'UKEP', label: 'УКЭП (Госключ)', description: 'Усиленная квалифицированная ЭП через Госключ', disabled: false },
 ];
@@ -485,6 +485,7 @@ const DocumentsPage: React.FC = () => {
   
   const [activeFolder, setActiveFolder] = useState<string>('all');
   const [searchQuery, setSearchQuery] = useState('');
+  const [debouncedSearch, setDebouncedSearch] = useState('');
   const [selectedDocuments, setSelectedDocuments] = useState<string[]>([]);
   const [documents, setDocuments] = useState<Document[]>([]);
   const [loading, setLoading] = useState(true);
@@ -498,6 +499,7 @@ const DocumentsPage: React.FC = () => {
   const [stampMapping, setStampMapping] = useState<Record<string, string>>({});
   const [customFolders, setCustomFolders] = useState<CustomFolder[]>([]);
   const [newFolderName, setNewFolderName] = useState('');
+  const [employees, setEmployees] = useState<DocumentEmployee[]>([]);
   const [createFolderModalOpen, setCreateFolderModalOpen] = useState(false);
   const [anchorEl, setAnchorEl] = useState<null | HTMLElement>(null);
   const [isUploadModalOpen, setIsUploadModalOpen] = useState(false);
@@ -512,9 +514,14 @@ const DocumentsPage: React.FC = () => {
     registrationNumber: '',
     date: dayjs().format('YYYY-MM-DD'),
     executor: '',
+    signerFullName: '',
     familiarized: [] as string[],
   });
   const [editLoading, setEditLoading] = useState(false);
+  const [selectedSignerEmployee, setSelectedSignerEmployee] = useState<number | null>(null);
+  const [selectedExecutorEmployee, setSelectedExecutorEmployee] = useState<number | null>(null);
+  const [signerEmployeeSearch, setSignerEmployeeSearch] = useState('');
+  const [executorEmployeeSearch, setExecutorEmployeeSearch] = useState('');
   const [rowMenuAnchor, setRowMenuAnchor] = useState<null | HTMLElement>(null);
   const [rowMenuDoc, setRowMenuDoc] = useState<Document | null>(null);
   
@@ -546,6 +553,10 @@ const DocumentsPage: React.FC = () => {
   });
   const [uploadLoading, setUploadLoading] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
+  const [selectedUploadSigner, setSelectedUploadSigner] = useState<number | null>(null);
+  const [selectedUploadExecutor, setSelectedUploadExecutor] = useState<number | null>(null);
+  const [uploadSignerSearch, setUploadSignerSearch] = useState('');
+  const [uploadExecutorSearch, setUploadExecutorSearch] = useState('');
 
   const [verificationResult, setVerificationResult] = useState<{
     status: 'idle' | 'loading' | 'success' | 'error';
@@ -625,6 +636,13 @@ const DocumentsPage: React.FC = () => {
     checkLicense();
   }, [checkLicense]);
 
+  // Загружаем сотрудников организации
+  useEffect(() => {
+    getDocumentEmployees()
+      .then((res) => setEmployees(res))
+      .catch((err) => console.error('Ошибка загрузки сотрудников:', err));
+  }, []);
+
   // ===== ЗАГРУЗКА ДОКУМЕНТОВ (только если лицензия активна) =====
   const loadDocuments = useCallback(async () => {
     // Если лицензия неактивна - не загружаем документы
@@ -650,8 +668,8 @@ const DocumentsPage: React.FC = () => {
         customFolderId = undefined;
       }
       
-      const response = await getDocuments(page, pageSize, folder, searchQuery || undefined, customFolderId);
-      
+      const response = await getDocuments(page, pageSize, folder, debouncedSearch || undefined, customFolderId);
+
       startTransition(() => {
         setDocuments(response.items);
         setTotal(response.total);
@@ -663,7 +681,18 @@ const DocumentsPage: React.FC = () => {
     } finally {
       setLoading(false);
     }
-  }, [activeFolder, page, pageSize, searchQuery, addError, licenseValid]);
+  }, [activeFolder, page, pageSize, debouncedSearch, addError, licenseValid]);
+
+  // Дебаунс поиска: запрос уходит через 400 мс после окончания ввода
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedSearch(searchQuery), 400);
+    return () => clearTimeout(t);
+  }, [searchQuery]);
+
+  // При изменении поискового запроса возвращаемся на первую страницу
+  useEffect(() => {
+    setPage(1);
+  }, [debouncedSearch]);
 
   const loadFolderCounts = useCallback(async () => {
     // Если лицензия неактивна - не загружаем счетчики
@@ -771,6 +800,35 @@ const DocumentsPage: React.FC = () => {
     }
   };
 
+  // ===== СВЕРКА ФИО ПОДПИСАНТА С СОТРУДНИКАМИ =====
+  const normalizeName = (s: string): string =>
+    s.toLowerCase().replace(/ё/g, 'е').replace(/\s+/g, ' ').trim();
+
+  const findEmployeeByName = useCallback((name?: string | null): DocumentEmployee | null => {
+    if (!name) return null;
+    const target = normalizeName(name);
+    if (!target) return null;
+    return (
+      employees.find((emp) => {
+        const full = `${emp.last_name} ${emp.first_name}${emp.middle_name ? ' ' + emp.middle_name : ''}`;
+        return normalizeName(full) === target || normalizeName(emp.full_name) === target;
+      }) || null
+    );
+  }, [employees]);
+
+  // Парсинг даты подписания из ГОСТ (может прийти в разных форматах)
+  const parseGostDate = (dateStr?: string | null): string | null => {
+    if (!dateStr) return null;
+    let normalized: string = dateStr;
+    const dotFormat = dateStr.match(/^(\d{4})\.(\d{2})\.(\d{2})\s+(\d{2}:\d{2}(?::\d{2})?)/);
+    if (dotFormat) {
+      normalized = `${dotFormat[1]}-${dotFormat[2]}-${dotFormat[3]}T${dotFormat[4]}`;
+    }
+    const parsed = dayjs(normalized);
+    if (!parsed.isValid() || parsed.year() < 2000 || parsed.year() > 2100) return null;
+    return parsed.format('YYYY-MM-DD');
+  };
+
   // ===== ОСТАЛЬНЫЕ ОБРАБОТЧИКИ =====
   const handleStampMouseDown = (e: React.MouseEvent<HTMLDivElement>) => {
     if (!pageWrapRef.current || !stampRef.current) return;
@@ -815,6 +873,10 @@ const DocumentsPage: React.FC = () => {
   const onDocumentLoadSuccess = ({ numPages }: { numPages: number }) => {
     setNumPages(numPages);
     setPageNumber(1);
+  };
+
+  const onDocumentLoadError = (error: Error) => {
+    console.error('PDF loading error:', error);
   };
 
   const onPageLoadSuccess = (page: any) => {
@@ -888,8 +950,13 @@ const DocumentsPage: React.FC = () => {
       registrationNumber: doc.registration_number || '',
       date: doc.created_at ? dayjs(doc.created_at).format('YYYY-MM-DD') : dayjs().format('YYYY-MM-DD'),
       executor: doc.executor || '',
+      signerFullName: doc.signer_full_name || doc.signer || '',
       familiarized: [],
     });
+    setSelectedSignerEmployee(doc.signer_employee_id ?? doc.signed_by_employee_id ?? null);
+    setSelectedExecutorEmployee(doc.executor_employee_id ?? null);
+    setSignerEmployeeSearch('');
+    setExecutorEmployeeSearch('');
     setIsEditModalOpen(true);
   };
 
@@ -909,14 +976,19 @@ const DocumentsPage: React.FC = () => {
     if (!editData) return;
     setEditLoading(true);
     try {
-      await updateDocument(editData.uuid, {
+      await updateDocumentWithEmployees(editData.uuid, {
         name: editFormData.name,
         type: editFormData.type,
         folder: editFormData.folder,
         registration_number: editFormData.registrationNumber,
         executor: editFormData.executor,
+        signer_full_name: selectedSignerEmployee
+          ? undefined
+          : editFormData.signerFullName,
         created_at: editFormData.date ? `${editFormData.date}T00:00:00` : undefined,
         custom_folder_id: editFormData.customFolderId,
+        signer_employee_id: selectedSignerEmployee,
+        executor_employee_id: selectedExecutorEmployee,
       });
       setSuccess('Метаданные обновлены');
       addSuccess('Метаданные обновлены', `Документ "${editFormData.name}" успешно обновлен`);
@@ -1002,34 +1074,70 @@ const DocumentsPage: React.FC = () => {
     setVerificationResult({ status: 'loading', data: null, error: null });
 
     try {
-      const doc = await uploadDocument(uploadData.pdfFile, {
-        name: uploadData.name || uploadData.pdfFile.name,
-        type: uploadData.documentType || 'Документ',
-        folder: uploadData.folder,
-        registration_number: uploadData.registrationNumber || 'Не указан',
-        signer: uploadData.signer || 'Не указан',
-        signer_full_name: uploadData.signerFullName || uploadData.signer,
-        executor: uploadData.executor || '',
-        signature_type: uploadData.signatureType,
-        custom_folder_id: uploadData.customFolderId,
-      });
+      // Повторная проверка («Попробовать снова» / Назад→Далее) переиспользует
+      // уже созданный документ, чтобы не плодить дубли в БД.
+      // _doc_uuid сбрасывается при замене PDF/SIG файла — см. handleFileSelect/handleDrop.
+      let docUuid = uploadData._doc_uuid;
+      if (!docUuid) {
+        const doc = await uploadDocument(uploadData.pdfFile, {
+          name: uploadData.name || uploadData.pdfFile.name,
+          type: uploadData.documentType || 'Документ',
+          folder: uploadData.folder,
+          registration_number: uploadData.registrationNumber || 'Не указан',
+          signer: uploadData.signer || 'Не указан',
+          signer_full_name: uploadData.signerFullName || uploadData.signer,
+          executor: uploadData.executor || '',
+          signature_type: uploadData.signatureType,
+          custom_folder_id: uploadData.customFolderId,
+        });
+        docUuid = doc.uuid;
+        setUploadData(prev => ({ ...prev, _doc_uuid: docUuid }));
+      }
 
-      await uploadSignatureFile(doc.uuid, uploadData.sigFile);
+      await uploadSignatureFile(docUuid, uploadData.sigFile);
 
-      const result = await verifySignatureApi(doc.uuid);
+      const result = await verifySignatureApi(docUuid);
+
+      // Отклонённые документы сервер удаляет — сбрасываем привязку,
+      // чтобы повторная попытка загрузила файлы заново
+      if (result?.document_deleted) {
+        setUploadData(prev => ({ ...prev, _doc_uuid: '' }));
+      }
       
       const isValid = result?.signature_valid === true;
 
       const signerNameFromCert = result?.signer_name;
       const resolvedStampUrl = resolveStampUrl(signerNameFromCert);
 
+      // Сверяем ФИО подписанта из ГОСТ с сотрудниками организации
+      // (регистр не важен: может прийти капсом или строчными)
+      const matchedEmp = findEmployeeByName(signerNameFromCert);
+
+      // Дата подписания с ГОСТ подставляется в поле даты (остаётся редактируемой)
+      const gostDate = parseGostDate(result?.signature_date);
+
       setUploadData(prev => ({
         ...prev,
-        _doc_uuid: doc.uuid,
+        _doc_uuid: docUuid,
         customStampUrl: resolvedStampUrl,
-        signer: prev.signer || signerNameFromCert || 'Не указан',
-        signerFullName: prev.signerFullName || signerNameFromCert || prev.signer,
+        signer: matchedEmp ? matchedEmp.full_name : (prev.signer || signerNameFromCert || 'Не указан'),
+        signerFullName: matchedEmp ? matchedEmp.full_name : (prev.signerFullName || signerNameFromCert || prev.signer),
+        date: gostDate ?? prev.date,
       }));
+
+      if (matchedEmp) {
+        // Сотрудник найден — отмечаем его, поля ФИО фиксируются
+        setSelectedUploadSigner(matchedEmp.id);
+        addInfo(
+          'Подписант сопоставлен',
+          `ФИО «${signerNameFromCert}» сопоставлено с сотрудником ${matchedEmp.full_name}`
+        );
+      } else if (signerNameFromCert) {
+        addWarning(
+          'Подписант не сопоставлен',
+          `Сотрудник с ФИО «${signerNameFromCert}» не найден в организации. Заполните метаданные вручную.`
+        );
+      }
       
       setVerificationResult({
         status: isValid ? 'success' : 'error',
@@ -1038,7 +1146,7 @@ const DocumentsPage: React.FC = () => {
       });
 
       if (isValid) {
-        addSuccess('Подпись подтверждена', `Документ "${doc.name}" успешно проверен`);
+        addSuccess('Подпись подтверждена', `Документ "${uploadData.name || uploadData.pdfFile.name}" успешно проверен`);
       } else {
         addError('Подпись не подтверждена', 'Файл был модифицирован или подпись не соответствует файлу');
       }
@@ -1095,6 +1203,10 @@ const DocumentsPage: React.FC = () => {
       customStampUrl: '',
       _doc_uuid: '',
     });
+    setSelectedUploadSigner(null);
+    setSelectedUploadExecutor(null);
+    setUploadSignerSearch('');
+    setUploadExecutorSearch('');
     setVerificationResult({ status: 'idle', data: null, error: null });
     setShowStampPreview(false);
     stampPosition.current = { x: 100, y: 50 };
@@ -1121,12 +1233,12 @@ const DocumentsPage: React.FC = () => {
   const handleFileSelect = (type: 'pdf' | 'sig') => (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) {
       if (type === 'pdf') {
-        setUploadData(prev => ({ ...prev, pdfFile: e.target.files![0] }));
+        setUploadData(prev => ({ ...prev, pdfFile: e.target.files![0], _doc_uuid: '' }));
         if (!uploadData.name) {
           setUploadData(prev => ({ ...prev, name: e.target.files![0].name.replace(/\.[^/.]+$/, '') }));
         }
       } else {
-        setUploadData(prev => ({ ...prev, sigFile: e.target.files![0] }));
+        setUploadData(prev => ({ ...prev, sigFile: e.target.files![0], _doc_uuid: '' }));
       }
       setVerificationResult({ status: 'idle', data: null, error: null });
     }
@@ -1137,12 +1249,12 @@ const DocumentsPage: React.FC = () => {
     setIsDragging(false);
     if (e.dataTransfer.files && e.dataTransfer.files[0]) {
       if (type === 'pdf') {
-        setUploadData(prev => ({ ...prev, pdfFile: e.dataTransfer.files[0] }));
+        setUploadData(prev => ({ ...prev, pdfFile: e.dataTransfer.files[0], _doc_uuid: '' }));
         if (!uploadData.name) {
           setUploadData(prev => ({ ...prev, name: e.dataTransfer.files[0].name.replace(/\.[^/.]+$/, '') }));
         }
       } else {
-        setUploadData(prev => ({ ...prev, sigFile: e.dataTransfer.files[0] }));
+        setUploadData(prev => ({ ...prev, sigFile: e.dataTransfer.files[0], _doc_uuid: '' }));
       }
       setVerificationResult({ status: 'idle', data: null, error: null });
     }
@@ -1204,6 +1316,8 @@ const DocumentsPage: React.FC = () => {
           executor: uploadData.executor || '',
           signature_type: uploadData.signatureType,
           custom_folder_id: uploadData.customFolderId,
+          signer_employee_id: selectedUploadSigner,
+          executor_employee_id: selectedUploadExecutor,
         });
         docUuid = doc.uuid;
         documentName = doc.name;
@@ -1216,7 +1330,7 @@ const DocumentsPage: React.FC = () => {
           await verifySignatureApi(docUuid);
         }
       } else {
-        await updateDocument(docUuid, {
+        await updateDocumentWithEmployees(docUuid, {
           name: uploadData.name || uploadData.pdfFile.name,
           type: uploadData.documentType || 'Документ',
           folder: uploadData.folder,
@@ -1228,6 +1342,8 @@ const DocumentsPage: React.FC = () => {
             ? `${uploadData.date}T00:00:00`
             : undefined,
           custom_folder_id: uploadData.customFolderId,
+          signer_employee_id: selectedUploadSigner,
+          executor_employee_id: selectedUploadExecutor,
         });
       }
       
@@ -1521,7 +1637,7 @@ const DocumentsPage: React.FC = () => {
                       {(uploadData.pdfFile.size / 1024).toFixed(1)} КБ
                     </Typography>
                   </Box>
-                  <IconButton size="small" onClick={(e) => { e.stopPropagation(); setUploadData(prev => ({ ...prev, pdfFile: null })); }}>
+                  <IconButton size="small" onClick={(e) => { e.stopPropagation(); setUploadData(prev => ({ ...prev, pdfFile: null, _doc_uuid: '' })); }}>
                     <CloseIcon fontSize="small" />
                   </IconButton>
                 </FileInfoBox>
@@ -1566,7 +1682,7 @@ const DocumentsPage: React.FC = () => {
                           {(uploadData.sigFile.size / 1024).toFixed(1)} КБ
                         </Typography>
                       </Box>
-                      <IconButton size="small" onClick={(e) => { e.stopPropagation(); setUploadData(prev => ({ ...prev, sigFile: null })); }}>
+                      <IconButton size="small" onClick={(e) => { e.stopPropagation(); setUploadData(prev => ({ ...prev, sigFile: null, _doc_uuid: '' })); }}>
                         <CloseIcon fontSize="small" />
                       </IconButton>
                     </FileInfoBox>
@@ -1757,6 +1873,7 @@ const DocumentsPage: React.FC = () => {
               <PDFDocument
                 file={pdfFileUrl}
                 onLoadSuccess={onDocumentLoadSuccess}
+                onLoadError={onDocumentLoadError}
                 loading={<Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '400px' }}><CircularProgress size={40} /></Box>}
                 error={<Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '400px' }}>
                   <Typography sx={{ fontFamily: 'Lato, sans-serif', color: '#e53935' }}>Не удалось загрузить PDF</Typography>
@@ -1890,42 +2007,97 @@ const DocumentsPage: React.FC = () => {
         </Box>
 
         <Box sx={{ display: 'flex', gap: 2 }}>
-          <StyledTextField
-            fullWidth
-            label="Подписант"
-            value={uploadData.signer}
-            onChange={handleFieldChange('signer')}
-            size="small"
-            required
-            placeholder="Введите ФИО подписанта"
-            slotProps={{
-              input: {
-                startAdornment: (
-                  <InputAdornment position="start">
-                    <PersonIcon sx={{ fontSize: '18px', color: '#87879b' }} />
-                  </InputAdornment>
-                ),
-              },
-            }}
-          />
+          <FormControl fullWidth size="small" required>
+            <InputLabel sx={{ fontFamily: 'Lato, sans-serif' }}>Подписант</InputLabel>
+            <Select
+              value={selectedUploadSigner ?? ''}
+              onChange={(e) => {
+                const empId = e.target.value as number | '';
+                setSelectedUploadSigner(empId || null);
+                if (empId) {
+                  const emp = employees.find(em => em.id === empId);
+                  if (emp) {
+                    setUploadData(prev => ({
+                      ...prev,
+                      signer: emp.full_name,
+                      signerFullName: emp.full_name,
+                    }));
+                  }
+                } else {
+                  setUploadData(prev => ({ ...prev, signer: '', signerFullName: '' }));
+                }
+              }}
+              label="Подписант"
+              sx={{ borderRadius: '6px', fontFamily: 'Lato, sans-serif' }}
+            >
+              <MenuItem value="">
+                <em>Выберите сотрудника</em>
+              </MenuItem>
+              {employees
+                .filter(emp => 
+                  !uploadSignerSearch || 
+                  emp.full_name.toLowerCase().includes(uploadSignerSearch.toLowerCase())
+                )
+                .map((emp) => (
+                  <MenuItem key={emp.id} value={emp.id}>
+                    {emp.full_name} {emp.position ? `— ${emp.position}` : ''}
+                  </MenuItem>
+                ))}
+            </Select>
+            {employees.length > 10 && (
+              <TextField
+                size="small"
+                placeholder="Поиск сотрудника..."
+                value={uploadSignerSearch}
+                onChange={(e) => setUploadSignerSearch(e.target.value)}
+                sx={{ mt: 1, '& .MuiOutlinedInput-root': { borderRadius: '6px' } }}
+              />
+            )}
+          </FormControl>
 
-          <StyledTextField
-            fullWidth
-            label="Исполнитель"
-            value={uploadData.executor}
-            onChange={handleFieldChange('executor')}
-            size="small"
-            placeholder="Петрова А.С."
-            slotProps={{
-              input: {
-                startAdornment: (
-                  <InputAdornment position="start">
-                    <BusinessIcon sx={{ fontSize: '18px', color: '#87879b' }} />
-                  </InputAdornment>
-                ),
-              },
-            }}
-          />
+          <FormControl fullWidth size="small">
+            <InputLabel sx={{ fontFamily: 'Lato, sans-serif' }}>Исполнитель</InputLabel>
+            <Select
+              value={selectedUploadExecutor ?? ''}
+              onChange={(e) => {
+                const empId = e.target.value as number | '';
+                setSelectedUploadExecutor(empId || null);
+                if (empId) {
+                  const emp = employees.find(em => em.id === empId);
+                  if (emp) {
+                    setUploadData(prev => ({ ...prev, executor: emp.full_name }));
+                  }
+                } else {
+                  setUploadData(prev => ({ ...prev, executor: '' }));
+                }
+              }}
+              label="Исполнитель"
+              sx={{ borderRadius: '6px', fontFamily: 'Lato, sans-serif' }}
+            >
+              <MenuItem value="">
+                <em>Не выбран</em>
+              </MenuItem>
+              {employees
+                .filter(emp => 
+                  !uploadExecutorSearch || 
+                  emp.full_name.toLowerCase().includes(uploadExecutorSearch.toLowerCase())
+                )
+                .map((emp) => (
+                  <MenuItem key={emp.id} value={emp.id}>
+                    {emp.full_name} {emp.position ? `— ${emp.position}` : ''}
+                  </MenuItem>
+                ))}
+            </Select>
+            {employees.length > 10 && (
+              <TextField
+                size="small"
+                placeholder="Поиск сотрудника..."
+                value={uploadExecutorSearch}
+                onChange={(e) => setUploadExecutorSearch(e.target.value)}
+                sx={{ mt: 1, '& .MuiOutlinedInput-root': { borderRadius: '6px' } }}
+              />
+            )}
+          </FormControl>
         </Box>
 
         <StyledTextField
@@ -1935,6 +2107,12 @@ const DocumentsPage: React.FC = () => {
           onChange={handleFieldChange('signerFullName')}
           size="small"
           placeholder="Петров Петр Петрович"
+          disabled={selectedUploadSigner !== null}
+          helperText={
+            selectedUploadSigner !== null
+              ? 'ФИО зафиксировано за выбранным сотрудником'
+              : undefined
+          }
         />
 
         <StyledTextField
@@ -2334,6 +2512,7 @@ const DocumentsPage: React.FC = () => {
                       const isSelected = selectedDocuments.includes(doc.uuid);
                       const signatureLabel = getSignatureLabel(doc.signature_type, doc.goskey_valid);
                       const statusLabel = getStatusLabel(doc.status);
+                      const isOutdated = doc.metadata_outdated === true;
                       
                       const displayName = doc.name || 'Без названия';
                       const displaySigner = doc.signer_full_name || doc.signer || 'Не указан';
@@ -2349,7 +2528,8 @@ const DocumentsPage: React.FC = () => {
                           selected={isSelected}
                           sx={{
                             transition: 'background-color 0.2s ease',
-                            '&:hover': { backgroundColor: '#f9fafe' },
+                            backgroundColor: isOutdated ? '#fff9e6' : 'inherit',
+                            '&:hover': { backgroundColor: isOutdated ? '#fff3cc' : '#f9fafe' },
                           }}
                         >
                           <TableCell padding="checkbox">
@@ -2366,17 +2546,22 @@ const DocumentsPage: React.FC = () => {
                             />
                           </TableCell>
                           <TableCell>
-                            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                              <PdfIcon sx={{ color: '#e53935', fontSize: '20px' }} />
-                              <Box>
-                                <Typography sx={{ fontFamily: 'Lato, sans-serif', fontSize: '14px', color: '#101025', fontWeight: 500 }}>
-                                  {displayName}
-                                </Typography>
-                                <Typography sx={{ fontFamily: 'Lato, sans-serif', fontSize: '12px', color: '#87879b' }}>
-                                  {displayRegNumber} • {displayType}
-                                </Typography>
+                            <Tooltip title={isOutdated ? 'Необходимо обновить метаданные' : ''}>
+                              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                                {isOutdated && (
+                                  <WarningIcon sx={{ color: '#f59e0b', fontSize: '16px' }} />
+                                )}
+                                <PdfIcon sx={{ color: '#e53935', fontSize: '20px' }} />
+                                <Box>
+                                  <Typography sx={{ fontFamily: 'Lato, sans-serif', fontSize: '14px', color: '#101025', fontWeight: 500 }}>
+                                    {displayName}
+                                  </Typography>
+                                  <Typography sx={{ fontFamily: 'Lato, sans-serif', fontSize: '12px', color: '#87879b' }}>
+                                    {displayRegNumber} • {displayType}
+                                  </Typography>
+                                </Box>
                               </Box>
-                            </Box>
+                            </Tooltip>
                           </TableCell>
                           <TableCell>
                             <Typography sx={{ fontFamily: 'Lato, sans-serif', fontSize: '13px', color: '#101025' }}>
@@ -2708,39 +2893,96 @@ const DocumentsPage: React.FC = () => {
                       slotProps={{ textField: { fullWidth: true, size: 'small' } }}
                     />
                   </Box>
+                  <FormControl fullWidth size="small">
+                    <InputLabel sx={{ fontFamily: 'Lato, sans-serif' }}>Подписант</InputLabel>
+                    <Select
+                      value={selectedSignerEmployee ?? ''}
+                      onChange={(e) => {
+                        const empId = (e.target.value as number | '') || null;
+                        setSelectedSignerEmployee(empId);
+                        if (empId) {
+                          const emp = employees.find(em => em.id === empId);
+                          if (emp) {
+                            setEditFormData(prev => ({ ...prev, signerFullName: emp.full_name }));
+                          }
+                        }
+                      }}
+                      label="Подписант"
+                      sx={{ borderRadius: '6px', fontFamily: 'Lato, sans-serif' }}
+                    >
+                      <MenuItem value="">
+                        <em>Не выбран</em>
+                      </MenuItem>
+                      {employees
+                        .filter(emp => 
+                          !signerEmployeeSearch || 
+                          emp.full_name.toLowerCase().includes(signerEmployeeSearch.toLowerCase())
+                        )
+                        .map((emp) => (
+                          <MenuItem key={emp.id} value={emp.id}>
+                            {emp.full_name} {emp.position ? `— ${emp.position}` : ''}
+                          </MenuItem>
+                        ))}
+                    </Select>
+                    {employees.length > 10 && (
+                      <TextField
+                        size="small"
+                        placeholder="Поиск сотрудника..."
+                        value={signerEmployeeSearch}
+                        onChange={(e) => setSignerEmployeeSearch(e.target.value)}
+                        sx={{ mt: 1, '& .MuiOutlinedInput-root': { borderRadius: '6px' } }}
+                      />
+                    )}
+                  </FormControl>
                   <StyledTextField
                     fullWidth
-                    label="Подписант"
-                    value={editData?.signer_full_name || editData?.signer || ''}
+                    label="ФИО подписанта (полное)"
+                    value={
+                      selectedSignerEmployee
+                        ? employees.find(e => e.id === selectedSignerEmployee)?.full_name || editFormData.signerFullName
+                        : editFormData.signerFullName
+                    }
+                    onChange={handleEditFieldChange('signerFullName')}
                     size="small"
-                    disabled
-                    slotProps={{
-                      input: {
-                        startAdornment: (
-                          <InputAdornment position="start">
-                            <PersonIcon sx={{ fontSize: '18px', color: '#87879b' }} />
-                          </InputAdornment>
-                        ),
-                      },
-                    }}
+                    disabled={selectedSignerEmployee !== null}
+                    helperText={
+                      selectedSignerEmployee !== null
+                        ? 'ФИО зафиксировано за выбранным сотрудником'
+                        : undefined
+                    }
                   />
-                  <StyledTextField
-                    fullWidth
-                    label="Исполнитель"
-                    value={editFormData.executor}
-                    onChange={handleEditFieldChange('executor')}
-                    size="small"
-                    placeholder="Петрова А.С."
-                    slotProps={{
-                      input: {
-                        startAdornment: (
-                          <InputAdornment position="start">
-                            <BusinessIcon sx={{ fontSize: '18px', color: '#87879b' }} />
-                          </InputAdornment>
-                        ),
-                      },
-                    }}
-                  />
+                  <FormControl fullWidth size="small">
+                    <InputLabel sx={{ fontFamily: 'Lato, sans-serif' }}>Исполнитель</InputLabel>
+                    <Select
+                      value={selectedExecutorEmployee ?? ''}
+                      onChange={(e) => setSelectedExecutorEmployee(e.target.value as number | null)}
+                      label="Исполнитель"
+                      sx={{ borderRadius: '6px', fontFamily: 'Lato, sans-serif' }}
+                    >
+                      <MenuItem value="">
+                        <em>Не выбран</em>
+                      </MenuItem>
+                      {employees
+                        .filter(emp => 
+                          !executorEmployeeSearch || 
+                          emp.full_name.toLowerCase().includes(executorEmployeeSearch.toLowerCase())
+                        )
+                        .map((emp) => (
+                          <MenuItem key={emp.id} value={emp.id}>
+                            {emp.full_name} {emp.position ? `— ${emp.position}` : ''}
+                          </MenuItem>
+                        ))}
+                    </Select>
+                    {employees.length > 10 && (
+                      <TextField
+                        size="small"
+                        placeholder="Поиск сотрудника..."
+                        value={executorEmployeeSearch}
+                        onChange={(e) => setExecutorEmployeeSearch(e.target.value)}
+                        sx={{ mt: 1, '& .MuiOutlinedInput-root': { borderRadius: '6px' } }}
+                      />
+                    )}
+                  </FormControl>
                 </Box>
               </ModalBody>
               <ModalFooter>

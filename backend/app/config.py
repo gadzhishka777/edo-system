@@ -14,6 +14,10 @@ class Settings(BaseSettings):
     API_HOST: str = "0.0.0.0"
     API_PORT: int = 8000
     API_PREFIX: str = "/api"
+
+    # Продакшен: отключение интерактивной документации (/docs, /redoc)
+    DOCS_ENABLED: bool = os.getenv("DOCS_ENABLED", "true").lower() in ("1", "true", "yes")
+    LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO")
     
     # База данных
     DATABASE_URL: str = f"sqlite+aiosqlite:///{BASE_DIR}/edo.db"
@@ -47,6 +51,28 @@ class Settings(BaseSettings):
     GOST_API_URL: str = os.getenv("GOST_API_URL", "http://localhost:8080")
     GOST_API_KEY: str = os.getenv("GOST_API_KEY", "")
     GOST_TIMEOUT: int = int(os.getenv("GOST_TIMEOUT", "30"))
+
+    # SMTP для отправки писем по обращениям
+    SMTP_HOST: str = os.getenv("SMTP_HOST", "")
+    SMTP_PORT: int = int(os.getenv("SMTP_PORT", "587"))
+    SMTP_USER: str = os.getenv("SMTP_USER", "")
+    SMTP_PASSWORD: str = os.getenv("SMTP_PASSWORD", "")
+    SMTP_FROM: str = os.getenv("SMTP_FROM", "")          # адрес в поле From; если пуст — SMTP_USER
+    SMTP_FROM_NAME: str = os.getenv("SMTP_FROM_NAME", "Подсистема обмена. ТОР ЭДО")  # отображаемое имя отправителя
+    SMTP_USE_TLS: bool = os.getenv("SMTP_USE_TLS", "true").lower() in ("1", "true", "yes")
+
+    @property
+    def smtp_configured(self) -> bool:
+        return bool(self.SMTP_HOST and (self.SMTP_FROM or self.SMTP_USER))
+
+    # Публичная форма обращений
+    APPEALS_UPLOAD_DIR: str = str(BASE_DIR / "uploads" / "appeals")
+    APPEAL_MAX_FILES: int = 10
+    APPEAL_MAX_TOTAL_SIZE: int = 10 * 1024 * 1024   # 10 МБ суммарно
+    APPEAL_MAX_CONTENT_LEN: int = 4000
+    APPEAL_ALLOWED_EXTENSIONS: list = [".doc", ".docx", ".xls", ".xlsx", ".pdf", ".jpeg", ".jpg", ".png"]
+    APPEAL_REGISTER_DAYS: int = 3     # дней на регистрацию
+    APPEAL_ANSWER_DAYS: int = 30      # дней на рассмотрение и ответ
     
     # Максимальный размер файла (50 МБ)
     MAX_FILE_SIZE: int = 50 * 1024 * 1024
@@ -71,3 +97,4 @@ settings = Settings()
 os.makedirs(settings.UPLOAD_DIR, exist_ok=True)
 os.makedirs(settings.SIGNED_DIR, exist_ok=True)
 os.makedirs(settings.STAMPS_DIR, exist_ok=True)
+os.makedirs(settings.APPEALS_UPLOAD_DIR, exist_ok=True)

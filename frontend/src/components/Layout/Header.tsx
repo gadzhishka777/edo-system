@@ -63,6 +63,7 @@ const getPageTitle = (path: string): string => {
   const titles: Record<string, string> = {
     '/mail': 'Почта',
     '/documents': 'Документы',
+    '/appeals': 'Обращения',
     '/contacts': 'Контакты',
     '/about': 'О приложении',
   };
@@ -292,8 +293,8 @@ export const Header: React.FC<HeaderProps> = ({ onMenuToggle, onLogout }) => {
             </Tooltip>
             <Menu anchorEl={anchorEl} open={Boolean(anchorEl)} onClose={() => setAnchorEl(null)}>
               <MenuItem disabled>
-                <ListItemIcon><BusinessIcon fontSize="small" /></ListItemIcon>
-                <ListItemText primary={orgName || 'Организация'} />
+                <ListItemIcon><AccountIcon fontSize="small" /></ListItemIcon>
+                <ListItemText primary={authApi.getEmployeeName() || 'Пользователь'} />
               </MenuItem>
               <Divider />
               <MenuItem onClick={() => { setAnchorEl(null); onLogout(); }}>
@@ -342,13 +343,15 @@ export const Header: React.FC<HeaderProps> = ({ onMenuToggle, onLogout }) => {
               alignItems: 'center',
               backgroundColor: '#fafafa',
             }}>
-              <Typography sx={{ 
-                fontFamily: 'Lato, sans-serif', 
-                fontWeight: 700, 
-                fontSize: '16px',
-                color: '#101025',
-              }}>
-                События
+              <Box sx={{ display: 'flex', alignItems: 'center' }}>
+                <Typography component="div" sx={{
+                  fontFamily: 'Lato, sans-serif',
+                  fontWeight: 700,
+                  fontSize: '16px',
+                  color: '#101025',
+                }}>
+                  События
+                </Typography>
                 {unreadCount > 0 && (
                   <Chip
                     label={unreadCount}
@@ -363,7 +366,7 @@ export const Header: React.FC<HeaderProps> = ({ onMenuToggle, onLogout }) => {
                     }}
                   />
                 )}
-              </Typography>
+              </Box>
               <Box sx={{ display: 'flex', gap: 0.5 }}>
                 {events.length > 0 && (
                   <>
@@ -467,6 +470,10 @@ export const Header: React.FC<HeaderProps> = ({ onMenuToggle, onLogout }) => {
                       </Avatar>
                     </ListItemAvatar>
                     <ListItemText
+                      slotProps={{
+                        primary: { component: 'div' },
+                        secondary: { component: 'div' },
+                      }}
                       primary={
                         <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
                           <Typography

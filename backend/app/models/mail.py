@@ -1,6 +1,7 @@
 # backend/app/models/mail.py
 import enum
 from sqlalchemy import Column, Integer, String, Text, DateTime, Boolean, ForeignKey, Enum as SQLEnum
+from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from app.models.base import Base
 
@@ -35,6 +36,9 @@ class MailMessage(Base):
     sender_org_name = Column(String(500), nullable=False)
     recipient_org_id = Column(Integer, ForeignKey("organizations.id"), nullable=True)
     recipient_org_name = Column(String(500), nullable=False)
+
+    # Сотрудник-отправитель
+    sender_employee_id = Column(Integer, ForeignKey("employees.id"), nullable=True, index=True)
 
     # Связанный документ
     document_uuid = Column(String(36), nullable=True)
@@ -108,6 +112,9 @@ class Organization(Base):
 
     # ID активной лицензии
     active_license_id = Column(Integer, ForeignKey("licenses.id"), nullable=True)
+
+    # Связи
+    employees = relationship("Employee", back_populates="organization", lazy="selectin")
 
 
 

@@ -2,6 +2,7 @@
 import uuid as uuid_lib
 import secrets
 import os
+import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException, status, Query, UploadFile, File, Form
@@ -16,12 +17,227 @@ from app.database import get_async_db
 from app.models.mail import Organization, License, MailMessage
 from app.models.document import Document, StampMapping
 from app.models.user import AdminUser
+from app.models.employee import Employee
 from app.models.pydantic import DocumentResponse
 from app.core.security import get_password_hash, verify_password, create_admin_token, create_refresh_token
 from app.core.dependencies import get_current_admin, get_current_admin_for_download
 from app.config import settings
+from app.utils.search import build_smart_search
+from app.models.appeal import Appeal, AppealAttachment, AppealStatusHistory, AppealKind, AppealApplicantType, AppealStatus
 
 router = APIRouter(prefix="/admin", tags=["admin"])
+
+
+# ===================== ОБРАЩЕНИЯ (просмотр всех организаций) =====================
+
+
+def _admin_serialize_list_item(a: Appeal, org_name: str, has_attachments: bool, now) -> dict:
+    from datetime import datetime as _dt
+
+    deadline = None
+    days_left = None
+    overdue = False
+    if a.status == AppealStatus.NEW and a.register_deadline:
+        deadline = a.register_deadline
+    elif a.status in (AppealStatus.REGISTERED, AppealStatus.ON_EXECUTION) and a.answer_deadline:
+        deadline = a.answer_deadline
+    if deadline:
+        days_left = (deadline.date() - now.date()).days
+        overdue = now > deadline
+
+    return {
+        "id": a.id,
+        "uuid": a.uuid,
+        "system_number": a.system_number,
+        "reg_number": a.reg_number,
+        "org_id": a.owner_org_id,
+        "org_name": org_name,
+        "applicant_type": a.applicant_type.value if a.applicant_type else None,
+        "kind": a.kind.value if a.kind else None,
+        "status": a.status.value if a.status else None,
+        "content_preview": (a.content or "")[:100],
+        "applicant_name": f"{a.last_name} {a.first_name}".strip(),
+        "email": a.email,
+        "created_at": a.created_at.isoformat() if a.created_at else None,
+        "registered_at": a.registered_at.isoformat() if a.registered_at else None,
+        "answered_at": a.answered_at.isoformat() if a.answered_at else None,
+        "has_attachments": has_attachments,
+        "is_redirected_in": bool(a.redirect_from_uuid),
+        "redirect_from_org_name": a.redirect_from_org_name,
+        "deadline": deadline.isoformat() if deadline else None,
+        "days_left": days_left,
+        "overdue": overdue,
+    }
+
+
+@router.get("/appeals", response_model=dict)
+async def admin_list_appeals(
+    page: int = Query(1, ge=1),
+    size: int = Query(20, ge=1, le=100),
+    status: Optional[AppealStatus] = None,
+    org_id: Optional[int] = None,
+    search: Optional[str] = None,
+    overdue: Optional[bool] = None,
+    db: AsyncSession = Depends(get_async_db),
+    _admin: AdminUser = Depends(get_current_admin),
+):
+    """Все обращения по всем организациям (только просмотр)."""
+    from app.models.employee import Employee as _Emp
+
+    now = datetime.now()
+    filters = []
+    if status:
+        filters.append(Appeal.status == status)
+    if org_id:
+        filters.append(Appeal.owner_org_id == org_id)
+    if search:
+        filters.append(build_smart_search(
+            [Appeal.system_number, Appeal.reg_number, Appeal.content,
+             Appeal.last_name, Appeal.first_name, Appeal.email], search))
+
+    query = select(Appeal).where(and_(*filters)) if filters else select(Appeal)
+    count_query = select(func.count()).select_from(Appeal).where(and_(*filters)) if filters else select(func.count()).select_from(Appeal)
+
+    rows = (await db.execute(query.order_by(Appeal.created_at.desc()))).scalars().all()
+    total = (await db.execute(count_query)).scalar() or 0
+
+    # Названия организаций
+    org_ids = list({a.owner_org_id for a in rows})
+    org_names: dict[int, str] = {}
+    if org_ids:
+        res = await db.execute(select(Organization).where(Organization.id.in_(org_ids)))
+        org_names = {o.id: o.name for o in res.scalars().all()}
+
+    attach_counts: dict[int, int] = {}
+    if rows:
+        att_rows = await db.execute(
+            select(AppealAttachment.appeal_id, func.count())
+            .where(AppealAttachment.appeal_id.in_([a.id for a in rows]))
+            .group_by(AppealAttachment.appeal_id))
+        attach_counts = {aid: cnt for aid, cnt in att_rows.all()}
+
+    items = [
+        _admin_serialize_list_item(a, org_names.get(a.owner_org_id, "—"),
+                                   attach_counts.get(a.id, 0) > 0, now)
+        for a in rows
+    ]
+    if overdue:
+        items = [i for i in items if i["overdue"]]
+        total = len(items)
+
+    offset = (page - 1) * size
+    return {
+        "items": items[offset:offset + size],
+        "total": total, "page": page, "size": size,
+        "pages": ((total - 1) // size + 1) if total > 0 else 0,
+    }
+
+
+@router.get("/appeals/{appeal_uuid}")
+async def admin_get_appeal(
+    appeal_uuid: str,
+    db: AsyncSession = Depends(get_async_db),
+    _admin: AdminUser = Depends(get_current_admin),
+):
+    """Карточка обращения любой организации (только просмотр)."""
+    from sqlalchemy.orm import selectinload
+
+    result = await db.execute(
+        select(Appeal)
+        .options(selectinload(Appeal.attachments), selectinload(Appeal.history))
+        .where(Appeal.uuid == appeal_uuid)
+    )
+    appeal = result.scalar_one_or_none()
+    if not appeal:
+        raise HTTPException(404, "Обращение не найдено")
+
+    org_res = await db.execute(select(Organization).where(Organization.id == appeal.owner_org_id))
+    org = org_res.scalar_one_or_none()
+
+    base = _admin_serialize_list_item(
+        appeal, org.name if org else "—",
+        len(appeal.attachments) > 0, datetime.now())
+
+    return {
+        **base,
+        "content": appeal.content,
+        "internal_comment": appeal.internal_comment,
+        "reply_text": appeal.reply_text,
+        "phone": appeal.phone,
+        "middle_name": appeal.middle_name,
+        "org_full_name": appeal.org_full_name,
+        "org_short_name": appeal.org_short_name,
+        "org_director": appeal.org_director,
+        "answer_deadline": appeal.answer_deadline.isoformat() if appeal.answer_deadline else None,
+        "register_deadline_iso": appeal.register_deadline.isoformat() if appeal.register_deadline else None,
+        "attachments": [{
+            "id": at.id, "file_name": at.file_name, "file_size": at.file_size,
+            "uploaded_at": at.uploaded_at.isoformat() if at.uploaded_at else None,
+        } for at in appeal.attachments],
+        "history": [{
+            "id": h.id, "employee_name": h.employee_name, "action": h.action,
+            "comment": h.comment,
+            "created_at": h.created_at.isoformat() if h.created_at else None,
+        } for h in appeal.history],
+    }
+
+
+@router.get("/appeals/attachments/{attachment_id}/download")
+async def admin_download_appeal_attachment(
+    attachment_id: int,
+    db: AsyncSession = Depends(get_async_db),
+    _admin: AdminUser = Depends(get_current_admin_for_download),
+):
+    """Скачивание вложения обращения администратором."""
+    from pathlib import Path as _Path
+    from fastapi.responses import FileResponse
+
+    result = await db.execute(
+        select(AppealAttachment).where(AppealAttachment.id == attachment_id)
+    )
+    attachment = result.scalar_one_or_none()
+    if not attachment or not _Path(attachment.file_path).exists():
+        raise HTTPException(404, "Файл не найден")
+    return FileResponse(
+        path=attachment.file_path,
+        filename=attachment.file_name,
+        media_type="application/octet-stream",
+    )
+
+
+# ===================== ОРГАНИЗАЦИИ (продолжение) =====================
+
+
+async def _login_taken_by_employee(db: AsyncSession, login: str) -> bool:
+    """Проверяет, занят ли логин среди сотрудников (логины глобально уникальны)."""
+    result = await db.execute(select(Employee).where(Employee.login == login))
+    return result.scalar_one_or_none() is not None
+
+
+async def _find_org_admin_employee(db: AsyncSession, org: Organization) -> Optional[Employee]:
+    """Находит сотрудника-администратора организации.
+
+    Приоритет: сотрудник со старым логином организации (создан по старой схеме),
+    иначе первый активный org_admin организации.
+    """
+    result = await db.execute(
+        select(Employee).where(Employee.org_id == org.id, Employee.login == org.login)
+    )
+    emp = result.scalar_one_or_none()
+    if emp:
+        return emp
+
+    result = await db.execute(
+        select(Employee).where(Employee.org_id == org.id)
+    )
+    for e in result.scalars().all():
+        try:
+            roles = json.loads(e.roles) if e.roles else []
+        except Exception:
+            roles = []
+        if "org_admin" in roles:
+            return e
+    return None
 
 
 @router.post("/login")
@@ -100,20 +316,15 @@ async def list_organizations(
     _admin: AdminUser = Depends(get_current_admin),
 ):
     """Список всех организаций."""
+    condition = build_smart_search([Organization.name, Organization.login], search) if search else None
     query = select(Organization)
-    if search:
-        query = query.where(
-            Organization.name.ilike(f"%{search}%") |
-            Organization.login.ilike(f"%{search}%")
-        )
+    if condition is not None:
+        query = query.where(condition)
     query = query.order_by(Organization.created_at.desc())
 
     count_query = select(func.count()).select_from(Organization)
-    if search:
-        count_query = count_query.where(
-            Organization.name.ilike(f"%{search}%") |
-            Organization.login.ilike(f"%{search}%")
-        )
+    if condition is not None:
+        count_query = count_query.where(condition)
     total = (await db.execute(count_query)).scalar() or 0
 
     pages = (total + size - 1) // size if total > 0 else 0
@@ -168,6 +379,10 @@ async def create_organization(
     if existing.scalar_one_or_none():
         raise HTTPException(status_code=400, detail="Организация с таким логином уже существует")
 
+    # Логины сотрудников глобально уникальны — проверяем и среди них
+    if await _login_taken_by_employee(db, login):
+        raise HTTPException(status_code=400, detail="Сотрудник с таким логином уже существует")
+
     org = Organization(
         uuid=str(uuid_lib.uuid4()),
         name=name,
@@ -181,6 +396,29 @@ async def create_organization(
         is_active=True,
     )
     db.add(org)
+    await db.flush()
+
+    # Создаём сотрудника-администратора организации с этими же учётными данными:
+    # вход в систему выполняется под сотрудниками (новая модель авторизации)
+    admin_employee = Employee(
+        uuid=str(uuid_lib.uuid4()),
+        org_id=org.id,
+        last_name="",
+        first_name="",
+        middle_name=None,
+        position="Администратор организации",
+        department=None,
+        roles=json.dumps(["org_admin"]),
+        phone=None,
+        email=None,
+        birthday=None,
+        notes=None,
+        login=login,
+        hashed_password=get_password_hash(password),
+        is_active=True,
+        profile_completed=False,
+    )
+    db.add(admin_employee)
     await db.commit()
     await db.refresh(org)
 
@@ -191,7 +429,7 @@ async def create_organization(
         "login": org.login,
         "password": password,
         "is_active": org.is_active,
-        "message": f"Организация '{org.name}' успешно создана",
+        "message": f"Организация '{org.name}' создана. Логин/пароль администратора: {login} / {password}",
     }
 
 
@@ -260,7 +498,11 @@ async def update_credentials(
     db: AsyncSession = Depends(get_async_db),
     _admin: AdminUser = Depends(get_current_admin),
 ):
-    """Изменение логина и/или пароля организации."""
+    """Изменение логина и/или пароля администратора организации.
+
+    Меняются и учётные данные организации, и связанного сотрудника-администратора
+    (вход в систему выполняется под сотрудниками).
+    """
     result = await db.execute(select(Organization).where(Organization.id == org_id))
     org = result.scalar_one_or_none()
     if not org:
@@ -272,15 +514,29 @@ async def update_credentials(
     if not new_login:
         raise HTTPException(status_code=400, detail="Логин не может быть пустым")
 
-    if new_login != org.login:
+    old_login = org.login
+
+    if new_login != old_login:
         existing = await db.execute(select(Organization).where(Organization.login == new_login))
         if existing.scalar_one_or_none():
             raise HTTPException(status_code=400, detail="Организация с таким логином уже существует")
+        if await _login_taken_by_employee(db, new_login):
+            raise HTTPException(status_code=400, detail="Сотрудник с таким логином уже существует")
         org.login = new_login
 
     if new_password:
         if len(new_password) < 4:
             raise HTTPException(status_code=400, detail="Пароль должен быть не менее 4 символов")
+
+    admin_employee = await _find_org_admin_employee(db, org)
+    if admin_employee:
+        admin_employee.login = new_login
+        if new_password:
+            admin_employee.hashed_password = get_password_hash(new_password)
+        db.add(admin_employee)
+
+    # Учётные данные самой организации держим в актуальном состоянии
+    if new_password:
         org.hashed_password = get_password_hash(new_password)
 
     await db.commit()
@@ -291,6 +547,7 @@ async def update_credentials(
         "name": org.name,
         "login": org.login,
         "message": "Учётные данные обновлены",
+        "admin_synced": admin_employee is not None,
     }
 
 
@@ -425,15 +682,19 @@ async def get_org_documents(
         raise HTTPException(status_code=404, detail="Организация не найдена")
 
     query = select(Document).where(Document.owner_org_id == org_id)
-    if search:
-        query = query.where(Document.name.ilike(f"%{search}%"))
+    search_condition = build_smart_search(
+        [Document.name, Document.registration_number, Document.signer],
+        search,
+    ) if search else None
+    if search_condition is not None:
+        query = query.where(search_condition)
     if folder:
         query = query.where(Document.folder == folder)
     query = query.order_by(Document.created_at.desc())
 
     count_query = select(func.count()).select_from(Document).where(Document.owner_org_id == org_id)
-    if search:
-        count_query = count_query.where(Document.name.ilike(f"%{search}%"))
+    if search_condition is not None:
+        count_query = count_query.where(search_condition)
     if folder:
         count_query = count_query.where(Document.folder == folder)
 

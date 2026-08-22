@@ -28,6 +28,11 @@ import {
   DialogTitle,
   DialogContent,
   DialogActions,
+  Divider,
+  FormControl,
+  InputLabel,
+  Select,
+  MenuItem,
 } from '@mui/material';
 import { styled } from '@mui/material/styles';
 import {
@@ -50,6 +55,9 @@ import {
   Archive as ArchiveIcon,
   Verified as VerifiedIcon,
   Image as ImageIcon,
+  Forum as ForumIcon,
+  AttachFile as AttachFileIcon,
+  History as HistoryIcon,
 } from '@mui/icons-material';
 
 // ===================== API =====================
@@ -169,6 +177,31 @@ const adminApi = {
       throw new Error(err.detail || 'Ошибка удаления');
     }
     return r.json();
+  },
+
+  // ===== ОБРАЩЕНИЯ (просмотр всех) =====
+  getAppeals: async (params: { page?: number; size?: number; status?: string; org_id?: number; search?: string; overdue?: boolean }) => {
+    const q = new URLSearchParams();
+    q.set('page', String(params.page ?? 1));
+    q.set('size', String(params.size ?? 20));
+    if (params.status) q.set('status', params.status);
+    if (params.org_id) q.set('org_id', String(params.org_id));
+    if (params.search) q.set('search', params.search);
+    if (params.overdue) q.set('overdue', 'true');
+    const r = await fetch(`${API_BASE}/api/admin/appeals?${q}`, { headers: adminApi.getHeaders() });
+    if (!r.ok) throw new Error('Ошибка загрузки обращений');
+    return r.json();
+  },
+
+  getAppealCard: async (uuid: string) => {
+    const r = await fetch(`${API_BASE}/api/admin/appeals/${uuid}`, { headers: adminApi.getHeaders() });
+    if (!r.ok) throw new Error('Ошибка загрузки обращения');
+    return r.json();
+  },
+
+  downloadAppealAttachment: (attachmentId: number) => {
+    const token = localStorage.getItem('admin_access_token') || '';
+    return `${API_BASE}/api/admin/appeals/attachments/${attachmentId}/download?token=${token}`;
   },
 
   // ===== СКАЧИВАНИЕ ДОКУМЕНТОВ (АДМИН) =====
@@ -386,6 +419,18 @@ const AdminPage: React.FC = () => {
   const [stampUploading, setStampUploading] = useState(false);
   const [stampDeleteDialog, setStampDeleteDialog] = useState<number | null>(null);
 
+  // Обращения (просмотр всех организаций)
+  const [appeals, setAppeals] = useState<any[]>([]);
+  const [appealsTotal, setAppealsTotal] = useState(0);
+  const [appealsPage, setAppealsPage] = useState(1);
+  const [appealsStatus, setAppealsStatus] = useState('');
+  const [appealsOrgId, setAppealsOrgId] = useState<number | ''>('');
+  const [appealsSearch, setAppealsSearch] = useState('');
+  const [debouncedAppealsSearch, setDebouncedAppealsSearch] = useState('');
+  const [appealsLoading, setAppealsLoading] = useState(false);
+  const [appealCard, setAppealCard] = useState<any | null>(null);
+  const [appealCardOpen, setAppealCardOpen] = useState(false);
+
   // Modals
   const [createOrgModal, setCreateOrgModal] = useState(false);
   const [editCredsModal, setEditCredsModal] = useState(false);
@@ -430,10 +475,49 @@ const AdminPage: React.FC = () => {
 
   useEffect(() => { loadOrgs(); }, [loadOrgs]);
 
+  // ===================== APPEALS (просмотр) =====================
+
+  const loadAppeals = useCallback(async () => {
+    setAppealsLoading(true);
+    try {
+      const data = await adminApi.getAppeals({
+        page: appealsPage,
+        size: 20,
+        status: appealsStatus || undefined,
+        org_id: appealsOrgId || undefined,
+        search: debouncedAppealsSearch || undefined,
+      });
+      setAppeals(data.items || []);
+      setAppealsTotal(data.total || 0);
+    } catch (err: any) {
+      setError(err.message);
+    } finally {
+      setAppealsLoading(false);
+    }
+  }, [appealsPage, appealsStatus, appealsOrgId, debouncedAppealsSearch]);
+
+  useEffect(() => {
+    if (tab === 4) loadAppeals();
+  }, [tab, loadAppeals]);
+
+  useEffect(() => {
+    const t = setTimeout(() => { setDebouncedAppealsSearch(appealsSearch); setAppealsPage(1); }, 400);
+    return () => clearTimeout(t);
+  }, [appealsSearch]);
+
+  const openAppealCard = async (uuid: string) => {
+    try {
+      setAppealCard(await adminApi.getAppealCard(uuid));
+      setAppealCardOpen(true);
+    } catch (err: any) {
+      setError(err.message);
+    }
+  };
+
   const handleCreateOrg = async () => {
     try {
-      await adminApi.createOrganization(orgForm);
-      setSuccess('Организация создана');
+      const res = await adminApi.createOrganization(orgForm);
+      setSuccess(res.message || 'Организация создана');
       setCreateOrgModal(false);
       resetOrgForm();
       await loadOrgs();
@@ -739,6 +823,7 @@ const AdminPage: React.FC = () => {
               <Tab icon={<ExtensionIcon fontSize="small" />} label="Лицензии" />
               <Tab icon={<DescriptionIcon fontSize="small" />} label="Документы" disabled={!selectedOrg} />
               <Tab icon={<ImageIcon fontSize="small" />} label="Штампы" />
+              <Tab icon={<ForumIcon fontSize="small" />} label="Обращения" />
             </Tabs>
 
             {/* TAB: Организации */}
@@ -1105,6 +1190,148 @@ const AdminPage: React.FC = () => {
                 )}
               </Box>
             )}
+
+            {/* TAB: Обращения (все организации, только просмотр) */}
+            {tab === 4 && (
+              <Box sx={{ p: 3 }}>
+                <ToolbarContainer>
+                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap', flex: 1 }}>
+                    <TextField
+                      placeholder="Поиск по номеру, ФИО или тексту"
+                      size="small"
+                      value={appealsSearch}
+                      onChange={(e) => { setAppealsSearch(e.target.value); setAppealsPage(1); }}
+                      slotProps={{
+                        input: {
+                          startAdornment: <InputAdornment position="start"><SearchIcon sx={{ color: '#b0b3c3' }} /></InputAdornment>,
+                        },
+                      }}
+                      sx={{ flex: '1 1 260px', '& .MuiOutlinedInput-root': { borderRadius: '8px' } }}
+                    />
+                    <FormControl size="small" sx={{ minWidth: 190 }}>
+                      <InputLabel>Организация</InputLabel>
+                      <Select
+                        value={appealsOrgId}
+                        label="Организация"
+                        onChange={(e) => { setAppealsOrgId(e.target.value as number | ''); setAppealsPage(1); }}
+                        sx={{ borderRadius: '8px' }}
+                      >
+                        <MenuItem value=""><em>Все организации</em></MenuItem>
+                        {orgs.map((o) => (
+                          <MenuItem key={o.id} value={o.id}>{o.name}</MenuItem>
+                        ))}
+                      </Select>
+                    </FormControl>
+                    <FormControl size="small" sx={{ minWidth: 170 }}>
+                      <InputLabel>Статус</InputLabel>
+                      <Select
+                        value={appealsStatus}
+                        label="Статус"
+                        onChange={(e) => { setAppealsStatus(e.target.value); setAppealsPage(1); }}
+                        sx={{ borderRadius: '8px' }}
+                      >
+                        <MenuItem value=""><em>Все статусы</em></MenuItem>
+                        <MenuItem value="new">Новые</MenuItem>
+                        <MenuItem value="registered">Зарегистрированные</MenuItem>
+                        <MenuItem value="on_execution">На исполнении</MenuItem>
+                        <MenuItem value="answered">Ответ направлен</MenuItem>
+                        <MenuItem value="redirected">Перенаправленные</MenuItem>
+                      </Select>
+                    </FormControl>
+                    <Tooltip title="Обновить">
+                      <IconButton size="small" onClick={loadAppeals}><RefreshIcon fontSize="small" /></IconButton>
+                    </Tooltip>
+                  </Box>
+                </ToolbarContainer>
+
+                {appealsLoading && appeals.length === 0 ? (
+                  <Box sx={{ display: 'flex', justifyContent: 'center', py: 6 }}><CircularProgress /></Box>
+                ) : appeals.length === 0 ? (
+                  <Typography sx={{ fontFamily: 'Lato', fontSize: 14, color: '#87879b', textAlign: 'center', py: 6 }}>
+                    Обращений нет
+                  </Typography>
+                ) : (
+                  <>
+                    <TableContainer component={Paper} variant="outlined" sx={{ borderRadius: '8px' }}>
+                      <Table size="small">
+                        <TableHead>
+                          <TableRow>
+                            <TableCell>Номер</TableCell>
+                            <TableCell>Организация-адресат</TableCell>
+                            <TableCell>Заявитель</TableCell>
+                            <TableCell>Тема</TableCell>
+                            <TableCell>Содержание</TableCell>
+                            <TableCell>Статус / Срок</TableCell>
+                            <TableCell align="center">Вложения</TableCell>
+                            <TableCell>Поступил</TableCell>
+                          </TableRow>
+                        </TableHead>
+                        <TableBody>
+                          {appeals.map((a: any) => (
+                            <TableRow key={a.uuid} hover onClick={() => openAppealCard(a.uuid)}
+                              sx={{ cursor: 'pointer', '&:hover': { bgcolor: '#f9fafe' } }}>
+                              <TableCell>
+                                <Typography sx={{ fontFamily: 'Lato', fontSize: 13, fontWeight: 600 }}>№ {a.system_number}</Typography>
+                                {a.reg_number && (
+                                  <Typography sx={{ fontFamily: 'Lato', fontSize: 11, color: '#87879b' }}>рег. № {a.reg_number}</Typography>
+                                )}
+                              </TableCell>
+                              <TableCell sx={{ fontFamily: 'Lato', fontSize: 12, maxWidth: 200 }}>{a.org_name}</TableCell>
+                              <TableCell>
+                                <Typography sx={{ fontFamily: 'Lato', fontSize: 12.5 }}>
+                                  {a.applicant_name}
+                                  {a.applicant_type === 'organization' && ' (орг.)'}
+                                </Typography>
+                                <Typography sx={{ fontFamily: 'Lato', fontSize: 11, color: '#87879b' }}>{a.email}</Typography>
+                              </TableCell>
+                              <TableCell sx={{ fontFamily: 'Lato', fontSize: 12.5 }}>
+                                {a.kind === 'complaint' ? 'Жалоба' : a.kind === 'suggestion' ? 'Предложение' : 'Заявление'}
+                              </TableCell>
+                              <TableCell sx={{ maxWidth: 240 }}>
+                                <Typography sx={{ fontFamily: 'Lato', fontSize: 12, color: '#5a5a72', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                  {a.content_preview}…
+                                </Typography>
+                              </TableCell>
+                              <TableCell>
+                                <Chip size="small" sx={{ height: 22, fontSize: 11, fontFamily: 'Lato',
+                                  bgcolor: a.status === 'answered' ? '#e8f5e9' : a.status === 'redirected' ? '#eceff1'
+                                    : a.status === 'on_execution' ? '#ede7f6' : a.status === 'registered' ? '#e3f2fd' : '#fff3e0',
+                                  color: a.status === 'answered' ? '#2e7d32' : a.status === 'redirected' ? '#546e7a'
+                                    : a.status === 'on_execution' ? '#4527a0' : a.status === 'registered' ? '#0d47a1' : '#e65100',
+                                }} label={
+                                  a.status === 'new' ? 'Новое' : a.status === 'registered' ? 'Зарегистрировано'
+                                    : a.status === 'on_execution' ? 'На исполнении' : a.status === 'answered' ? 'Ответ направлен' : 'Перенаправлено'
+                                } />
+                                {a.deadline && !['answered', 'redirected'].includes(a.status) && (
+                                  <Typography sx={{ fontFamily: 'Lato', fontSize: 11, mt: 0.25,
+                                    color: a.overdue ? '#c62828' : (a.days_left ?? 99) <= 3 ? '#e65100' : '#2e7d32', fontWeight: 600 }}>
+                                    {a.overdue ? 'Просрочено' : `${a.days_left} дн.`}
+                                  </Typography>
+                                )}
+                              </TableCell>
+                              <TableCell align="center">
+                                {a.has_attachments ? (
+                                  <AttachFileIcon fontSize="small" sx={{ color: '#4c6ef5' }} />
+                                ) : <span style={{ color: '#d6d6df' }}>—</span>}
+                              </TableCell>
+                              <TableCell sx={{ fontFamily: 'Lato', fontSize: 12, color: '#5a5a72' }}>
+                                {new Date(a.created_at).toLocaleDateString('ru-RU')}
+                              </TableCell>
+                            </TableRow>
+                          ))}
+                        </TableBody>
+                      </Table>
+                    </TableContainer>
+                    {appealsTotal > 20 && (
+                      <Box sx={{ display: 'flex', justifyContent: 'center', mt: 2 }}>
+                        <Pagination count={Math.ceil(appealsTotal / 20)} page={appealsPage}
+                          onChange={(_, v) => setAppealsPage(v)} color="primary" shape="rounded" />
+                      </Box>
+                    )}
+                  </>
+                )}
+              </Box>
+            )}
           </Paper>
         </>
       )}
@@ -1119,8 +1346,9 @@ const AdminPage: React.FC = () => {
             </ModalHeader>
             <ModalBody>
               <StyledTextField fullWidth label="Название *" value={orgForm.name} onChange={(e) => setOrgForm(p => ({ ...p, name: e.target.value }))} />
-              <StyledTextField fullWidth label="Логин *" value={orgForm.login} onChange={(e) => setOrgForm(p => ({ ...p, login: e.target.value }))} />
-              <StyledTextField fullWidth label="Пароль *" type="password" value={orgForm.password} onChange={(e) => setOrgForm(p => ({ ...p, password: e.target.value }))} />
+              <StyledTextField fullWidth label="Логин администратора *" value={orgForm.login} onChange={(e) => setOrgForm(p => ({ ...p, login: e.target.value }))}
+                helperText="Логин и пароль будут выданы администратору организации для входа в систему" />
+              <StyledTextField fullWidth label="Пароль администратора *" type="password" value={orgForm.password} onChange={(e) => setOrgForm(p => ({ ...p, password: e.target.value }))} />
               <TwoCol>
                 <HalfCol><StyledTextField fullWidth label="ИНН" value={orgForm.inn} onChange={(e) => setOrgForm(p => ({ ...p, inn: e.target.value }))} /></HalfCol>
                 <HalfCol><StyledTextField fullWidth label="КПП" value={orgForm.kpp} onChange={(e) => setOrgForm(p => ({ ...p, kpp: e.target.value }))} /></HalfCol>
@@ -1183,7 +1411,10 @@ const AdminPage: React.FC = () => {
               <Typography sx={{ fontFamily: 'Lato', fontSize: 14, color: '#87879b', mb: 2 }}>
                 Организация: <strong>{selectedOrg?.name}</strong>
               </Typography>
-              <StyledTextField fullWidth label="Логин *" value={credsForm.login} onChange={(e) => setCredsForm(p => ({ ...p, login: e.target.value }))} />
+              <Typography sx={{ fontFamily: 'Lato', fontSize: 13, color: '#87879b', mb: 2 }}>
+                Изменения применяются к учётной записи администратора организации, под которой выполняется вход в систему.
+              </Typography>
+              <StyledTextField fullWidth label="Логин администратора *" value={credsForm.login} onChange={(e) => setCredsForm(p => ({ ...p, login: e.target.value }))} />
               <StyledTextField fullWidth label="Новый пароль" type="password" value={credsForm.password} onChange={(e) => setCredsForm(p => ({ ...p, password: e.target.value }))}
                 helperText={credsForm.password ? 'Оставьте пустым, если не хотите менять пароль' : ''} />
             </ModalBody>
@@ -1192,6 +1423,150 @@ const AdminPage: React.FC = () => {
               <SaveButton onClick={handleUpdateCredentials} disabled={!credsForm.login.trim()}>Сохранить</SaveButton>
             </ModalFooter>
           </StyledModalContainer>
+        </Fade>
+      </Modal>
+
+      {/* ===================== МОДАЛКА: Просмотр обращения ===================== */}
+      <Modal open={appealCardOpen} onClose={() => setAppealCardOpen(false)} closeAfterTransition>
+        <Fade in={appealCardOpen}>
+          <Paper elevation={8} sx={{
+            position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)',
+            width: '92%', maxWidth: '900px', maxHeight: '88vh', borderRadius: '16px',
+            display: 'flex', flexDirection: 'column', overflow: 'hidden',
+          }}>
+            <Box sx={{ p: '16px 26px', borderBottom: '1px solid #eaebf0', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <Typography sx={{ fontFamily: 'Lato', fontWeight: 700, fontSize: 17, color: '#101025' }}>
+                {appealCard
+                  ? `${appealCard.applicant_type === 'organization' ? 'Обращение организации' : 'Обращение физлица'} № ${appealCard.reg_number || appealCard.system_number}`
+                  : 'Загрузка…'}
+              </Typography>
+              <IconButton onClick={() => setAppealCardOpen(false)} size="small" sx={{ color: '#87879b' }}>✕</IconButton>
+            </Box>
+
+            {!appealCard ? (
+              <Box sx={{ py: 10, textAlign: 'center' }}><CircularProgress /></Box>
+            ) : (
+              <Box sx={{ overflowY: 'auto', p: 3 }}>
+                {/* Реквизиты */}
+                <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: 2 }}>
+                  {[
+                    ['Системный номер', appealCard.system_number],
+                    ['Регистрационный номер', appealCard.reg_number || 'Не зарегистрировано'],
+                    ['Организация-адресат', appealCard.org_name],
+                    ['Дата поступления', new Date(appealCard.created_at).toLocaleDateString('ru-RU')],
+                    ['Статус', appealCard.status === 'new' ? 'Новое' : appealCard.status === 'registered' ? 'Зарегистрировано'
+                      : appealCard.status === 'on_execution' ? 'На исполнении' : appealCard.status === 'answered' ? 'Ответ направлен' : 'Перенаправлено'],
+                    ['Тема', appealCard.kind === 'complaint' ? 'Жалоба' : appealCard.kind === 'suggestion' ? 'Предложение' : 'Заявление'],
+                    ...(appealCard.is_redirected_in ? [['Кратность поступления', `Перенаправлено из «${appealCard.redirect_from_org_name}»`]] : []),
+                  ].map(([label, value]: any) => (
+                    <Box key={label as string}>
+                      <Typography sx={{ fontFamily: 'Lato', fontSize: 11, color: '#87879b' }}>{label}</Typography>
+                      <Typography sx={{ fontFamily: 'Lato', fontSize: 13.5, fontWeight: 600, color: '#101025', wordBreak: 'break-word' }}>
+                        {value as string}
+                      </Typography>
+                    </Box>
+                  ))}
+                </Box>
+
+                <Divider sx={{ my: 2.5 }} />
+
+                <Typography sx={{ fontFamily: 'Lato', fontSize: 12, color: '#87879b' }}>Содержание обращения</Typography>
+                <Paper variant="outlined" sx={{ p: 1.5, mt: 0.5, borderRadius: '8px', bgcolor: '#fafafa', maxHeight: 180, overflowY: 'auto' }}>
+                  <Typography sx={{ fontFamily: 'Lato', fontSize: 13.5, lineHeight: 1.6, whiteSpace: 'pre-line', color: '#3a3a52' }}>
+                    {appealCard.content}
+                  </Typography>
+                </Paper>
+
+                <Divider sx={{ my: 2.5 }} />
+
+                {/* Заявитель */}
+                <Typography sx={{ fontFamily: 'Lato', fontSize: 12, color: '#87879b', mb: 1 }}>
+                  Заявитель{appealCard.applicant_type === 'organization' && appealCard.org_full_name ? ` — ${appealCard.org_full_name}` : ''}
+                </Typography>
+                <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: 2 }}>
+                  {[
+                    ['ФИО', [appealCard.applicant_name, appealCard.middle_name].filter(Boolean).join(' ')],
+                    ['Эл. почта', appealCard.email],
+                    ['Телефон', appealCard.phone || '—'],
+                    ...(appealCard.applicant_type === 'organization' ? [
+                      ['ФИО руководителя', appealCard.org_director || '—'],
+                      ['Организация (кратко)', appealCard.org_short_name || '—'],
+                    ] : []),
+                  ].map(([label, value]: any) => (
+                    <Box key={label}>
+                      <Typography sx={{ fontFamily: 'Lato', fontSize: 11, color: '#87879b' }}>{label}</Typography>
+                      <Typography sx={{ fontFamily: 'Lato', fontSize: 13.5, fontWeight: 600, color: '#101025', wordBreak: 'break-word' }}>
+                        {value}
+                      </Typography>
+                    </Box>
+                  ))}
+                </Box>
+
+                {appealCard.internal_comment && (
+                  <>
+                    <Divider sx={{ my: 2.5 }} />
+                    <Alert severity="info" sx={{ borderRadius: '8px', fontFamily: 'Lato', fontSize: 13 }}>
+                      Внутренний комментарий: {appealCard.internal_comment}
+                    </Alert>
+                  </>
+                )}
+
+                {appealCard.reply_text && (
+                  <>
+                    <Divider sx={{ my: 2.5 }} />
+                    <Typography sx={{ fontFamily: 'Lato', fontSize: 12, color: '#87879b' }}>Направленный ответ</Typography>
+                    <Paper variant="outlined" sx={{ p: 1.5, mt: 0.5, borderRadius: '8px', bgcolor: '#f1f8e9', maxHeight: 160, overflowY: 'auto' }}>
+                      <Typography sx={{ fontFamily: 'Lato', fontSize: 13.5, whiteSpace: 'pre-line' }}>{appealCard.reply_text}</Typography>
+                    </Paper>
+                  </>
+                )}
+
+                <Divider sx={{ my: 2.5 }} />
+
+                {/* Вложения */}
+                <Typography sx={{ fontFamily: 'Lato', fontSize: 12, color: '#87879b', mb: 1 }}>
+                  Вложения ({appealCard.attachments.length})
+                </Typography>
+                {appealCard.attachments.length > 0 && (
+                  <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1, mb: 2.5 }}>
+                    {appealCard.attachments.map((at: any) => (
+                      <Paper key={at.id} variant="outlined" sx={{ p: 1.25, px: 2, borderRadius: '8px', display: 'flex', alignItems: 'center', gap: 2 }}>
+                        <DescriptionIcon sx={{ color: '#e53935' }} />
+                        <Box sx={{ flex: 1 }}>
+                          <Typography sx={{ fontFamily: 'Lato', fontSize: 13.5, wordBreak: 'break-all' }}>{at.file_name}</Typography>
+                          <Typography sx={{ fontFamily: 'Lato', fontSize: 11.5, color: '#87879b' }}>
+                            {(at.file_size / 1024).toFixed(1)} КБ
+                          </Typography>
+                        </Box>
+                        <IconButton size="small" onClick={() => window.open(adminApi.downloadAppealAttachment(at.id), '_blank')} sx={{ color: '#4c6ef5' }}>
+                          <DownloadIcon />
+                        </IconButton>
+                      </Paper>
+                    ))}
+                  </Box>
+                )}
+
+                {/* Журнал */}
+                <Typography sx={{ fontFamily: 'Lato', fontSize: 12, color: '#87879b', mb: 1 }}>
+                  История ({appealCard.history.length})
+                </Typography>
+                <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.25 }}>
+                  {appealCard.history.map((h: any) => (
+                    <Box key={h.id} sx={{ display: 'flex', gap: 1.5 }}>
+                      <Box sx={{ width: 8, height: 8, borderRadius: '50%', bgcolor: '#4c6ef5', mt: '6px', flexShrink: 0 }} />
+                      <Box>
+                        <Typography sx={{ fontFamily: 'Lato', fontSize: 13 }}>{h.action}</Typography>
+                        <Typography sx={{ fontFamily: 'Lato', fontSize: 12, color: '#87879b' }}>
+                          {h.employee_name} · {new Date(h.created_at).toLocaleString('ru-RU')}
+                          {h.comment ? ` · ${h.comment}` : ''}
+                        </Typography>
+                      </Box>
+                    </Box>
+                  ))}
+                </Box>
+              </Box>
+            )}
+          </Paper>
         </Fade>
       </Modal>
 

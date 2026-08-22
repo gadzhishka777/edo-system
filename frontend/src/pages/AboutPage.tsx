@@ -101,7 +101,7 @@ const StyledLink = styled(Link)({
   },
 });
 
-const LicenseChip = styled(Chip)<{ valid: boolean }>(({ valid }) => ({
+const LicenseChip = styled(Chip, { shouldForwardProp: (prop) => prop !== 'valid' })<{ valid: boolean }>(({ valid }) => ({
   borderRadius: '6px',
   fontWeight: 600,
   fontSize: '12px',
@@ -242,7 +242,17 @@ const AboutPage: React.FC = () => {
   const [licenseKey, setLicenseKey] = useState('');
   const [toastOpen, setToastOpen] = useState(false);
   const [toastMessage, setToastMessage] = useState('');
-  
+
+  // Активировать лицензию может только администратор организации
+  const isOrgAdmin = React.useMemo(() => {
+    try {
+      const roles: string[] = JSON.parse(localStorage.getItem('employee_roles') || '[]');
+      return roles.includes('org_admin');
+    } catch {
+      return false;
+    }
+  }, []);
+
   // Состояния для данных из БД
   const [orgInfo, setOrgInfo] = useState<OrgInfo | null>(null);
   const [licenseInfo, setLicenseInfo] = useState<LicenseInfo | null>(null);
@@ -482,7 +492,7 @@ const AboutPage: React.FC = () => {
             </InfoRow>
             <InfoRow>
               <InfoLabel>Версия</InfoLabel>
-              <InfoValue>0.2</InfoValue>
+              <InfoValue>0.4</InfoValue>
             </InfoRow>
             <InfoRow>
               <InfoLabel>Статус лицензии</InfoLabel>
@@ -500,15 +510,17 @@ const AboutPage: React.FC = () => {
                 <Typography sx={{ fontFamily: 'Lato, sans-serif', fontSize: '14px', color: '#101025' }}>
                   {licenseInfo?.license_key ? maskLicenseKey(licenseInfo.license_key) : '—'}
                 </Typography>
-                <Tooltip title="Активировать лицензию">
-                  <IconButton
-                    size="small"
-                    sx={{ color: '#4c6ef5' }}
-                    onClick={handleOpenLicenseModal}
-                  >
-                    <VpnKeyIcon fontSize="small" />
-                  </IconButton>
-                </Tooltip>
+                {isOrgAdmin && (
+                  <Tooltip title="Активировать лицензию">
+                    <IconButton
+                      size="small"
+                      sx={{ color: '#4c6ef5' }}
+                      onClick={handleOpenLicenseModal}
+                    >
+                      <VpnKeyIcon fontSize="small" />
+                    </IconButton>
+                  </Tooltip>
+                )}
               </Box>
             </InfoRow>
           </Box>

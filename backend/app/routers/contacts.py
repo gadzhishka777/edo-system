@@ -16,6 +16,7 @@ from app.models.pydantic import (
     ContactPaginatedResponse,
 )
 from app.core.dependencies import get_current_org
+from app.utils.search import build_smart_search
 
 router = APIRouter(prefix="/contacts", tags=["contacts"])
 
@@ -33,13 +34,16 @@ async def get_contacts(
     count_query = select(func.count()).select_from(Contact).where(Contact.org_id == org.id)
 
     if search:
-        search_filter = or_(
-            Contact.last_name.ilike(f"%{search}%"),
-            Contact.first_name.ilike(f"%{search}%"),
-            Contact.middle_name.ilike(f"%{search}%"),
-            Contact.organization.ilike(f"%{search}%"),
-            Contact.email.ilike(f"%{search}%"),
-            Contact.mobile_phone.ilike(f"%{search}%"),
+        search_filter = build_smart_search(
+            [
+                Contact.last_name,
+                Contact.first_name,
+                Contact.middle_name,
+                Contact.organization,
+                Contact.email,
+                Contact.mobile_phone,
+            ],
+            search,
         )
         query = query.where(search_filter)
         count_query = count_query.where(search_filter)

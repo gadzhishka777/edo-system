@@ -1,8 +1,10 @@
-# backend/app/models/__init__.py
+﻿# backend/app/models/__init__.py
 from app.models.base import Base
 from app.models.document import Document, DocumentStatus, SignatureType, FolderType, StampMapping, CustomFolder
+from app.models.employee import Employee, EmployeeRoleEnum, DocumentReview
 from app.models.user import User, AdminUser
 from app.models.mail import MailMessage, MailDirection, MailStatus, Organization, Contact, License
+from app.models.appeal import Appeal, AppealAttachment, AppealStatusHistory, AppealDocumentLink, AppealKind, AppealApplicantType, AppealStatus
 from app.models.pydantic import (
     DocumentCreate,
     DocumentUpdate,
@@ -25,9 +27,22 @@ from app.models.pydantic import (
     MailMessageResponse,
     MailPaginatedResponse,
     OrganizationResponse,
+    EmployeeCreate,
+    EmployeeUpdate,
+    EmployeeResponse,
+    EmployeeLoginResponse,
+    EmployeeRoleInfo,
+    ProfileCompleteRequest,
 )
 
 __all__ = [
+    "Appeal",
+    "AppealAttachment",
+    "AppealStatusHistory",
+    "AppealDocumentLink",
+    "AppealKind",
+    "AppealApplicantType",
+    "AppealStatus",
     "Base",
     "Document",
     "DocumentStatus",
@@ -35,6 +50,9 @@ __all__ = [
     "FolderType",
     "StampMapping",
     "CustomFolder",
+    "Employee",
+    "EmployeeRoleEnum",
+    "DocumentReview",
     "User",
     "AdminUser",
     "MailMessage",
@@ -64,4 +82,10 @@ __all__ = [
     "MailMessageResponse",
     "MailPaginatedResponse",
     "OrganizationResponse",
+    "EmployeeCreate",
+    "EmployeeUpdate",
+    "EmployeeResponse",
+    "EmployeeLoginResponse",
+    "EmployeeRoleInfo",
+    "ProfileCompleteRequest",
 ]

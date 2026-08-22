@@ -4,6 +4,7 @@ from typing import Optional, List, Dict, Any, Union
 from enum import Enum
 
 from app.models.document import SignatureType, DocumentStatus, FolderType
+from app.models.employee import EmployeeRoleEnum
 
 # ===== Пользователь =====
 class UserBase(BaseModel):
@@ -33,6 +34,8 @@ class DocumentBase(BaseModel):
     signer_inn: Optional[str] = None
     executor: Optional[str] = None
     signature_type: SignatureType = SignatureType.NONE  # ✅ Автоматически включает HAND
+    signer_employee_id: Optional[int] = None
+    executor_employee_id: Optional[int] = None
 
 class DocumentCreate(DocumentBase):
     pass
@@ -48,6 +51,9 @@ class DocumentUpdate(BaseModel):
     executor: Optional[str] = None
     created_at: Optional[datetime] = None
     custom_folder_id: Optional[int] = None
+    signer_employee_id: Optional[int] = None
+    executor_employee_id: Optional[int] = None
+    metadata_outdated: Optional[bool] = None
 
 
 class VisualizeRequest(BaseModel):
@@ -94,6 +100,15 @@ class DocumentResponse(BaseModel):
     signed_copy_url: Optional[str] = None
     owner_org_id: Optional[int] = None
     custom_folder_id: Optional[int] = None
+    metadata_outdated: bool = False
+    created_by_employee_id: Optional[int] = None
+    signed_by_employee_id: Optional[int] = None
+    signer_employee_id: Optional[int] = None
+    executor_employee_id: Optional[int] = None
+    created_by_employee_name: Optional[str] = None
+    signed_by_employee_name: Optional[str] = None
+    signer_employee_name: Optional[str] = None
+    executor_employee_name: Optional[str] = None
     
     class Config:
         from_attributes = True
@@ -308,3 +323,105 @@ class MailPaginatedResponse(BaseModel):
     page: int
     size: int
     pages: int
+
+
+# ===== Роли сотрудников =====
+
+class EmployeeRoleInfo(BaseModel):
+    """Информация о роли сотрудника."""
+    value: str
+    label: str
+    category: str  # "basic", "clerk", "manager", "admin"
+
+    class Config:
+        from_attributes = True
+
+
+class EmployeeRoleListResponse(BaseModel):
+    """Список всех доступных ролей с группировкой."""
+    roles: List[EmployeeRoleInfo]
+
+
+# ===== Сотрудник =====
+
+class EmployeeBase(BaseModel):
+    last_name: str
+    first_name: str
+    middle_name: Optional[str] = None
+    position: Optional[str] = None
+    department: Optional[str] = None
+    roles: Optional[List[str]] = None
+    phone: Optional[str] = None
+    email: Optional[str] = None
+    birthday: Optional[datetime] = None
+    notes: Optional[str] = None
+
+
+class EmployeeCreate(EmployeeBase):
+    login: Optional[str] = None  # если не задан — сгенерируется автоматически
+    password: Optional[str] = None  # если не задан — сгенерируется автоматически
+
+
+class EmployeeUpdate(BaseModel):
+    last_name: Optional[str] = None
+    first_name: Optional[str] = None
+    middle_name: Optional[str] = None
+    position: Optional[str] = None
+    department: Optional[str] = None
+    roles: Optional[List[str]] = None
+    phone: Optional[str] = None
+    email: Optional[str] = None
+    birthday: Optional[datetime] = None
+    notes: Optional[str] = None
+    is_active: Optional[bool] = None
+
+
+class EmployeeResponse(EmployeeBase):
+    id: int
+    uuid: str
+    org_id: int
+    login: str
+    is_active: bool
+    profile_completed: bool
+    created_at: datetime
+    updated_at: Optional[datetime] = None
+
+    class Config:
+        from_attributes = True
+
+
+class EmployeePaginatedResponse(BaseModel):
+    items: List[EmployeeResponse]
+    total: int
+    page: int
+    size: int
+    pages: int
+
+
+# ===== Вход сотрудника =====
+
+class EmployeeLoginResponse(BaseModel):
+    access_token: str
+    refresh_token: str
+    token_type: str = "bearer"
+    org_id: int
+    org_name: str
+    employee_id: int
+    employee_name: str
+    roles: List[str]
+    profile_completed: bool
+
+
+# ===== Завершение профиля =====
+
+class ProfileCompleteRequest(BaseModel):
+    last_name: str
+    first_name: str
+    middle_name: Optional[str] = None
+    position: Optional[str] = None
+    department: Optional[str] = None
+    roles: List[str]
+    phone: Optional[str] = None
+    email: Optional[str] = None
+    birthday: Optional[datetime] = None
+    notes: Optional[str] = None

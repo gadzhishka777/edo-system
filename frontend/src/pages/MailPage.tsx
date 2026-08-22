@@ -318,6 +318,7 @@ const MailPage: React.FC = () => {
   const [page, setPage] = useState(1);
   const [pageSize] = useState(20);
   const [searchQuery, setSearchQuery] = useState('');
+  const [debouncedSearch, setDebouncedSearch] = useState('');
   const [selectedMessages, setSelectedMessages] = useState<string[]>([]);
   const [folderCounts, setFolderCounts] = useState<Record<string, number>>({});
 
@@ -363,7 +364,7 @@ const MailPage: React.FC = () => {
     setLoading(true);
     setError(null);
     try {
-      const response = await getMailMessages(activeFolder, page, pageSize, searchQuery || undefined);
+      const response = await getMailMessages(activeFolder, page, pageSize, debouncedSearch || undefined);
       startTransition(() => {
         setMessages(response.items);
         setTotal(response.total);
@@ -373,7 +374,18 @@ const MailPage: React.FC = () => {
     } finally {
       setLoading(false);
     }
-  }, [activeFolder, page, pageSize, searchQuery]);
+  }, [activeFolder, page, pageSize, debouncedSearch]);
+
+  // Дебаунс поиска: запрос уходит через 400 мс после окончания ввода
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedSearch(searchQuery), 400);
+    return () => clearTimeout(t);
+  }, [searchQuery]);
+
+  // При изменении поискового запроса возвращаемся на первую страницу
+  useEffect(() => {
+    setPage(1);
+  }, [debouncedSearch]);
 
   // Загрузка счётчиков
   const loadCounts = useCallback(async () => {
