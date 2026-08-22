@@ -1,33 +1,39 @@
-﻿from pydantic import BaseModel, Field, field_validator
-from datetime import datetime as _datetime
+import logging
+from datetime import datetime
+from enum import Enum
+from typing import Optional, List, Dict, Any, Union
+
+from pydantic import BaseModel, Field, field_validator
+
+from app.models.document import SignatureType, DocumentStatus, FolderType
+from app.models.employee import EmployeeRoleEnum
 
 
 def _parse_lenient_birthday(v):
-    """РўРµСЂРїРµР»РёРІС‹Р№ РїР°СЂСЃРµСЂ РґР°С‚С‹ СЂРѕР¶РґРµРЅРёСЏ РґР»СЏ РІС…РѕРґРЅС‹С… РјРѕРґРµР»РµР№.
+    """Терпеливый парсер даты рождения для входных моделей.
 
-    РџСЂРёРЅРёРјР°РµС‚: None/'', 'Invalid Date', Р”Р”.РњРњ.Р“Р“Р“Р“, Р“Р“Р“Р“-РњРњ-Р”Р”, ISO.
-    Р’СЃС‘ РѕСЃС‚Р°Р»СЊРЅРѕРµ -> None (РІРјРµСЃС‚Рѕ РѕС€РёР±РєРё 422). Р—РЅР°С‡РµРЅРёРµ РїРёС€РµС‚СЃСЏ РІ Р»РѕРі Р±СЌРєРµРЅРґР°."""
+    Принимает: None/'', 'Invalid Date', ДД.ММ.ГГГГ, ГГГГ-ММ-ДД, ISO.
+    Всё остальное -> None (вместо ошибки 422). Значение пишется в лог бэкенда."""
     if v in (None, "", "Invalid Date"):
         return None
-    if isinstance(v, _datetime):
+    if isinstance(v, datetime):
         return v
     if isinstance(v, str):
-        import logging
         import re as _re
 
         s = v.strip()
         formats = ("%d.%m.%Y", "%Y-%m-%d", "%d.%m.%Y %H:%M:%S", "%Y-%m-%dT%H:%M:%S")
         for f in formats:
             try:
-                return _datetime.strptime(s, f)
+                return datetime.strptime(s, f)
             except ValueError:
                 continue
         try:
-            return _datetime.fromisoformat(s)
+            return datetime.fromisoformat(s)
         except ValueError:
             pass
         logging.getLogger("edo").warning(
-            "birthday: РЅРµ СѓРґР°Р»РѕСЃСЊ СЂР°СЃРїРѕР·РЅР°С‚СЊ РґР°С‚Сѓ %r вЂ” СЃРѕС…СЂР°РЅРµРЅРѕ РєР°Рє РїСѓСЃС‚РѕРµ Р·РЅР°С‡РµРЅРёРµ", v
+            "birthday: не удалось распознать дату %r — сохранено как пустое значение", v
         )
         return None
     return v
@@ -44,14 +50,8 @@ class LenientBirthdayMixin(BaseModel):
     @classmethod
     def _birthday_lenient(cls, v):
         return _parse_lenient_birthday(v)
-from datetime import datetime
-from typing import Optional, List, Dict, Any, Union
-from enum import Enum
 
-from app.models.document import SignatureType, DocumentStatus, FolderType
-from app.models.employee import EmployeeRoleEnum
-
-# ===== РџРѕР»СЊР·РѕРІР°С‚РµР»СЊ =====
+# ===== Пользователь =====
 class UserBase(BaseModel):
     username: str
     email: str
@@ -68,7 +68,7 @@ class UserResponse(UserBase):
     class Config:
         from_attributes = True
 
-# ===== Р”РѕРєСѓРјРµРЅС‚ =====
+# ===== Документ =====
 class DocumentBase(BaseModel):
     name: str
     type: str
@@ -78,7 +78,7 @@ class DocumentBase(BaseModel):
     signer_full_name: Optional[str] = None
     signer_inn: Optional[str] = None
     executor: Optional[str] = None
-    signature_type: SignatureType = SignatureType.NONE  # вњ… РђРІС‚РѕРјР°С‚РёС‡РµСЃРєРё РІРєР»СЋС‡Р°РµС‚ HAND
+    signature_type: SignatureType = SignatureType.NONE  # ✅ Автоматически включает HAND
     signer_employee_id: Optional[int] = None
     executor_employee_id: Optional[int] = None
 
@@ -135,7 +135,7 @@ class DocumentResponse(BaseModel):
     signature_date: Optional[datetime] = None
     original_file_name: str
     original_file_size: int
-    signature_type: SignatureType  # вњ… РђРІС‚РѕРјР°С‚РёС‡РµСЃРєРё РІРєР»СЋС‡Р°РµС‚ HAND
+    signature_type: SignatureType  # ✅ Автоматически включает HAND
     goskey_valid: Optional[bool] = None
     goskey_data: Optional[Union[Dict[str, Any], str]] = None
     status: DocumentStatus
@@ -159,33 +159,33 @@ class DocumentResponse(BaseModel):
         from_attributes = True
         arbitrary_types_allowed = True
 
-    # вњ… Р”РѕР±Р°РІР»СЏРµРј РјРµС‚РѕРґ РґР»СЏ РїРѕР»СѓС‡РµРЅРёСЏ РѕС‚РѕР±СЂР°Р¶Р°РµРјРѕРіРѕ РёРјРµРЅРё С‚РёРїР° РїРѕРґРїРёСЃРё
+    # ✅ Добавляем метод для получения отображаемого имени типа подписи
     def get_signature_display_name(self) -> str:
         mapping = {
-            SignatureType.NONE: "Р‘РµР· РїРѕРґРїРёСЃРё",
-            SignatureType.HAND: "РЎРѕР±СЃС‚РІРµРЅРЅРѕСЂСѓС‡РЅР°СЏ",
-            SignatureType.PEP: "РџР­Рџ",
-            SignatureType.UNEP: "РЈРќР­Рџ",
-            SignatureType.UKEP: "РЈРљР­Рџ",
+            SignatureType.NONE: "Без подписи",
+            SignatureType.HAND: "Собственноручная",
+            SignatureType.PEP: "ПЭП",
+            SignatureType.UNEP: "УНЭП",
+            SignatureType.UKEP: "УКЭП",
         }
-        return mapping.get(self.signature_type, "РќРµРёР·РІРµСЃС‚РЅРѕ")
+        return mapping.get(self.signature_type, "Неизвестно")
     
-    # вњ… РџСЂРѕРІРµСЂРєР°, СЏРІР»СЏРµС‚СЃСЏ Р»Рё РїРѕРґРїРёСЃСЊ СЌР»РµРєС‚СЂРѕРЅРЅРѕР№
+    # ✅ Проверка, является ли подпись электронной
     def is_electronic_signature(self) -> bool:
         return self.signature_type in [SignatureType.PEP, SignatureType.UNEP, SignatureType.UKEP]
     
-    # вњ… РџСЂРѕРІРµСЂРєР°, СЏРІР»СЏРµС‚СЃСЏ Р»Рё РїРѕРґРїРёСЃСЊ СЃРѕР±СЃС‚РІРµРЅРЅРѕСЂСѓС‡РЅРѕР№
+    # ✅ Проверка, является ли подпись собственноручной
     def is_handwritten_signature(self) -> bool:
         return self.signature_type == SignatureType.HAND
 
-# ===== РџСЂРѕРІРµСЂРєР° РїРѕРґРїРёСЃРё =====
+# ===== Проверка подписи =====
 class SignatureVerifyRequest(BaseModel):
     document_uuid: str
 
 class SignatureVerifyResponse(BaseModel):
     document_uuid: str
     signature_valid: bool
-    signature_type: SignatureType  # вњ… РђРІС‚РѕРјР°С‚РёС‡РµСЃРєРё РІРєР»СЋС‡Р°РµС‚ HAND
+    signature_type: SignatureType  # ✅ Автоматически включает HAND
     signer_name: str
     signer_inn: str
     signature_date: str
@@ -194,7 +194,7 @@ class SignatureVerifyResponse(BaseModel):
     verification_details: str
     ocsp_status: Optional[str] = None
 
-# ===== РћС‚РІРµС‚С‹ СЃ РїР°РіРёРЅР°С†РёРµР№ =====
+# ===== Ответы с пагинацией =====
 class PaginatedResponse(BaseModel):
     items: List[DocumentResponse]
     total: int
@@ -203,7 +203,7 @@ class PaginatedResponse(BaseModel):
     pages: int
 
 
-# ===== РџРѕС‡С‚Р° =====
+# ===== Почта =====
 class OrganizationResponse(BaseModel):
     id: int
     uuid: str
@@ -219,7 +219,7 @@ class OrganizationResponse(BaseModel):
         from_attributes = True
 
 
-# ===== РђСѓС‚РµРЅС‚РёС„РёРєР°С†РёСЏ =====
+# ===== Аутентификация =====
 class LoginRequest(BaseModel):
     login: str
     password: str
@@ -249,7 +249,7 @@ class OrgInfoResponse(BaseModel):
     license_max_orgs: int
 
 
-# ===== Р›РёС†РµРЅР·РёСЂРѕРІР°РЅРёРµ =====
+# ===== Лицензирование =====
 class LicenseInfo(BaseModel):
     license_key: str
     product: str
@@ -274,7 +274,7 @@ class LicenseActivateResponse(BaseModel):
     message: str = ""
 
 
-# ===== РљРѕРЅС‚Р°РєС‚С‹ =====
+# ===== Контакты =====
 class ContactCreate(LenientBirthdayMixin):
     last_name: str
     first_name: str
@@ -370,7 +370,7 @@ class MailPaginatedResponse(BaseModel):
     pages: int
 
 
-# ===== Р РѕР»Рё СЃРѕС‚СЂСѓРґРЅРёРєРѕРІ =====
+# ===== Роли сотрудников =====
 
 class EmployeeRoleInfo(BaseModel):
     """РРЅС„РѕСЂРјР°С†РёСЏ Рѕ СЂРѕР»Рё СЃРѕС‚СЂСѓРґРЅРёРєР°."""
@@ -383,11 +383,11 @@ class EmployeeRoleInfo(BaseModel):
 
 
 class EmployeeRoleListResponse(BaseModel):
-    """РЎРїРёСЃРѕРє РІСЃРµС… РґРѕСЃС‚СѓРїРЅС‹С… СЂРѕР»РµР№ СЃ РіСЂСѓРїРїРёСЂРѕРІРєРѕР№."""
+    """Список всех доступных ролей с группировкой."""
     roles: List[EmployeeRoleInfo]
 
 
-# ===== РЎРѕС‚СЂСѓРґРЅРёРє =====
+# ===== Сотрудник =====
 
 class EmployeeBase(LenientBirthdayMixin):
     last_name: str
@@ -403,8 +403,8 @@ class EmployeeBase(LenientBirthdayMixin):
 
 
 class EmployeeCreate(EmployeeBase):
-    login: Optional[str] = None  # РµСЃР»Рё РЅРµ Р·Р°РґР°РЅ вЂ” СЃРіРµРЅРµСЂРёСЂСѓРµС‚СЃСЏ Р°РІС‚РѕРјР°С‚РёС‡РµСЃРєРё
-    password: Optional[str] = None  # РµСЃР»Рё РЅРµ Р·Р°РґР°РЅ вЂ” СЃРіРµРЅРµСЂРёСЂСѓРµС‚СЃСЏ Р°РІС‚РѕРјР°С‚РёС‡РµСЃРєРё
+    login: Optional[str] = None  # если не задан — сгенерируется автоматически
+    password: Optional[str] = None  # если не задан — сгенерируется автоматически
 
 
 class EmployeeUpdate(LenientBirthdayMixin):
@@ -443,7 +443,7 @@ class EmployeePaginatedResponse(BaseModel):
     pages: int
 
 
-# ===== Р’С…РѕРґ СЃРѕС‚СЂСѓРґРЅРёРєР° =====
+# ===== Вход сотрудника =====
 
 class EmployeeLoginResponse(BaseModel):
     access_token: str
@@ -457,7 +457,7 @@ class EmployeeLoginResponse(BaseModel):
     profile_completed: bool
 
 
-# ===== Р—Р°РІРµСЂС€РµРЅРёРµ РїСЂРѕС„РёР»СЏ =====
+# ===== Завершение профиля =====
 
 class ProfileCompleteRequest(LenientBirthdayMixin):
     last_name: str
