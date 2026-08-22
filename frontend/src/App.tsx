@@ -18,6 +18,7 @@ import Footer from './components/Layout/Footer';
 import { authApi } from './api/edoApi';
 import { EventProvider } from './context/EventContext';
 import { useLicenseCheck } from './hooks/useLicenseCheck';
+import ErrorBoundary from './components/ErrorBoundary';
 
 // Компонент для проверки лицензии при загрузке приложения
 const LicenseChecker: React.FC<{ children: React.ReactNode }> = ({ children }) => {
@@ -46,8 +47,9 @@ function App() {
 
   return (
     <BrowserRouter>
-      <EventProvider>
-        <LicenseChecker>
+      <ErrorBoundary>
+        <EventProvider>
+          <LicenseChecker>
           <Box sx={{ display: 'flex', flexDirection: 'column', minHeight: '100vh' }}>
             <Routes>
               <Route path="/login" element={<LoginPage onLogin={handleLogin} />} />
@@ -85,7 +87,8 @@ function App() {
             </Routes>
           </Box>
         </LicenseChecker>
-      </EventProvider>
+        </EventProvider>
+      </ErrorBoundary>
     </BrowserRouter>
   );
 }

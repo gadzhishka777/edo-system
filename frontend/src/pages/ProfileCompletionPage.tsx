@@ -629,6 +629,7 @@ const ProfileCompletionPage: React.FC = () => {
 
                     <Box sx={{ mt: 3, display: 'flex', gap: 1.5 }}>
                       <StyledButton
+                        type="button"
                         variant="outlined"
                         onClick={handleBack}
                         disabled={index === 0}
@@ -648,6 +649,7 @@ const ProfileCompletionPage: React.FC = () => {
                         Назад
                       </StyledButton>
                       <StyledButton
+                        type="button"
                         variant="contained"
                         onClick={handleNext}
                         sx={{
