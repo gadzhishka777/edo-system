@@ -1,4 +1,4 @@
-import axios from 'axios';
+﻿import axios from 'axios';
 
 const API_BASE_URL = process.env.REACT_APP_API_URL || '';
 
@@ -34,7 +34,7 @@ function clearTokens() {
   localStorage.removeItem('employee_roles');
 }
 
-// Добавляем access token к каждому запросу
+// Р”РѕР±Р°РІР»СЏРµРј access token Рє РєР°Р¶РґРѕРјСѓ Р·Р°РїСЂРѕСЃСѓ
 apiClient.interceptors.request.use((config) => {
   const token = getAccessToken();
   if (token) {
@@ -43,7 +43,7 @@ apiClient.interceptors.request.use((config) => {
   return config;
 });
 
-// Автоматическое обновление токена при 401
+// РђРІС‚РѕРјР°С‚РёС‡РµСЃРєРѕРµ РѕР±РЅРѕРІР»РµРЅРёРµ С‚РѕРєРµРЅР° РїСЂРё 401
 let isRefreshing = false;
 let failedQueue: Array<{ resolve: (v: any) => void; reject: (e: any) => void; config: any }> = [];
 
@@ -52,7 +52,7 @@ apiClient.interceptors.response.use(
   async (error) => {
     const originalRequest = error.config;
 
-    // Если 401 и это не повторный запрос и не запрос на login/refresh
+    // Р•СЃР»Рё 401 Рё СЌС‚Рѕ РЅРµ РїРѕРІС‚РѕСЂРЅС‹Р№ Р·Р°РїСЂРѕСЃ Рё РЅРµ Р·Р°РїСЂРѕСЃ РЅР° login/refresh
     if (
       error.response?.status === 401 &&
       !originalRequest._retry &&
@@ -60,7 +60,7 @@ apiClient.interceptors.response.use(
       !originalRequest.url?.includes('/auth/refresh')
     ) {
       if (isRefreshing) {
-        // Ставим в очередь пока обновляется токен
+        // РЎС‚Р°РІРёРј РІ РѕС‡РµСЂРµРґСЊ РїРѕРєР° РѕР±РЅРѕРІР»СЏРµС‚СЃСЏ С‚РѕРєРµРЅ
         return new Promise((resolve, reject) => {
           failedQueue.push({ resolve, reject, config: originalRequest });
         });
@@ -83,7 +83,7 @@ apiClient.interceptors.response.use(
         const { access_token, refresh_token } = response.data;
         setTokens(access_token, refresh_token);
 
-        // Повторяем запросы из очереди
+        // РџРѕРІС‚РѕСЂСЏРµРј Р·Р°РїСЂРѕСЃС‹ РёР· РѕС‡РµСЂРµРґРё
         failedQueue.forEach(({ resolve, config }) => {
           config.headers.Authorization = `Bearer ${access_token}`;
           resolve(apiClient(config));
@@ -163,6 +163,30 @@ export interface ProfileCompleteRequest {
   notes?: string;
 }
 
+
+// ===== Универсальное извлечение текста ошибки из ответа API =====
+// FastAPI на 422 возвращает detail как массив объектов {loc, msg, ...} —
+// если отдать его в setState и отрендерить, React падает с error #31.
+export function getApiErrorMessage(err: any, fallback = 'Ошибка запроса'): string {
+  const data = err?.response?.data;
+  if (!data) {
+    return err?.message ? `${fallback}: ${err.message}` : fallback;
+  }
+  if (typeof data === 'string') return data;
+  const detail = data.detail ?? data;
+  if (typeof detail === 'string') return detail;
+  if (Array.isArray(detail)) {
+    const parts = detail.map((e: any) => {
+      const loc = Array.isArray(e.loc)
+        ? e.loc.filter((x: any) => x !== 'body').join('.')
+        : '';
+      return loc && !loc.includes('__root__') ? `${loc}: ${e.msg ?? ''}` : e.msg ?? '';
+    }).filter(Boolean);
+    return parts.length ? parts.join('; ') : 'Проверьте корректность заполнения полей';
+  }
+  if (detail?.message) return String(detail.message);
+  try { return JSON.stringify(data); } catch { return fallback; }
+}
 export const authApi = {
   login: async (login: string, password: string): Promise<EmployeeLoginResponse> => {
     const response = await apiClient.post('/api/auth/login', { login, password });
@@ -467,7 +491,7 @@ export const updateDocumentWithEmployees = async (
   return response.data;
 };
 
-// ===== Почта =====
+// ===== РџРѕС‡С‚Р° =====
 export interface Organization {
   id: number;
   uuid: string;
@@ -584,7 +608,7 @@ export const signAndReplyMail = async (mailUuid: string, sigFile: File): Promise
   return response.data;
 };
 
-// ===== Контакты =====
+// ===== РљРѕРЅС‚Р°РєС‚С‹ =====
 export interface Contact {
   id: number;
   uuid: string;
@@ -637,13 +661,13 @@ export const deleteContact = async (uuid: string): Promise<void> => {
   await apiClient.delete(`/api/contacts/${uuid}`);
 };
 
-// ===== Штампы (маппинг подписант → штамп) =====
+// ===== РЁС‚Р°РјРїС‹ (РјР°РїРїРёРЅРі РїРѕРґРїРёСЃР°РЅС‚ в†’ С€С‚Р°РјРї) =====
 export const getStampMapping = async (): Promise<Record<string, string>> => {
   const response = await apiClient.get(`/api/documents/stamps/mapping`);
   return response.data;
 };
 
-// ===== Кастомные папки =====
+// ===== РљР°СЃС‚РѕРјРЅС‹Рµ РїР°РїРєРё =====
 export interface CustomFolder {
   id: number;
   uuid: string;
@@ -666,7 +690,7 @@ export const deleteCustomFolder = async (uuid: string): Promise<{ message: strin
   return response.data;
 };
 
-// ===== Сотрудники =====
+// ===== РЎРѕС‚СЂСѓРґРЅРёРєРё =====
 export interface Employee {
   id: number;
   uuid: string;
@@ -751,9 +775,9 @@ export const getEmployeeRoles = async (): Promise<EmployeeRoleListResponse> => {
 };
 
 export default apiClient;
-// ===== Обращения граждан (публичные + внутренний раздел) =====
+// ===== РћР±СЂР°С‰РµРЅРёСЏ РіСЂР°Р¶РґР°РЅ (РїСѓР±Р»РёС‡РЅС‹Рµ + РІРЅСѓС‚СЂРµРЅРЅРёР№ СЂР°Р·РґРµР») =====
 
-// Клиент БЕЗ авторизации — для публичной интернет-приёмной
+// РљР»РёРµРЅС‚ Р‘Р•Р— Р°РІС‚РѕСЂРёР·Р°С†РёРё вЂ” РґР»СЏ РїСѓР±Р»РёС‡РЅРѕР№ РёРЅС‚РµСЂРЅРµС‚-РїСЂРёС‘РјРЅРѕР№
 export const publicApiClient = axios.create({
   baseURL: API_BASE_URL,
   timeout: 60000,
@@ -824,7 +848,7 @@ export interface AppealCard extends AppealListItem {
   history: AppealHistoryEntry[];
 }
 
-// ===== Публичные методы =====
+// ===== РџСѓР±Р»РёС‡РЅС‹Рµ РјРµС‚РѕРґС‹ =====
 
 export const getAppealTargets = async (): Promise<AppealTarget[]> => {
   const r = await publicApiClient.get(`/api/public/appeals/targets`);
@@ -844,7 +868,7 @@ export const checkAppealStatus = async (systemNumber: string, email: string) => 
   return r.data;
 };
 
-// ===== Внутренний раздел =====
+// ===== Р’РЅСѓС‚СЂРµРЅРЅРёР№ СЂР°Р·РґРµР» =====
 
 export interface AppealListParams {
   page?: number;
@@ -922,3 +946,4 @@ export const downloadAppealAttachment = (attachmentId: number): string => {
   const token = getAccessToken();
   return `${API_BASE_URL}/api/appeals/attachments/${attachmentId}/download${token ? `?token=${token}` : ''}`;
 };
+

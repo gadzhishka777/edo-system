@@ -3,7 +3,9 @@ import logging
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 from sqlalchemy import select, text, inspect as sqla_inspect
@@ -352,6 +354,17 @@ async def root():
 @app.get("/api/health")
 async def health_check():
     return {"status": "ok", "service": settings.APP_NAME}
+
+
+# Логируем все ошибки валидации (422): какое поле и у какого запроса не прошло
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    summary = "; ".join(
+        f"{'.'.join(str(x) for x in e.get('loc', []))}: {e.get('msg')}"
+        for e in exc.errors()
+    )
+    logger.warning("422 %s %s — %s", request.method, request.url.path, summary)
+    return JSONResponse(status_code=422, content={"detail": exc.errors()})
 
 
 logger.info("Приложение %s v%s инициализировано (docs=%s)", settings.APP_NAME, settings.APP_VERSION, settings.DOCS_ENABLED)

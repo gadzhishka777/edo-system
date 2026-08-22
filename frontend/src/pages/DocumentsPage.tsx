@@ -106,6 +106,7 @@ import {
   deleteCustomFolder,
   CustomFolder,
 } from '../api/edoApi';
+import { getApiErrorMessage } from '../api/edoApi';
 import { Document as PDFDocument, Page, pdfjs } from 'react-pdf';
 import 'react-pdf/dist/Page/TextLayer.css';
 import 'react-pdf/dist/Page/AnnotationLayer.css';
@@ -621,7 +622,7 @@ const DocumentsPage: React.FC = () => {
       
       return isValid;
     } catch (err: any) {
-      const errorMsg = err.response?.data?.detail || 'Ошибка проверки лицензии';
+      const errorMsg = getApiErrorMessage(err, 'Ошибка проверки лицензии');
       setLicenseError(errorMsg);
       setLicenseValid(false);
       addError('Ошибка проверки лицензии', errorMsg);
@@ -675,7 +676,7 @@ const DocumentsPage: React.FC = () => {
         setTotal(response.total);
       });
     } catch (err: any) {
-      const errorMsg = err.response?.data?.detail || 'Ошибка загрузки документов';
+      const errorMsg = getApiErrorMessage(err, 'Ошибка загрузки документов');
       setError(errorMsg);
       addError('Ошибка загрузки документов', errorMsg);
     } finally {
@@ -933,7 +934,7 @@ const DocumentsPage: React.FC = () => {
       addSuccess('Документы удалены', msg);
       await loadDocuments();
     } catch (err: any) {
-      const errorMsg = err.response?.data?.detail || 'Ошибка удаления';
+      const errorMsg = getApiErrorMessage(err, 'Ошибка удаления');
       setError(errorMsg);
       addError('Ошибка удаления', errorMsg);
     }
@@ -995,7 +996,7 @@ const DocumentsPage: React.FC = () => {
       setIsEditModalOpen(false);
       await loadDocuments();
     } catch (err: any) {
-      const errorMsg = err.response?.data?.detail || 'Ошибка обновления';
+      const errorMsg = getApiErrorMessage(err, 'Ошибка обновления');
       setError(errorMsg);
       addError('Ошибка обновления', errorMsg);
     } finally {
@@ -1051,7 +1052,7 @@ const DocumentsPage: React.FC = () => {
       await loadDocuments();
       window.open(downloadSignedCopy(uuid), '_blank');
     } catch (err: any) {
-      const errorMsg = err.response?.data?.detail || 'Ошибка создания штампа';
+      const errorMsg = getApiErrorMessage(err, 'Ошибка создания штампа');
       setError(errorMsg);
       addError('Ошибка создания штампа', errorMsg);
     } finally {
@@ -1152,7 +1153,7 @@ const DocumentsPage: React.FC = () => {
       }
     } catch (err: any) {
       console.error('❌ Ошибка проверки:', err);
-      const errorMessage = err?.response?.data?.detail || err?.message || 'Ошибка проверки подписи';
+      const errorMessage = getApiErrorMessage(err) || err?.message || 'Ошибка проверки подписи';
       setVerificationResult({
         status: 'error',
         data: null,
@@ -1374,7 +1375,7 @@ const DocumentsPage: React.FC = () => {
       handleCloseUploadModal();
       await loadDocuments();
     } catch (err: any) {
-      const errorMessage = err?.response?.data?.detail || err?.message || 'Ошибка загрузки документа';
+      const errorMessage = getApiErrorMessage(err) || err?.message || 'Ошибка загрузки документа';
       setError(typeof errorMessage === 'string' ? errorMessage : JSON.stringify(errorMessage));
       addError('Ошибка загрузки', typeof errorMessage === 'string' ? errorMessage : 'Не удалось загрузить документ');
     } finally {
@@ -2459,7 +2460,7 @@ const DocumentsPage: React.FC = () => {
                     await loadFolderCounts();
                     await loadDocuments();
                   } catch (err: any) {
-                    const errorMsg = err.response?.data?.detail || 'Ошибка удаления папки';
+                    const errorMsg = getApiErrorMessage(err, 'Ошибка удаления папки');
                     setError(errorMsg);
                     addError('Ошибка удаления папки', errorMsg);
                   }
@@ -2677,7 +2678,7 @@ const DocumentsPage: React.FC = () => {
                       await loadCustomFolders();
                       await loadFolderCounts();
                     } catch (err: any) {
-                      const errorMsg = err.response?.data?.detail || 'Ошибка создания папки';
+                      const errorMsg = getApiErrorMessage(err, 'Ошибка создания папки');
                       setError(errorMsg);
                       addError('Ошибка создания папки', errorMsg);
                     }

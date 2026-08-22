@@ -22,6 +22,7 @@ import {
 import dayjs from 'dayjs';
 import Footer from '../components/Layout/Footer';
 import { authApi } from '../api/edoApi';
+import { getApiErrorMessage } from '../api/edoApi';
 
 // Баннер плановых работ показывается только до конца указанной даты
 const MAINTENANCE_DATE = '2026-08-25';
@@ -268,7 +269,7 @@ const LoginPage: React.FC<LoginPageProps> = ({ onLogin }) => {
         navigate('/');
       }
     } catch (err: any) {
-      setAuthError(err.response?.data?.detail || 'Невозможно осуществить вход в систему.');
+      setAuthError(getApiErrorMessage(err, 'Невозможно осуществить вход в систему.'));
     } finally {
       setLoading(false);
     }

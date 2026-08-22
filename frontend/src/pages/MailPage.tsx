@@ -81,6 +81,7 @@ import {
   Organization,
   FolderType,
 } from '../api/edoApi';
+import { getApiErrorMessage } from '../api/edoApi';
 
 dayjs.locale('ru');
 
@@ -370,7 +371,7 @@ const MailPage: React.FC = () => {
         setTotal(response.total);
       });
     } catch (err: any) {
-      setError(err.response?.data?.detail || 'Ошибка загрузки писем');
+      setError(getApiErrorMessage(err, 'Ошибка загрузки писем'));
     } finally {
       setLoading(false);
     }
@@ -516,7 +517,7 @@ const MailPage: React.FC = () => {
       await loadMessages();
       await loadCounts();
     } catch (err: any) {
-      setError(err.response?.data?.detail || 'Ошибка отправки');
+      setError(getApiErrorMessage(err, 'Ошибка отправки'));
     } finally {
       setComposeLoading(false);
     }
@@ -537,7 +538,7 @@ const MailPage: React.FC = () => {
       await loadMessages();
       await loadCounts();
     } catch (err: any) {
-      setError(err.response?.data?.detail || 'Ошибка удаления');
+      setError(getApiErrorMessage(err, 'Ошибка удаления'));
     }
   };
 
@@ -549,7 +550,7 @@ const MailPage: React.FC = () => {
       await loadMessages();
       await loadCounts();
     } catch (err: any) {
-      setError(err.response?.data?.detail || 'Ошибка восстановления');
+      setError(getApiErrorMessage(err, 'Ошибка восстановления'));
     }
   };
 
@@ -570,7 +571,7 @@ const MailPage: React.FC = () => {
       await loadMessages();
       await loadCounts();
     } catch (err: any) {
-      setError(err.response?.data?.detail || 'Ошибка подписи/отправки');
+      setError(getApiErrorMessage(err, 'Ошибка подписи/отправки'));
     } finally {
       setSignReplyLoading(false);
     }

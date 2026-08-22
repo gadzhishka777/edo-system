@@ -63,6 +63,7 @@ import {
   deleteContact,
   Contact,
 } from '../api/edoApi';
+import { getApiErrorMessage } from '../api/edoApi';
 
 dayjs.locale('ru');
 
@@ -262,7 +263,7 @@ const ContactsPage: React.FC = () => {
         setTotal(response.total);
       });
     } catch (err: any) {
-      setError(err.response?.data?.detail || 'Ошибка загрузки контактов');
+      setError(getApiErrorMessage(err, 'Ошибка загрузки контактов'));
     } finally {
       setLoading(false);
     }
@@ -347,7 +348,7 @@ const ContactsPage: React.FC = () => {
       setIsModalOpen(false);
       await loadContacts();
     } catch (err: any) {
-      setError(err.response?.data?.detail || 'Ошибка сохранения');
+      setError(getApiErrorMessage(err, 'Ошибка сохранения'));
     } finally {
       setSaving(false);
     }
@@ -363,7 +364,7 @@ const ContactsPage: React.FC = () => {
       setSuccess(deleteTarget.length === 1 ? 'Контакт удалён' : `Удалено ${deleteTarget.length} контактов`);
       await loadContacts();
     } catch (err: any) {
-      setError(err.response?.data?.detail || 'Ошибка удаления');
+      setError(getApiErrorMessage(err, 'Ошибка удаления'));
     }
   };
 

@@ -30,6 +30,7 @@ import {
   Error as ErrorIcon,
 } from '@mui/icons-material';
 import { authApi } from '../api/edoApi';
+import { getApiErrorMessage } from '../api/edoApi';
 
 const PageContainer = styled(Box)({
   padding: '24px 32px',
@@ -306,7 +307,7 @@ const AboutPage: React.FC = () => {
       // Перезагружаем данные
       await loadOrgData();
     } catch (err: any) {
-      const errorMessage = err?.response?.data?.detail || err?.message || 'Ошибка активации лицензии';
+      const errorMessage = getApiErrorMessage(err) || err?.message || 'Ошибка активации лицензии';
       setToastMessage(errorMessage);
       setToastOpen(true);
     } finally {

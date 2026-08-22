@@ -356,6 +356,26 @@ class EmployeeBase(BaseModel):
     birthday: Optional[datetime] = None
     notes: Optional[str] = None
 
+    @field_validator("birthday", mode="before")
+    @classmethod
+    def _clean_birthday(cls, v):
+        """Пустая строка / некорректная дата -> None вместо ошибки 422."""
+        from datetime import datetime as _dt
+
+        if v in (None, "", "Invalid Date"):
+            return None
+        if isinstance(v, str):
+            import re as _re
+
+            m = _re.match(r"^(\d{2})\.(\d{2})\.(\d{4})$", v.strip())
+            if m:
+                d_, mo_, y_ = m.groups()
+                try:
+                    return _dt(int(y_), int(mo_), int(d_))
+                except ValueError:
+                    return None
+        return v
+
 
 class EmployeeCreate(EmployeeBase):
     login: Optional[str] = None  # если не задан — сгенерируется автоматически

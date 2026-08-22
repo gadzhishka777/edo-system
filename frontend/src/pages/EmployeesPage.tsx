@@ -69,6 +69,7 @@ import {
   deactivateEmployee,
   type Employee,
 } from '../api/edoApi';
+import { getApiErrorMessage } from '../api/edoApi';
 
 // ===== СТИЛИ =====
 const PageContainer = styled(Box)({
@@ -530,7 +531,7 @@ const EmployeesPage: React.FC = () => {
         setTotal(res.total);
       });
     } catch (err: any) {
-      setError(err.response?.data?.detail || 'Ошибка загрузки сотрудников');
+      setError(getApiErrorMessage(err, 'Ошибка загрузки сотрудников'));
     } finally {
       setLoading(false);
     }
@@ -666,7 +667,7 @@ const EmployeesPage: React.FC = () => {
       setIsModalOpen(false);
       await loadEmployees();
     } catch (err: any) {
-      setError(err.response?.data?.detail || 'Ошибка сохранения');
+      setError(getApiErrorMessage(err, 'Ошибка сохранения'));
     } finally {
       setSaving(false);
     }
@@ -682,7 +683,7 @@ const EmployeesPage: React.FC = () => {
       setSuccess(deleteTarget.length === 1 ? 'Сотрудник деактивирован' : `Деактивировано ${deleteTarget.length} сотрудников`);
       await loadEmployees();
     } catch (err: any) {
-      setError(err.response?.data?.detail || 'Ошибка деактивации');
+      setError(getApiErrorMessage(err, 'Ошибка деактивации'));
     }
   };
 
