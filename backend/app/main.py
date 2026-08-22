@@ -1,4 +1,10 @@
 # backend/app/main.py
+# ВАЖНО: до любых print()/логов — иначе при не-UTF-8 локали (systemd)
+# процесс падает на UnicodeEncodeError и сайт отдаёт 502.
+from app.core.stdio_utf8 import fix as _fix_stdio
+
+_fix_stdio()
+
 import logging
 from logging.handlers import RotatingFileHandler
 from pathlib import Path

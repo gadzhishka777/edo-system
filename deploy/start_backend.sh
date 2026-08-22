@@ -19,6 +19,11 @@ fi
 
 export DOCS_ENABLED=false
 export LOG_LEVEL=INFO
+# Гарантия UTF-8 вывода при любой системной локали (иначе print кириллицы
+# роняет процесс с UnicodeEncodeError -> 502)
+export PYTHONIOENCODING=utf-8
+export LANG=C.UTF-8
+export LC_ALL=C.UTF-8
 
 exec ./venv/bin/uvicorn app.main:app \
     --host 127.0.0.1 \

@@ -12,6 +12,11 @@ from getpass import getpass
 import sys
 import os
 
+# UTF-8 вывод до первых print (см. комментарий в модуле)
+from app.core.stdio_utf8 import fix as _fix_stdio
+
+_fix_stdio()
+
 # Добавляем путь к проекту
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
