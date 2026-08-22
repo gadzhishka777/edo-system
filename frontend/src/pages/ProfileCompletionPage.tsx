@@ -237,7 +237,21 @@ const ProfileCompletionPage: React.FC = () => {
         window.location.href = '/about';
       }, 1500);
     } catch (err: any) {
-      setError(err.response?.data?.detail || 'Ошибка при заполнении профиля');
+      const d = err?.response?.data?.detail;
+      let msg = 'Ошибка при заполнении профиля';
+      if (typeof d === 'string') {
+        msg = d;
+      } else if (Array.isArray(d)) {
+        // Ошибки валидации FastAPI (422): массив {loc, msg, ...}
+        msg = d
+          .map((e: any) => {
+            const field = Array.isArray(e.loc) ? e.loc.filter((x: any) => x !== 'body').join('.') : '';
+            return `${field ? field + ': ' : ''}${e.msg}`;
+          })
+          .filter(Boolean)
+          .join('; ') || 'Проверьте корректность заполнения полей';
+      }
+      setError(msg);
       setActiveStep(0);
     } finally {
       setLoading(false);

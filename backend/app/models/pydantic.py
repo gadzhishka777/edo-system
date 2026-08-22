@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from datetime import datetime
 from typing import Optional, List, Dict, Any, Union
 from enum import Enum
@@ -425,3 +425,24 @@ class ProfileCompleteRequest(BaseModel):
     email: Optional[str] = None
     birthday: Optional[datetime] = None
     notes: Optional[str] = None
+
+    @field_validator("birthday", mode="before")
+    @classmethod
+    def _clean_birthday(cls, v):
+        """Пустая строка или некорректная дата -> None вместо ошибки 422."""
+        from datetime import datetime as _dt
+
+        if v in (None, "", "Invalid Date"):
+            return None
+        if isinstance(v, str):
+            # Допускаем формат даты без времени и точками
+            import re as _re
+
+            m = _re.match(r"^(\d{2})\.(\d{2})\.(\d{4})$", v.strip())
+            if m:
+                d_, mo_, y_ = m.groups()
+                try:
+                    return _dt(int(y_), int(mo_), int(d_))
+                except ValueError:
+                    return None
+        return v
