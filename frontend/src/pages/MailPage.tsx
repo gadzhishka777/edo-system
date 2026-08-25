@@ -598,9 +598,9 @@ const MailPage: React.FC = () => {
                     <Typography sx={{ fontFamily: 'Lato, sans-serif', fontWeight: 700, fontSize: '18px', color: '#101025' }}>
                       {confirmedOrg.name}
                     </Typography>
-                    {confirmedOrg.inn && (
-                      <Typography sx={{ fontFamily: 'Lato, sans-serif', fontSize: '13px', color: '#87879b' }}>
-                        ИНН: {confirmedOrg.inn}{confirmedOrg.kpp ? ` • КПП: ${confirmedOrg.kpp}` : ''}
+                    {confirmedOrg.uuid && (
+                      <Typography sx={{ fontFamily: 'Lato, sans-serif', fontSize: '13px', color: '#87879b', wordBreak: 'break-all' }}>
+                        UUID: {confirmedOrg.uuid}
                       </Typography>
                     )}
                     {confirmedOrg.contact_person && (
@@ -629,9 +629,9 @@ const MailPage: React.FC = () => {
                     <Typography sx={{ fontFamily: 'Lato, sans-serif', fontWeight: 600, fontSize: '15px' }}>
                       {selectedOrg.name}
                     </Typography>
-                    {selectedOrg.inn && (
-                      <Typography sx={{ fontFamily: 'Lato, sans-serif', fontSize: '13px', color: '#87879b' }}>
-                        ИНН: {selectedOrg.inn}
+                    {selectedOrg.uuid && (
+                      <Typography sx={{ fontFamily: 'Lato, sans-serif', fontSize: '13px', color: '#87879b', wordBreak: 'break-all' }}>
+                        UUID: {selectedOrg.uuid}
                       </Typography>
                     )}
                   </Box>
@@ -694,9 +694,9 @@ const MailPage: React.FC = () => {
                         <Typography sx={{ fontFamily: 'Lato, sans-serif', fontSize: '14px', fontWeight: 500 }}>
                           {option.name}
                         </Typography>
-                        {option.inn && (
-                          <Typography sx={{ fontFamily: 'Lato, sans-serif', fontSize: '12px', color: '#87879b' }}>
-                            ИНН: {option.inn}{option.kpp ? ` • КПП: ${option.kpp}` : ''}
+                        {option.uuid && (
+                          <Typography sx={{ fontFamily: 'Lato, sans-serif', fontSize: '12px', color: '#87879b', wordBreak: 'break-all' }}>
+                            UUID: {option.uuid}
                           </Typography>
                         )}
                       </Box>
@@ -842,9 +842,9 @@ const MailPage: React.FC = () => {
                   <Typography sx={{ fontFamily: 'Lato, sans-serif', fontWeight: 600, fontSize: '15px' }}>
                     {confirmedOrg?.name}
                   </Typography>
-                  {confirmedOrg?.inn && (
-                    <Typography sx={{ fontFamily: 'Lato, sans-serif', fontSize: '12px', color: '#87879b' }}>
-                      ИНН: {confirmedOrg.inn}
+                  {confirmedOrg?.uuid && (
+                    <Typography sx={{ fontFamily: 'Lato, sans-serif', fontSize: '12px', color: '#87879b', wordBreak: 'break-all' }}>
+                      UUID: {confirmedOrg.uuid}
                     </Typography>
                   )}
                 </Box>

@@ -1,4 +1,4 @@
-﻿import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   Box,
   Paper,
@@ -75,24 +75,24 @@ import { useEvents } from '../context/EventContext';
 
 dayjs.locale('ru');
 
-// ===== РЎР›РћР’РђР Р =====
+// ===== СЛОВАРИ =====
 const KIND_LABELS: Record<string, string> = {
-  complaint: 'Р–Р°Р»РѕР±Р°',
-  application: 'Р—Р°СЏРІР»РµРЅРёРµ',
-  suggestion: 'РџСЂРµРґР»РѕР¶РµРЅРёРµ',
+  complaint: 'Жалоба',
+  application: 'Заявление',
+  suggestion: 'Предложение',
 };
 
 const APPLICANT_LABELS: Record<string, string> = {
-  citizen: 'РћР±СЂР°С‰РµРЅРёРµ С„РёР·Р»РёС†Р°',
-  organization: 'РћР±СЂР°С‰РµРЅРёРµ РѕСЂРіР°РЅРёР·Р°С†РёРё',
+  citizen: 'Обращение физлица',
+  organization: 'Обращение организации',
 };
 
 const STATUS_LABELS: Record<string, string> = {
-  new: 'РџРѕСЃС‚СѓРїРёР»Рѕ',
-  registered: 'Р—Р°СЂРµРіРёСЃС‚СЂРёСЂРѕРІР°РЅРѕ',
-  on_execution: 'РќР° РёСЃРїРѕР»РЅРµРЅРёРё',
-  answered: 'РћС‚РІРµС‚ РЅР°РїСЂР°РІР»РµРЅ',
-  redirected: 'РџРµСЂРµРЅР°РїСЂР°РІР»РµРЅРѕ',
+  new: 'Поступило',
+  registered: 'Зарегистрировано',
+  on_execution: 'На исполнении',
+  answered: 'Ответ направлен',
+  redirected: 'Перенаправлено',
 };
 
 const STATUS_COLORS: Record<string, { bg: string; color: string }> = {
@@ -104,15 +104,15 @@ const STATUS_COLORS: Record<string, { bg: string; color: string }> = {
 };
 
 const STATUS_TABS: { value: AppealStatus | ''; label: string }[] = [
-  { value: '', label: 'Р’СЃРµ' },
-  { value: 'new', label: 'РќРѕРІС‹Рµ' },
-  { value: 'registered', label: 'Р—Р°СЂРµРіРёСЃС‚СЂРёСЂРѕРІР°РЅРЅС‹Рµ' },
-  { value: 'on_execution', label: 'РќР° РёСЃРїРѕР»РЅРµРЅРёРё' },
-  { value: 'answered', label: 'РћС‚РІРµС‚ РЅР°РїСЂР°РІР»РµРЅ' },
-  { value: 'redirected', label: 'РџРµСЂРµРЅР°РїСЂР°РІР»РµРЅРЅС‹Рµ' },
+  { value: '', label: 'Все' },
+  { value: 'new', label: 'Новые' },
+  { value: 'registered', label: 'Зарегистрированные' },
+  { value: 'on_execution', label: 'На исполнении' },
+  { value: 'answered', label: 'Ответ направлен' },
+  { value: 'redirected', label: 'Перенаправленные' },
 ];
 
-// ===== РЎРўРР›Р =====
+// ===== СТИЛИ =====
 const PageContainer = styled(Box)({
   padding: '24px 32px',
   maxWidth: '1400px',
@@ -152,8 +152,8 @@ const CardModalContainer = styled(Paper)({
   transform: 'translate(-50%, -50%)',
   width: '92%',
   maxWidth: '1150px',
-  // Р¤РёРєСЃРёСЂРѕРІР°РЅРЅР°СЏ РІС‹СЃРѕС‚Р°: РјРѕРґР°Р»РєР° РЅРµ В«РїСЂС‹РіР°РµС‚В» РїСЂРё РїРµСЂРµРєР»СЋС‡РµРЅРёРё С‚Р°Р±РѕРІ,
-  // РїСЂРё РєРѕСЂРѕС‚РєРѕРј СЃРѕРґРµСЂР¶РёРјРѕРј СЃРЅРёР·Сѓ РѕСЃС‚Р°С‘С‚СЃСЏ РїСѓСЃС‚РѕРµ РїСЂРѕСЃС‚СЂР°РЅСЃС‚РІРѕ
+  // Фиксированная высота: модалка не «прыгает» при переключении табов,
+  // при коротком содержимом снизу остаётся пустое пространство
   height: '88vh',
   borderRadius: '16px',
   display: 'flex',
@@ -179,14 +179,14 @@ const StyledField = styled(TextField)({
   '& .MuiInputLabel-root': { fontFamily: 'Lato, sans-serif' },
 });
 
-const fmtDate = (iso?: string | null) => (iso ? dayjs(iso).format('DD.MM.YYYY') : 'вЂ”');
-const fmtDateTime = (iso?: string | null) => (iso ? dayjs(iso).format('DD.MM.YYYY HH:mm') : 'вЂ”');
+const fmtDate = (iso?: string | null) => (iso ? dayjs(iso).format('DD.MM.YYYY') : '—');
+const fmtDateTime = (iso?: string | null) => (iso ? dayjs(iso).format('DD.MM.YYYY HH:mm') : '—');
 
-// ===== РљРћРњРџРћРќР•РќРў =====
+// ===== КОМПОНЕНТ =====
 const AppealsPage: React.FC = () => {
   const { addSuccess, addError, addWarning, addInfo } = useEvents();
 
-  // РЎРїРёСЃРѕРє
+  // Список
   const [items, setItems] = useState<AppealListItem[]>([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
@@ -197,14 +197,14 @@ const AppealsPage: React.FC = () => {
   const [debouncedSearch, setDebouncedSearch] = useState('');
   const [loading, setLoading] = useState(true);
 
-  // РљР°СЂС‚РѕС‡РєР°
+  // Карточка
   const [cardOpen, setCardOpen] = useState(false);
   const [card, setCard] = useState<AppealCard | null>(null);
   const [cardTab, setCardTab] = useState(0);
   const [cardLoading, setCardLoading] = useState(false);
   const [actionLoading, setActionLoading] = useState(false);
 
-  // Р”РёР°Р»РѕРіРё
+  // Диалоги
   const [registerDialog, setRegisterDialog] = useState(false);
   const [regNumber, setRegNumber] = useState('');
 
@@ -222,7 +222,7 @@ const AppealsPage: React.FC = () => {
   const [replyText, setReplyText] = useState('');
   const [replyDocIds, setReplyDocIds] = useState<number[]>([]);
 
-  // РЎРІСЏР·С‹РІР°РЅРёРµ РґРѕРєСѓРјРµРЅС‚РѕРІ
+  // Связывание документов
   const [linkDialogOpen, setLinkDialogOpen] = useState(false);
   const [linkSearch, setLinkSearch] = useState('');
   const [linkCandidates, setLinkCandidates] = useState<Document[]>([]);
@@ -230,7 +230,7 @@ const AppealsPage: React.FC = () => {
 
   const [snack, setSnack] = useState<{ msg: string; severity: 'success' | 'error' | 'warning' | 'info' } | null>(null);
 
-  // ===== Р—РђР“Р РЈР—РљРђ РЎРџРРЎРљРђ =====
+  // ===== ЗАГРУЗКА СПИСКА =====
   const loadAppeals = useCallback(async () => {
     setLoading(true);
     try {
@@ -244,7 +244,7 @@ const AppealsPage: React.FC = () => {
       setItems(res.items);
       setTotal(res.total);
     } catch (err: any) {
-      addError('РћС€РёР±РєР° Р·Р°РіСЂСѓР·РєРё РѕР±СЂР°С‰РµРЅРёР№', getApiErrorMessage(err, ''));
+      addError('Ошибка загрузки обращений', getApiErrorMessage(err, ''));
     } finally {
       setLoading(false);
     }
@@ -262,7 +262,7 @@ const AppealsPage: React.FC = () => {
     return () => clearTimeout(t);
   }, [searchQuery]);
 
-  // ===== РЎРџР РђР’РћР§РќРРљР Р”Р›РЇ Р”РРђР›РћР“РћР’ =====
+  // ===== СПРАВОЧНИКИ ДЛЯ ДИАЛОГОВ =====
   useEffect(() => {
     if (takeWorkDialog && employeesList.length === 0) {
       getDocumentEmployees().then(setEmployeesList).catch(() => {});
@@ -277,7 +277,7 @@ const AppealsPage: React.FC = () => {
     }
   }, [redirectDialog, orgsList.length]);
 
-  // ===== РљРђР РўРћР§РљРђ =====
+  // ===== КАРТОЧКА =====
   const openCard = async (uuid: string) => {
     setCardLoading(true);
     setCardOpen(true);
@@ -286,7 +286,7 @@ const AppealsPage: React.FC = () => {
       const data = await getAppealCard(uuid);
       setCard(data);
     } catch (err: any) {
-      addError('РћС€РёР±РєР° Р·Р°РіСЂСѓР·РєРё РѕР±СЂР°С‰РµРЅРёСЏ', getApiErrorMessage(err, ''));
+      addError('Ошибка загрузки обращения', getApiErrorMessage(err, ''));
       setCardOpen(false);
     } finally {
       setCardLoading(false);
@@ -308,9 +308,9 @@ const AppealsPage: React.FC = () => {
     setActionLoading(true);
     try {
       const res = await fn();
-      const msg = res?.message || 'Р“РѕС‚РѕРІРѕ';
+      const msg = res?.message || 'Готово';
       if (res?.warning) {
-        addWarning('Р’РЅРёРјР°РЅРёРµ', res.warning);
+        addWarning('Внимание', res.warning);
         setSnack({ msg: res.warning, severity: 'warning' });
       } else {
         addSuccess(msg, '');
@@ -321,16 +321,16 @@ const AppealsPage: React.FC = () => {
       const detail =
         typeof getApiErrorMessage(err) === 'string'
           ? getApiErrorMessage(err)
-          : 'РћС€РёР±РєР° РІС‹РїРѕР»РЅРµРЅРёСЏ РґРµР№СЃС‚РІРёСЏ';
+          : 'Ошибка выполнения действия';
       setSnack({ msg: detail, severity: 'error' });
-      addError('РћС€РёР±РєР°', detail);
+      addError('Ошибка', detail);
       return null;
     } finally {
       setActionLoading(false);
     }
   };
 
-  // ===== Р”Р•Р™РЎРўР’РРЇ =====
+  // ===== ДЕЙСТВИЯ =====
   const handleRegister = async () => {
     if (!card || !regNumber.trim()) return;
     const res = await runAction(() => registerAppeal(card.uuid, regNumber.trim()));
@@ -348,7 +348,7 @@ const AppealsPage: React.FC = () => {
       takeAppealToWork(card!.uuid, Number(executorId), takeWorkComment),
     );
     if (res) {
-      addInfo('РСЃРїРѕР»РЅРёС‚РµР»СЊ РЅР°Р·РЅР°С‡РµРЅ', emp ? emp.full_name : '');
+      addInfo('Исполнитель назначен', emp ? emp.full_name : '');
       setTakeWorkDialog(false);
       setExecutorId('');
       setTakeWorkComment('');
@@ -371,21 +371,21 @@ const AppealsPage: React.FC = () => {
     }
   };
 
-  // РЁР°Р±Р»РѕРЅС‹ РѕС‚РІРµС‚Р°
+  // Шаблоны ответа
   const buildTemplate = (variant: 'considered' | 'acknowledged'): string => {
     if (!card) return '';
     const parts = card.applicant.full_name.split(' ');
     const nameOtch = parts.slice(1).join(' ') || card.applicant.full_name;
     const dateStr = card.created_at ? dayjs(card.created_at).format('DD.MM.YYYY') : '___';
-    const header = `РЈРІР°Р¶Р°РµРјС‹Р№(Р°СЏ) ${nameOtch}!`;
-    const intro = `Р’Р°С€Рµ РѕР±СЂР°С‰РµРЅРёРµ, РїРѕСЃС‚СѓРїРёРІС€РµРµ РІ Р•РґРёРЅСѓСЋ С†РёС„СЂРѕРІСѓСЋ РїР»Р°С‚С„РѕСЂРјСѓ РѕР±СЂР°С‚РЅРѕР№ СЃРІСЏР·Рё РѕС‚ ${dateStr} в„– ${card.system_number}`;
+    const header = `Уважаемый(ая) ${nameOtch}!`;
+    const intro = `Ваше обращение, поступившее в Единую цифровую платформу обратной связи от ${dateStr} № ${card.system_number}`;
     if (variant === 'considered') {
       return (
-        `${header}\n\n${intro} СЂР°СЃСЃРјРѕС‚СЂРµРЅРѕ. РџРѕ СЃСѓС‰РµСЃС‚РІСѓ РІРѕРїСЂРѕСЃР° СЃРѕРѕР±С‰Р°РµРј СЃР»РµРґСѓСЋС‰РµРµ.\n\n` +
-        `\n\nР‘Р»Р°РіРѕРґР°СЂРёРј Р·Р° РёСЃРїРѕР»СЊР·РѕРІР°РЅРёРµ Р•РґРёРЅРѕРіРѕ С†РёС„СЂРѕРІРѕРіРѕ РїРѕСЂС‚Р°Р»Р° РѕР±СЂР°С‚РЅРѕР№ СЃРІСЏР·Рё!`
+        `${header}\n\n${intro} рассмотрено. По существу вопроса сообщаем следующее.\n\n` +
+        `\n\nБлагодарим за использование Единого цифрового портала обратной связи!`
       );
     }
-    return `${header}\n\n${intro} СЂР°СЃСЃРјРѕС‚СЂРµРЅРѕ. РР·Р»РѕР¶РµРЅРЅР°СЏ РёРЅС„РѕСЂРјР°С†РёСЏ РїСЂРёРЅСЏС‚Р° Рє СЃРІРµРґРµРЅРёСЋ.\n\nР‘Р»Р°РіРѕРґР°СЂРёРј Р·Р° РёСЃРїРѕР»СЊР·РѕРІР°РЅРёРµ Р•РґРёРЅРѕРіРѕ С†РёС„СЂРѕРІРѕРіРѕ РїРѕСЂС‚Р°Р»Р° РѕР±СЂР°С‚РЅРѕР№ СЃРІСЏР·Рё!`;
+    return `${header}\n\n${intro} рассмотрено. Изложенная информация принята к сведению.\n\nБлагодарим за использование Единого цифрового портала обратной связи!`;
   };
 
   const handleReply = async () => {
@@ -399,7 +399,7 @@ const AppealsPage: React.FC = () => {
     }
   };
 
-  // ===== РЎР’РЇР—РђРќРќР«Р• Р”РћРљРЈРњР•РќРўР« =====
+  // ===== СВЯЗАННЫЕ ДОКУМЕНТЫ =====
   const openLinkDialog = async (search?: string) => {
     setLinkDialogOpen(true);
     setLinkLoading(true);
@@ -418,7 +418,7 @@ const AppealsPage: React.FC = () => {
     if (!card) return;
     const res = await runAction(() => linkDocumentToAppeal(card.uuid, docUuid));
     if (res) {
-      addInfo('Р”РѕРєСѓРјРµРЅС‚ СЃРІСЏР·Р°РЅ', docName);
+      addInfo('Документ связан', docName);
       setLinkDialogOpen(false);
       await reloadCardAndList();
     }
@@ -428,7 +428,7 @@ const AppealsPage: React.FC = () => {
     if (!card) return;
     const res = await runAction(() => unlinkDocumentFromAppeal(card.uuid, docUuid));
     if (res) {
-      addInfo('РЎРІСЏР·СЊ СѓРґР°Р»РµРЅР°', docName);
+      addInfo('Связь удалена', docName);
       await reloadCardAndList();
     }
   };
@@ -437,16 +437,16 @@ const AppealsPage: React.FC = () => {
     item: { deadline?: string | null; days_left?: number | null; overdue: boolean; status: string },
   ): React.ReactNode => {
     if (['answered', 'redirected'].includes(item.status)) {
-      return <span style={{ color: '#87879b' }}>Р—Р°РІРµСЂС€РµРЅРѕ</span>;
+      return <span style={{ color: '#87879b' }}>Завершено</span>;
     }
     if (item.overdue) {
-      return <span style={{ color: '#c62828', fontWeight: 700 }}>РџСЂРѕСЃСЂРѕС‡РµРЅРѕ</span>;
+      return <span style={{ color: '#c62828', fontWeight: 700 }}>Просрочено</span>;
     }
     if (item.days_left !== null && item.days_left !== undefined) {
       const color = item.days_left <= 3 ? '#e65100' : '#2e7d32';
-      return <span style={{ color, fontWeight: 600 }}>РћСЃС‚Р°Р»РѕСЃСЊ {item.days_left} РґРЅ.</span>;
+      return <span style={{ color, fontWeight: 600 }}>Осталось {item.days_left} дн.</span>;
     }
-    return <span>вЂ”</span>;
+    return <span>—</span>;
   };
 
   const kindIcon = (kind: string): React.ReactNode => {
@@ -455,14 +455,14 @@ const AppealsPage: React.FC = () => {
     return <AssignmentIcon fontSize="small" sx={{ color: '#0d47a1' }} />;
   };
 
-  // ===== Р Р•РќР”Р•Р  =====
+  // ===== РЕНДЕР =====
   return (
     <PageContainer>
       <Typography sx={{ fontFamily: 'Lato, sans-serif', fontWeight: 700, fontSize: '24px', color: '#101025', mb: 3 }}>
-        РћР±СЂР°С‰РµРЅРёСЏ
+        Обращения
       </Typography>
 
-      {/* РўР°Р±С‹ СЃС‚Р°С‚СѓСЃРѕРІ */}
+      {/* Табы статусов */}
       <Box sx={{ mb: 2 }}>
         <Tabs
           value={statusTab}
@@ -501,7 +501,7 @@ const AppealsPage: React.FC = () => {
         </Alert>
       </Snackbar>
 
-      {/* РўСѓР»Р±Р°СЂ */}
+      {/* Тулбар */}
       <Paper
         sx={{
           p: '12px 20px',
@@ -517,13 +517,13 @@ const AppealsPage: React.FC = () => {
         }}
       >
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-          <Tooltip title="РћР±РЅРѕРІРёС‚СЊ">
+          <Tooltip title="Обновить">
             <IconButton size="small" onClick={loadAppeals} sx={{ color: '#87879b' }}>
               <RefreshIcon fontSize="small" />
             </IconButton>
           </Tooltip>
           <TextField
-            placeholder="РџРѕРёСЃРє РїРѕ РЅРѕРјРµСЂСѓ, Р¤РРћ РёР»Рё С‚РµРєСЃС‚Сѓ"
+            placeholder="Поиск по номеру, ФИО или тексту"
             size="small"
             value={searchQuery}
             onChange={e => setSearchQuery(e.target.value)}
@@ -558,13 +558,13 @@ const AppealsPage: React.FC = () => {
           }
           label={
             <span style={{ fontFamily: 'Lato, sans-serif', fontSize: 13, color: '#5a5a72' }}>
-              РўРѕР»СЊРєРѕ РїСЂРѕСЃСЂРѕС‡РµРЅРЅС‹Рµ
+              Только просроченные
             </span>
           }
         />
       </Paper>
 
-      {/* РўР°Р±Р»РёС†Р° */}
+      {/* Таблица */}
       <Fade in={!loading}>
         <Box>
           {items.length === 0 ? (
@@ -580,10 +580,10 @@ const AppealsPage: React.FC = () => {
             >
               <HistoryIcon sx={{ fontSize: 56, color: '#d6d6df', mb: 2 }} />
               <Typography sx={{ fontFamily: 'Lato, sans-serif', fontWeight: 600, fontSize: 17, color: '#101025', mb: 0.5 }}>
-                РћР±СЂР°С‰РµРЅРёР№ РЅРµС‚
+                Обращений нет
               </Typography>
               <Typography sx={{ fontFamily: 'Lato, sans-serif', fontSize: 13, color: '#87879b' }}>
-                РћР±СЂР°С‰РµРЅРёСЏ РіСЂР°Р¶РґР°РЅ Рё РѕСЂРіР°РЅРёР·Р°С†РёР№ РїРѕСЏРІСЏС‚СЃСЏ Р·РґРµСЃСЊ РїРѕСЃР»Рµ РїРѕРґР°С‡Рё С‡РµСЂРµР· РёРЅС‚РµСЂРЅРµС‚-РїСЂРёС‘РјРЅСѓСЋ
+                Обращения граждан и организаций появятся здесь после подачи через интернет-приёмную
               </Typography>
             </Paper>
           ) : (
@@ -594,12 +594,12 @@ const AppealsPage: React.FC = () => {
               <Table>
                 <TableHead>
                   <TableRow>
-                    <TableCell>Р’РёРґ</TableCell>
-                    <TableCell>РќРѕРјРµСЂ / Р”Р°С‚Р° РїРѕСЃС‚СѓРїР»РµРЅРёСЏ</TableCell>
-                    <TableCell>РўРµРјР°</TableCell>
-                    <TableCell>РЎРѕРґРµСЂР¶Р°РЅРёРµ</TableCell>
-                    <TableCell>РЎС‚Р°С‚СѓСЃ / РЎСЂРѕРє</TableCell>
-                    <TableCell align="center">Р’Р»РѕР¶РµРЅРёСЏ</TableCell>
+                    <TableCell>Вид</TableCell>
+                    <TableCell>Номер / Дата поступления</TableCell>
+                    <TableCell>Тема</TableCell>
+                    <TableCell>Содержание</TableCell>
+                    <TableCell>Статус / Срок</TableCell>
+                    <TableCell align="center">Вложения</TableCell>
                   </TableRow>
                 </TableHead>
                 <TableBody>
@@ -624,7 +624,7 @@ const AppealsPage: React.FC = () => {
                       </TableCell>
                       <TableCell>
                         <Typography sx={{ fontFamily: 'Lato, sans-serif', fontSize: '13px', fontWeight: 600, color: '#101025' }}>
-                          в„– {item.system_number}
+                          № {item.system_number}
                         </Typography>
                         <Typography sx={{ fontFamily: 'Lato, sans-serif', fontSize: '12px', color: '#87879b' }}>
                           {fmtDate(item.created_at)}
@@ -649,7 +649,7 @@ const AppealsPage: React.FC = () => {
                             whiteSpace: 'nowrap',
                           }}
                         >
-                          {item.content_preview}вЂ¦
+                          {item.content_preview}…
                         </Typography>
                       </TableCell>
                       <TableCell>
@@ -660,7 +660,7 @@ const AppealsPage: React.FC = () => {
                       </TableCell>
                       <TableCell align="center">
                         {item.has_attachments ? (
-                          <Tooltip title="РџРѕРєР°Р·Р°С‚СЊ РІР»РѕР¶РµРЅРёСЏ">
+                          <Tooltip title="Показать вложения">
                             <IconButton
                               size="small"
                               onClick={e => {
@@ -672,7 +672,7 @@ const AppealsPage: React.FC = () => {
                             </IconButton>
                           </Tooltip>
                         ) : (
-                          <span style={{ color: '#d6d6df' }}>вЂ”</span>
+                          <span style={{ color: '#d6d6df' }}>—</span>
                         )}
                       </TableCell>
                     </TableRow>
@@ -696,11 +696,11 @@ const AppealsPage: React.FC = () => {
         </Box>
       )}
 
-      {/* ===================== РљРђР РўРћР§РљРђ РћР‘Р РђР©Р•РќРРЇ ===================== */}
+      {/* ===================== КАРТОЧКА ОБРАЩЕНИЯ ===================== */}
       <Modal open={cardOpen} onClose={() => setCardOpen(false)} closeAfterTransition>
         <Fade in={cardOpen}>
           <CardModalContainer elevation={8}>
-            {/* Р—Р°РіРѕР»РѕРІРѕРє */}
+            {/* Заголовок */}
             <Box
               sx={{
                 p: '16px 26px',
@@ -712,11 +712,11 @@ const AppealsPage: React.FC = () => {
             >
               <Typography sx={{ fontFamily: 'Lato, sans-serif', fontWeight: 700, fontSize: '17px', color: '#101025' }}>
                 {card
-                  ? `${APPLICANT_LABELS[card.applicant_type]} в„– ${card.reg_number || card.system_number}`
-                  : 'Р—Р°РіСЂСѓР·РєР°вЂ¦'}
+                  ? `${APPLICANT_LABELS[card.applicant_type]} № ${card.reg_number || card.system_number}`
+                  : 'Загрузка…'}
               </Typography>
               <IconButton onClick={() => setCardOpen(false)} size="small" sx={{ color: '#87879b' }}>
-                вњ•
+                ✕
               </IconButton>
             </Box>
 
@@ -726,7 +726,7 @@ const AppealsPage: React.FC = () => {
               </Box>
             ) : (
               <>
-                {/* РўР°Р±С‹ */}
+                {/* Табы */}
                 <Box sx={{ px: 2, borderBottom: '1px solid #eaebf0' }}>
                   <Tabs
                     value={cardTab}
@@ -742,17 +742,17 @@ const AppealsPage: React.FC = () => {
                       '& .MuiTabs-indicator': { backgroundColor: '#4c6ef5' },
                     }}
                   >
-                    <Tab label="Р”РµС‚Р°Р»Рё" />
-                    <Tab label={`Р’Р»РѕР¶РµРЅРёСЏ (${card.attachments.length})`} />
-                    <Tab label={`РЎРІСЏР·Р°РЅРЅС‹Рµ РґРѕРєСѓРјРµРЅС‚С‹ (${card.linked_documents.length})`} />
+                    <Tab label="Детали" />
+                    <Tab label={`Вложения (${card.attachments.length})`} />
+                    <Tab label={`Связанные документы (${card.linked_documents.length})`} />
                   </Tabs>
                 </Box>
 
                 <Box sx={{ overflowY: 'auto', flex: 1, p: 3 }}>
-                  {/* ---------- Р”Р•РўРђР›Р ---------- */}
+                  {/* ---------- ДЕТАЛИ ---------- */}
                   {cardTab === 0 && (
                     <Box sx={{ display: 'flex', gap: 3, flexWrap: 'wrap' }}>
-                      {/* Р›РµРІР°СЏ РєРѕР»РѕРЅРєР° */}
+                      {/* Левая колонка */}
                       <Box sx={{ flex: '1 1 640px', minWidth: 320 }}>
                         <Box
                           sx={{
@@ -762,56 +762,56 @@ const AppealsPage: React.FC = () => {
                           }}
                         >
                           <Box>
-                            <DetailLabel>Р РµРіРёСЃС‚СЂР°С†РёРѕРЅРЅС‹Р№ РЅРѕРјРµСЂ</DetailLabel>
-                            <DetailValue>{card.reg_number || 'РќРµ Р·Р°СЂРµРіРёСЃС‚СЂРёСЂРѕРІР°РЅРѕ'}</DetailValue>
+                            <DetailLabel>Регистрационный номер</DetailLabel>
+                            <DetailValue>{card.reg_number || 'Не зарегистрировано'}</DetailValue>
                           </Box>
                           <Box>
-                            <DetailLabel>Р”Р°С‚Р° СЂРµРіРёСЃС‚СЂР°С†РёРё</DetailLabel>
+                            <DetailLabel>Дата регистрации</DetailLabel>
                             <DetailValue>{fmtDate(card.registered_at)}</DetailValue>
                           </Box>
                           <Box>
-                            <DetailLabel>РЎРёСЃС‚РµРјРЅС‹Р№ РЅРѕРјРµСЂ</DetailLabel>
+                            <DetailLabel>Системный номер</DetailLabel>
                             <DetailValue>{card.system_number}</DetailValue>
                           </Box>
                           <Box>
-                            <DetailLabel>Р”Р°С‚Р° РїРѕСЃС‚СѓРїР»РµРЅРёСЏ</DetailLabel>
+                            <DetailLabel>Дата поступления</DetailLabel>
                             <DetailValue>{fmtDate(card.created_at)}</DetailValue>
                           </Box>
                           <Box>
-                            <DetailLabel>Р’РёРґ</DetailLabel>
+                            <DetailLabel>Вид</DetailLabel>
                             <DetailValue>{APPLICANT_LABELS[card.applicant_type]}</DetailValue>
                           </Box>
                           <Box>
-                            <DetailLabel>РўРµРјР° РѕР±СЂР°С‰РµРЅРёСЏ</DetailLabel>
+                            <DetailLabel>Тема обращения</DetailLabel>
                             <DetailValue>{KIND_LABELS[card.kind]}</DetailValue>
                           </Box>
                           <Box>
-                            <DetailLabel>РўРµРєСѓС‰РёР№ РїСЂРѕС†РµСЃСЃ</DetailLabel>
+                            <DetailLabel>Текущий процесс</DetailLabel>
                             <Box sx={{ mt: 0.25 }}>
                               <StatusChip st={card.status} label={STATUS_LABELS[card.status]} size="small" />
                             </Box>
                           </Box>
                           <Box>
-                            <DetailLabel>РЎРѕСЃС‚РѕСЏРЅРёРµ (СЃСЂРѕРє)</DetailLabel>
+                            <DetailLabel>Состояние (срок)</DetailLabel>
                             <DetailValue>{deadlineInfo(card)}</DetailValue>
                           </Box>
                           <Box>
-                            <DetailLabel>РљСЂР°С‚РЅРѕСЃС‚СЊ РїРѕСЃС‚СѓРїР»РµРЅРёСЏ</DetailLabel>
+                            <DetailLabel>Кратность поступления</DetailLabel>
                             <DetailValue>
                               {card.is_redirected_in
-                                ? <>РџРµСЂРµРЅР°РїСЂР°РІР»РµРЅРѕ РёР· В«{card.redirect_from_org_name}В»</>
-                                : 'РџРµСЂРІРёС‡РЅРѕРµ'}
+                                ? <>Перенаправлено из «{card.redirect_from_org_name}»</>
+                                : 'Первичное'}
                             </DetailValue>
                           </Box>
                           <Box>
-                            <DetailLabel>РСЃРїРѕР»РЅРёС‚РµР»СЊ</DetailLabel>
-                            <DetailValue>{card.executor_name || 'РќРµ РЅР°Р·РЅР°С‡РµРЅ'}</DetailValue>
+                            <DetailLabel>Исполнитель</DetailLabel>
+                            <DetailValue>{card.executor_name || 'Не назначен'}</DetailValue>
                           </Box>
                         </Box>
 
                         <Divider sx={{ my: 2.5 }} />
 
-                        <DetailLabel>РЎРѕРґРµСЂР¶Р°РЅРёРµ РѕР±СЂР°С‰РµРЅРёСЏ</DetailLabel>
+                        <DetailLabel>Содержание обращения</DetailLabel>
                         <Paper
                           variant="outlined"
                           sx={{ p: 1.5, mt: 0.5, borderRadius: '8px', bgcolor: '#fafafa', maxHeight: 180, overflowY: 'auto' }}
@@ -823,7 +823,7 @@ const AppealsPage: React.FC = () => {
 
                         <Divider sx={{ my: 2.5 }} />
 
-                        <DetailLabel>Р”Р°РЅРЅС‹Рµ Р·Р°СЏРІРёС‚РµР»СЏ</DetailLabel>
+                        <DetailLabel>Данные заявителя</DetailLabel>
                         <Box
                           sx={{
                             display: 'grid',
@@ -833,30 +833,30 @@ const AppealsPage: React.FC = () => {
                           }}
                         >
                           <Box>
-                            <DetailLabel>Р¤РРћ</DetailLabel>
+                            <DetailLabel>ФИО</DetailLabel>
                             <DetailValue>{card.applicant.full_name}</DetailValue>
                           </Box>
                           <Box>
-                            <DetailLabel>Р­Р». РїРѕС‡С‚Р°</DetailLabel>
+                            <DetailLabel>Эл. почта</DetailLabel>
                             <DetailValue>{card.applicant.email}</DetailValue>
                           </Box>
                           <Box>
-                            <DetailLabel>РљРѕРЅС‚Р°РєС‚РЅС‹Р№ С‚РµР»РµС„РѕРЅ</DetailLabel>
-                            <DetailValue>{card.applicant.phone || 'вЂ”'}</DetailValue>
+                            <DetailLabel>Контактный телефон</DetailLabel>
+                            <DetailValue>{card.applicant.phone || '—'}</DetailValue>
                           </Box>
                           {card.applicant_type === 'organization' && (
                             <>
                               <Box>
-                                <DetailLabel>РџРѕР»РЅРѕРµ РЅР°РёРјРµРЅРѕРІР°РЅРёРµ РѕСЂРіР°РЅРёР·Р°С†РёРё</DetailLabel>
-                                <DetailValue>{card.applicant.org_full_name || 'вЂ”'}</DetailValue>
+                                <DetailLabel>Полное наименование организации</DetailLabel>
+                                <DetailValue>{card.applicant.org_full_name || '—'}</DetailValue>
                               </Box>
                               <Box>
-                                <DetailLabel>РљСЂР°С‚РєРѕРµ РЅР°РёРјРµРЅРѕРІР°РЅРёРµ РѕСЂРіР°РЅРёР·Р°С†РёРё</DetailLabel>
-                                <DetailValue>{card.applicant.org_short_name || 'вЂ”'}</DetailValue>
+                                <DetailLabel>Краткое наименование организации</DetailLabel>
+                                <DetailValue>{card.applicant.org_short_name || '—'}</DetailValue>
                               </Box>
                               <Box>
-                                <DetailLabel>Р¤РРћ СЂСѓРєРѕРІРѕРґРёС‚РµР»СЏ</DetailLabel>
-                                <DetailValue>{card.applicant.org_director || 'вЂ”'}</DetailValue>
+                                <DetailLabel>ФИО руководителя</DetailLabel>
+                                <DetailValue>{card.applicant.org_director || '—'}</DetailValue>
                               </Box>
                             </>
                           )}
@@ -865,7 +865,7 @@ const AppealsPage: React.FC = () => {
                         {card.internal_comment && (
                           <>
                             <Divider sx={{ my: 2.5 }} />
-                            <DetailLabel>Р’РЅСѓС‚СЂРµРЅРЅРёР№ РєРѕРјРјРµРЅС‚Р°СЂРёР№</DetailLabel>
+                            <DetailLabel>Внутренний комментарий</DetailLabel>
                             <Alert severity="info" sx={{ mt: 0.5, borderRadius: '8px', fontFamily: 'Lato, sans-serif', fontSize: '13px' }}>
                               {card.internal_comment}
                             </Alert>
@@ -875,7 +875,7 @@ const AppealsPage: React.FC = () => {
                         {card.reply_text && (
                           <>
                             <Divider sx={{ my: 2.5 }} />
-                            <DetailLabel>РќР°РїСЂР°РІР»РµРЅРЅС‹Р№ РѕС‚РІРµС‚ ({fmtDate(card.answered_at)})</DetailLabel>
+                            <DetailLabel>Направленный ответ ({fmtDate(card.answered_at)})</DetailLabel>
                             <Paper
                               variant="outlined"
                               sx={{ p: 1.5, mt: 0.5, borderRadius: '8px', bgcolor: '#f1f8e9', maxHeight: 200, overflowY: 'auto' }}
@@ -887,12 +887,12 @@ const AppealsPage: React.FC = () => {
                           </>
                         )}
 
-                        {/* Р–СѓСЂРЅР°Р» РґРµР№СЃС‚РІРёР№ */}
+                        {/* Журнал действий */}
                         <Divider sx={{ my: 2.5 }} />
                         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1.5 }}>
                           <HistoryIcon sx={{ fontSize: 18, color: '#87879b' }} />
                           <Typography sx={{ fontFamily: 'Lato, sans-serif', fontWeight: 700, fontSize: '14px', color: '#101025' }}>
-                            Р–СѓСЂРЅР°Р» РґРµР№СЃС‚РІРёР№
+                            Журнал действий
                           </Typography>
                         </Box>
                         <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.25 }}>
@@ -904,8 +904,8 @@ const AppealsPage: React.FC = () => {
                                   {h.action}
                                 </Typography>
                                 <Typography sx={{ fontFamily: 'Lato, sans-serif', fontSize: '12px', color: '#87879b' }}>
-                                  {h.employee_name} В· {fmtDateTime(h.created_at)}
-                                  {h.comment ? ` В· ${h.comment}` : ''}
+                                  {h.employee_name} · {fmtDateTime(h.created_at)}
+                                  {h.comment ? ` · ${h.comment}` : ''}
                                 </Typography>
                               </Box>
                             </Box>
@@ -913,11 +913,11 @@ const AppealsPage: React.FC = () => {
                         </Box>
                       </Box>
 
-                      {/* РџСЂР°РІР°СЏ РєРѕР»РѕРЅРєР° вЂ” РґРµР№СЃС‚РІРёСЏ */}
+                      {/* Правая колонка — действия */}
                       <Box sx={{ flex: '0 0 240px', minWidth: 240 }}>
                         <Paper variant="outlined" sx={{ p: 2, borderRadius: '10px', display: 'flex', flexDirection: 'column', gap: 1.25 }}>
                           <Typography sx={{ fontFamily: 'Lato, sans-serif', fontWeight: 700, fontSize: '14px', color: '#101025' }}>
-                            Р”РµР№СЃС‚РІРёСЏ
+                            Действия
                           </Typography>
 
                           {card.status === 'new' && (
@@ -932,7 +932,7 @@ const AppealsPage: React.FC = () => {
                               }}
                               sx={{ borderRadius: '8px', textTransform: 'none', fontFamily: 'Lato, sans-serif', bgcolor: '#4c6ef5' }}
                             >
-                              Р—Р°СЂРµРіРёСЃС‚СЂРёСЂРѕРІР°С‚СЊ
+                              Зарегистрировать
                             </Button>
                           )}
 
@@ -949,7 +949,7 @@ const AppealsPage: React.FC = () => {
                               }}
                               sx={{ borderRadius: '8px', textTransform: 'none', fontFamily: 'Lato, sans-serif', bgcolor: '#4c6ef5' }}
                             >
-                              Р’Р·СЏС‚СЊ РІ СЂР°Р±РѕС‚Сѓ
+                              Взять в работу
                             </Button>
                           )}
 
@@ -966,7 +966,7 @@ const AppealsPage: React.FC = () => {
                               }}
                               sx={{ borderRadius: '8px', textTransform: 'none', fontFamily: 'Lato, sans-serif', bgcolor: '#2e7d32' }}
                             >
-                              РќР°РїСЂР°РІРёС‚СЊ РѕС‚РІРµС‚
+                              Направить ответ
                             </Button>
                           )}
 
@@ -989,13 +989,13 @@ const AppealsPage: React.FC = () => {
                                 color: '#5a5a72',
                               }}
                             >
-                              РџРµСЂРµРЅР°РїСЂР°РІРёС‚СЊ
+                              Перенаправить
                             </Button>
                           )}
 
                           {['answered', 'redirected'].includes(card.status) && (
                             <Typography sx={{ fontFamily: 'Lato, sans-serif', fontSize: '12px', color: '#87879b' }}>
-                              РћР±СЂР°С‰РµРЅРёРµ Р·Р°РІРµСЂС€РµРЅРѕ. Р”РµР№СЃС‚РІРёСЏ РЅРµРґРѕСЃС‚СѓРїРЅС‹.
+                              Обращение завершено. Действия недоступны.
                             </Typography>
                           )}
                         </Paper>
@@ -1003,12 +1003,12 @@ const AppealsPage: React.FC = () => {
                     </Box>
                   )}
 
-                  {/* ---------- Р’Р›РћР–Р•РќРРЇ ---------- */}
+                  {/* ---------- ВЛОЖЕНИЯ ---------- */}
                   {cardTab === 1 && (
                     <>
                       {card.attachments.length === 0 ? (
                         <Typography sx={{ fontFamily: 'Lato, sans-serif', fontSize: '14px', color: '#87879b', textAlign: 'center', py: 6 }}>
-                          Р’Р»РѕР¶РµРЅРёР№ РЅРµС‚
+                          Вложений нет
                         </Typography>
                       ) : (
                         <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
@@ -1024,10 +1024,10 @@ const AppealsPage: React.FC = () => {
                                   {at.file_name}
                                 </Typography>
                                 <Typography sx={{ fontFamily: 'Lato, sans-serif', fontSize: '12px', color: '#87879b' }}>
-                                  {(at.file_size / 1024).toFixed(1)} РљР‘ В· {fmtDate(at.uploaded_at)}
+                                  {(at.file_size / 1024).toFixed(1)} КБ · {fmtDate(at.uploaded_at)}
                                 </Typography>
                               </Box>
-                              <Tooltip title="РЎРєР°С‡Р°С‚СЊ / РѕС‚РєСЂС‹С‚СЊ">
+                              <Tooltip title="Скачать / открыть">
                                 <IconButton
                                   size="small"
                                   onClick={() => window.open(downloadAppealAttachment(at.id), '_blank')}
@@ -1043,13 +1043,13 @@ const AppealsPage: React.FC = () => {
                     </>
                   )}
 
-                  {/* ---------- РЎР’РЇР—РђРќРќР«Р• Р”РћРљРЈРњР•РќРўР« ---------- */}
+                  {/* ---------- СВЯЗАННЫЕ ДОКУМЕНТЫ ---------- */}
                   {cardTab === 2 && (
                     <Box>
                       <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', mb: 2, gap: 2 }}>
                         <Typography sx={{ fontFamily: 'Lato, sans-serif', fontSize: '12.5px', color: '#87879b', flex: 1 }}>
-                          РЎРІСЏР·Р°РЅРЅС‹Рµ РґРѕРєСѓРјРµРЅС‚С‹ РјРѕР¶РЅРѕ РїСЂРёР»РѕР¶РёС‚СЊ Рє РѕС‚РІРµС‚Сѓ Р·Р°СЏРІРёС‚РµР»СЋ.
-                          Р”Р»СЏ СЃРІСЏР·С‹РІР°РЅРёСЏ РІС‹Р±РµСЂРёС‚Рµ РґРѕРєСѓРјРµРЅС‚ РёР· РІР°С€РµР№ СЃРёСЃС‚РµРјС‹.
+                          Связанные документы можно приложить к ответу заявителю.
+                          Для связывания выберите документ из вашей системы.
                         </Typography>
                         <Button
                           variant="outlined"
@@ -1057,23 +1057,23 @@ const AppealsPage: React.FC = () => {
                           onClick={() => openLinkDialog()}
                           sx={{ borderRadius: '8px', textTransform: 'none', fontFamily: 'Lato, sans-serif', borderColor: '#4c6ef5', color: '#4c6ef5' }}
                         >
-                          РЎРІСЏР·Р°С‚СЊ РґРѕРєСѓРјРµРЅС‚
+                          Связать документ
                         </Button>
                       </Box>
 
                       {card.linked_documents.length === 0 ? (
                         <Typography sx={{ fontFamily: 'Lato, sans-serif', fontSize: '13.5px', color: '#87879b' }}>
-                          РЎ РѕР±СЂР°С‰РµРЅРёРµРј РїРѕРєР° РЅРµ СЃРІСЏР·Р°РЅС‹ РґРѕРєСѓРјРµРЅС‚С‹.
+                          С обращением пока не связаны документы.
                         </Typography>
                       ) : (
                         <TableContainer component={Paper} variant="outlined" sx={{ borderRadius: '8px' }}>
                           <Table size="small">
                             <TableHead>
                               <TableRow>
-                                <TableCell>Р”РѕРєСѓРјРµРЅС‚</TableCell>
-                                <TableCell>Р РµРі. РЅРѕРјРµСЂ</TableCell>
-                                <TableCell>Р¤Р°Р№Р»</TableCell>
-                                <TableCell align="right">РћС‚РІСЏР·Р°С‚СЊ</TableCell>
+                                <TableCell>Документ</TableCell>
+                                <TableCell>Рег. номер</TableCell>
+                                <TableCell>Файл</TableCell>
+                                <TableCell align="right">Отвязать</TableCell>
                               </TableRow>
                             </TableHead>
                             <TableBody>
@@ -1081,13 +1081,13 @@ const AppealsPage: React.FC = () => {
                                 <TableRow key={d.document_uuid}>
                                   <TableCell sx={{ fontFamily: 'Lato, sans-serif', fontSize: '13px' }}>{d.name}</TableCell>
                                   <TableCell sx={{ fontFamily: 'Lato, sans-serif', fontSize: '13px' }}>
-                                    {d.registration_number || 'вЂ”'}
+                                    {d.registration_number || '—'}
                                   </TableCell>
                                   <TableCell sx={{ fontFamily: 'Lato, sans-serif', fontSize: '13px' }}>
                                     {d.original_file_name}
                                     {d.has_signed_copy && (
                                       <Chip
-                                        label="РµСЃС‚СЊ РїРѕРґРїРёСЃР°РЅРЅР°СЏ РєРѕРїРёСЏ"
+                                        label="есть подписанная копия"
                                         size="small"
                                         sx={{ ml: 1, height: 20, fontSize: '10px', bgcolor: '#e8f5e9', color: '#2e7d32' }}
                                       />
@@ -1113,28 +1113,28 @@ const AppealsPage: React.FC = () => {
         </Fade>
       </Modal>
 
-      {/* ===================== Р”РРђР›РћР“: Р Р•Р“РРЎРўР РђР¦РРЇ ===================== */}
+      {/* ===================== ДИАЛОГ: РЕГИСТРАЦИЯ ===================== */}
       <Modal open={registerDialog} onClose={() => setRegisterDialog(false)} closeAfterTransition>
         <Fade in={registerDialog}>
           <DialogPaper elevation={8}>
             <Typography sx={{ fontFamily: 'Lato, sans-serif', fontWeight: 700, fontSize: '18px', color: '#101025', mb: 1 }}>
-              Р РµРіРёСЃС‚СЂР°С†РёСЏ РѕР±СЂР°С‰РµРЅРёСЏ
+              Регистрация обращения
             </Typography>
             <Typography sx={{ fontFamily: 'Lato, sans-serif', fontSize: '13px', color: '#87879b', mb: 2.5 }}>
-              Р’РІРµРґРёС‚Рµ СЂРµРіРёСЃС‚СЂР°С†РёРѕРЅРЅС‹Р№ РЅРѕРјРµСЂ. Р”Р°С‚Р° СЂРµРіРёСЃС‚СЂР°С†РёРё С„РёРєСЃРёСЂСѓРµС‚СЃСЏ СЃРµРіРѕРґРЅСЏС€РЅРёРј С‡РёСЃР»РѕРј ({fmtDate(dayjs().toISOString())}).
-              РџРѕСЃР»Рµ СЂРµРіРёСЃС‚СЂР°С†РёРё РЅР°С‡РЅС‘С‚ РѕС‚СЃС‡РёС‚С‹РІР°С‚СЊСЃСЏ СЃСЂРѕРє РѕС‚РІРµС‚Р° вЂ” 30 РєР°Р»РµРЅРґР°СЂРЅС‹С… РґРЅРµР№.
+              Введите регистрационный номер. Дата регистрации фиксируется сегодняшним числом ({fmtDate(dayjs().toISOString())}).
+              После регистрации начнёт отсчитываться срок ответа — 30 календарных дней.
             </Typography>
             <StyledField
               fullWidth
               size="small"
-              label="Р РµРіРёСЃС‚СЂР°С†РёРѕРЅРЅС‹Р№ РЅРѕРјРµСЂ *"
-              placeholder="РќР°РїСЂРёРјРµСЂ: 1234-РѕР±"
+              label="Регистрационный номер *"
+              placeholder="Например: 1234-об"
               value={regNumber}
               onChange={e => setRegNumber(e.target.value)}
             />
             <Box sx={{ display: 'flex', justifyContent: 'flex-end', gap: 1.5, mt: 3 }}>
               <Button onClick={() => setRegisterDialog(false)} sx={{ textTransform: 'none', fontFamily: 'Lato, sans-serif', color: '#87879b' }}>
-                РћС‚РјРµРЅР°
+                Отмена
               </Button>
               <Button
                 variant="contained"
@@ -1142,28 +1142,28 @@ const AppealsPage: React.FC = () => {
                 onClick={handleRegister}
                 sx={{ bgcolor: '#4c6ef5', borderRadius: '8px', textTransform: 'none', fontFamily: 'Lato, sans-serif' }}
               >
-                Р—Р°СЂРµРіРёСЃС‚СЂРёСЂРѕРІР°С‚СЊ
+                Зарегистрировать
               </Button>
             </Box>
           </DialogPaper>
         </Fade>
       </Modal>
 
-      {/* ===================== Р”РРђР›РћР“: Р’Р—РЇРўР¬ Р’ Р РђР‘РћРўРЈ ===================== */}
+      {/* ===================== ДИАЛОГ: ВЗЯТЬ В РАБОТУ ===================== */}
       <Modal open={takeWorkDialog} onClose={() => setTakeWorkDialog(false)} closeAfterTransition>
         <Fade in={takeWorkDialog}>
           <DialogPaper elevation={8}>
             <Typography sx={{ fontFamily: 'Lato, sans-serif', fontWeight: 700, fontSize: '18px', color: '#101025', mb: 1 }}>
-              Р’Р·СЏС‚СЊ РІ СЂР°Р±РѕС‚Сѓ
+              Взять в работу
             </Typography>
             <Typography sx={{ fontFamily: 'Lato, sans-serif', fontSize: '13px', color: '#87879b', mb: 2.5 }}>
-              РќР°Р·РЅР°С‡СЊС‚Рµ РёСЃРїРѕР»РЅРёС‚РµР»СЏ РѕР±СЂР°С‰РµРЅРёСЏ. РЎС‚Р°С‚СѓСЃ РёР·РјРµРЅРёС‚СЃСЏ РЅР° В«РќР° РёСЃРїРѕР»РЅРµРЅРёРёВ». РњРѕР¶РЅРѕ РѕСЃС‚Р°РІРёС‚СЊ РІРЅСѓС‚СЂРµРЅРЅРёР№ РєРѕРјРјРµРЅС‚Р°СЂРёР№.
+              Назначьте исполнителя обращения. Статус изменится на «На исполнении». Можно оставить внутренний комментарий.
             </Typography>
             <FormControl fullWidth size="small" sx={{ mb: 2 }}>
-              <InputLabel>РСЃРїРѕР»РЅРёС‚РµР»СЊ *</InputLabel>
+              <InputLabel>Исполнитель *</InputLabel>
               <Select
                 value={executorId}
-                label="РСЃРїРѕР»РЅРёС‚РµР»СЊ *"
+                label="Исполнитель *"
                 onChange={e => setExecutorId(Number(e.target.value))}
                 sx={{ borderRadius: '8px' }}
               >
@@ -1179,13 +1179,13 @@ const AppealsPage: React.FC = () => {
               multiline
               rows={3}
               size="small"
-              label="Р’РЅСѓС‚СЂРµРЅРЅРёР№ РєРѕРјРјРµРЅС‚Р°СЂРёР№ (РЅРµ РІРёРґРµРЅ Р·Р°СЏРІРёС‚РµР»СЋ)"
+              label="Внутренний комментарий (не виден заявителю)"
               value={takeWorkComment}
               onChange={e => setTakeWorkComment(e.target.value)}
             />
             <Box sx={{ display: 'flex', justifyContent: 'flex-end', gap: 1.5, mt: 3 }}>
               <Button onClick={() => setTakeWorkDialog(false)} sx={{ textTransform: 'none', fontFamily: 'Lato, sans-serif', color: '#87879b' }}>
-                РћС‚РјРµРЅР°
+                Отмена
               </Button>
               <Button
                 variant="contained"
@@ -1193,28 +1193,28 @@ const AppealsPage: React.FC = () => {
                 onClick={handleTakeWork}
                 sx={{ bgcolor: '#4c6ef5', borderRadius: '8px', textTransform: 'none', fontFamily: 'Lato, sans-serif' }}
               >
-                РќР°Р·РЅР°С‡РёС‚СЊ РёСЃРїРѕР»РЅРёС‚РµР»СЏ
+                Назначить исполнителя
               </Button>
             </Box>
           </DialogPaper>
         </Fade>
       </Modal>
 
-      {/* ===================== Р”РРђР›РћР“: РџР•Р Р•РќРђРџР РђР’Р›Р•РќРР• ===================== */}
+      {/* ===================== ДИАЛОГ: ПЕРЕНАПРАВЛЕНИЕ ===================== */}
       <Modal open={redirectDialog} onClose={() => setRedirectDialog(false)} closeAfterTransition>
         <Fade in={redirectDialog}>
           <DialogPaper elevation={8}>
             <Typography sx={{ fontFamily: 'Lato, sans-serif', fontWeight: 700, fontSize: '18px', color: '#101025', mb: 1 }}>
-              РџРµСЂРµРЅР°РїСЂР°РІР»РµРЅРёРµ РѕР±СЂР°С‰РµРЅРёСЏ
+              Перенаправление обращения
             </Typography>
             <Typography sx={{ fontFamily: 'Lato, sans-serif', fontSize: '13px', color: '#87879b', mb: 2.5 }}>
-              РћР±СЂР°С‰РµРЅРёРµ Р±СѓРґРµС‚ РїРµСЂРµРґР°РЅРѕ РІС‹Р±СЂР°РЅРЅРѕР№ РѕСЂРіР°РЅРёР·Р°С†РёРё. Р—Р°СЏРІРёС‚РµР»СЊ РїРѕР»СѓС‡РёС‚ СѓРІРµРґРѕРјР»РµРЅРёРµ Рѕ РїРµСЂРµР°РґСЂРµСЃР°С†РёРё РЅР° СЌР»РµРєС‚СЂРѕРЅРЅСѓСЋ РїРѕС‡С‚Сѓ.
+              Обращение будет передано выбранной организации. Заявитель получит уведомление о переадресации на электронную почту.
             </Typography>
             <FormControl fullWidth size="small" sx={{ mb: 2 }}>
-              <InputLabel>РћСЂРіР°РЅРёР·Р°С†РёСЏ-РїРѕР»СѓС‡Р°С‚РµР»СЊ *</InputLabel>
+              <InputLabel>Организация-получатель *</InputLabel>
               <Select
                 value={targetOrgId}
-                label="РћСЂРіР°РЅРёР·Р°С†РёСЏ-РїРѕР»СѓС‡Р°С‚РµР»СЊ *"
+                label="Организация-получатель *"
                 onChange={e => setTargetOrgId(Number(e.target.value))}
                 sx={{ borderRadius: '8px' }}
               >
@@ -1232,13 +1232,13 @@ const AppealsPage: React.FC = () => {
               multiline
               rows={3}
               size="small"
-              label="РљРѕРјРјРµРЅС‚Р°СЂРёР№ (РїСЂРёС‡РёРЅР° РїРµСЂРµРЅР°РїСЂР°РІР»РµРЅРёСЏ)"
+              label="Комментарий (причина перенаправления)"
               value={redirectComment}
               onChange={e => setRedirectComment(e.target.value)}
             />
             <Box sx={{ display: 'flex', justifyContent: 'flex-end', gap: 1.5, mt: 3 }}>
               <Button onClick={() => setRedirectDialog(false)} sx={{ textTransform: 'none', fontFamily: 'Lato, sans-serif', color: '#87879b' }}>
-                РћС‚РјРµРЅР°
+                Отмена
               </Button>
               <Button
                 variant="contained"
@@ -1246,14 +1246,14 @@ const AppealsPage: React.FC = () => {
                 onClick={handleRedirect}
                 sx={{ bgcolor: '#e65100', borderRadius: '8px', textTransform: 'none', fontFamily: 'Lato, sans-serif' }}
               >
-                РџРµСЂРµРЅР°РїСЂР°РІРёС‚СЊ
+                Перенаправить
               </Button>
             </Box>
           </DialogPaper>
         </Fade>
       </Modal>
 
-      {/* ===================== Р”РРђР›РћР“: РћРўР’Р•Рў ===================== */}
+      {/* ===================== ДИАЛОГ: ОТВЕТ ===================== */}
       <Modal open={replyDialog} onClose={() => setReplyDialog(false)} closeAfterTransition>
         <Fade in={replyDialog}>
           <Paper
@@ -1272,14 +1272,14 @@ const AppealsPage: React.FC = () => {
             }}
           >
             <Typography sx={{ fontFamily: 'Lato, sans-serif', fontWeight: 700, fontSize: '18px', color: '#101025', mb: 1 }}>
-              РќР°РїСЂР°РІРёС‚СЊ РѕС‚РІРµС‚ Р·Р°СЏРІРёС‚РµР»СЋ
+              Направить ответ заявителю
             </Typography>
             <Typography sx={{ fontFamily: 'Lato, sans-serif', fontSize: '13px', color: '#87879b', mb: 2 }}>
-              РџРёСЃСЊРјРѕ Р±СѓРґРµС‚ РѕС‚РїСЂР°РІР»РµРЅРѕ РЅР° {card?.applicant.email}. РњРѕР¶РЅРѕ РёСЃРїРѕР»СЊР·РѕРІР°С‚СЊ С€Р°Р±Р»РѕРЅ Рё РІР»РѕР¶РёС‚СЊ СЃРІСЏР·Р°РЅРЅС‹Рµ
-              СЃ РѕР±СЂР°С‰РµРЅРёРµРј РґРѕРєСѓРјРµРЅС‚С‹.
+              Письмо будет отправлено на {card?.applicant.email}. Можно использовать шаблон и вложить связанные
+              с обращением документы.
             </Typography>
 
-            {/* РЁР°Р±Р»РѕРЅС‹ */}
+            {/* Шаблоны */}
             <Box sx={{ display: 'flex', gap: 1, mb: 2, flexWrap: 'wrap' }}>
               <Button
                 size="small"
@@ -1287,7 +1287,7 @@ const AppealsPage: React.FC = () => {
                 onClick={() => setReplyText(buildTemplate('considered'))}
                 sx={{ borderRadius: '20px', textTransform: 'none', fontFamily: 'Lato, sans-serif', fontSize: '12px', borderColor: '#4c6ef5', color: '#4c6ef5' }}
               >
-                РЁР°Р±Р»РѕРЅ: СЂР°СЃСЃРјРѕС‚СЂРµРЅ РїРѕ СЃСѓС‰РµСЃС‚РІСѓ
+                Шаблон: рассмотрен по существу
               </Button>
               <Button
                 size="small"
@@ -1295,7 +1295,7 @@ const AppealsPage: React.FC = () => {
                 onClick={() => setReplyText(buildTemplate('acknowledged'))}
                 sx={{ borderRadius: '20px', textTransform: 'none', fontFamily: 'Lato, sans-serif', fontSize: '12px', borderColor: '#4c6ef5', color: '#4c6ef5' }}
               >
-                РЁР°Р±Р»РѕРЅ: РїСЂРёРЅСЏС‚Рѕ Рє СЃРІРµРґРµРЅРёСЋ
+                Шаблон: принято к сведению
               </Button>
             </Box>
 
@@ -1305,7 +1305,7 @@ const AppealsPage: React.FC = () => {
               rows={9}
               value={replyText}
               onChange={e => setReplyText(e.target.value)}
-              placeholder="РўРµРєСЃС‚ РѕС‚РІРµС‚Р° Р·Р°СЏРІРёС‚РµР»СЋвЂ¦"
+              placeholder="Текст ответа заявителю…"
               sx={{
                 mb: 2,
                 '& .MuiOutlinedInput-root': { borderRadius: '10px' },
@@ -1313,13 +1313,13 @@ const AppealsPage: React.FC = () => {
               }}
             />
 
-            {/* Р’Р»РѕР¶РµРЅРёСЏ РёР· СЃРІСЏР·Р°РЅРЅС‹С… РґРѕРєСѓРјРµРЅС‚РѕРІ */}
+            {/* Вложения из связанных документов */}
             <Typography sx={{ fontFamily: 'Lato, sans-serif', fontWeight: 600, fontSize: '13px', color: '#101025', mb: 1 }}>
-              РџСЂРёР»РѕР¶РёС‚СЊ СЃРІСЏР·Р°РЅРЅС‹Рµ РґРѕРєСѓРјРµРЅС‚С‹:
+              Приложить связанные документы:
             </Typography>
             {!card || card.linked_documents.length === 0 ? (
               <Typography sx={{ fontFamily: 'Lato, sans-serif', fontSize: '12.5px', color: '#87879b', mb: 2 }}>
-                РќРµС‚ СЃРІСЏР·Р°РЅРЅС‹С… РґРѕРєСѓРјРµРЅС‚РѕРІ. РџРµСЂРµР№РґРёС‚Рµ РЅР° РІРєР»Р°РґРєСѓ В«РЎРІСЏР·Р°РЅРЅС‹Рµ РґРѕРєСѓРјРµРЅС‚С‹В», С‡С‚РѕР±С‹ РїСЂРёРєСЂРµРїРёС‚СЊ РёС… Рє РѕР±СЂР°С‰РµРЅРёСЋ.
+                Нет связанных документов. Перейдите на вкладку «Связанные документы», чтобы прикрепить их к обращению.
               </Typography>
             ) : (
               <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.75, mb: 1 }}>
@@ -1342,10 +1342,10 @@ const AppealsPage: React.FC = () => {
                     label={
                       <Typography sx={{ fontFamily: 'Lato, sans-serif', fontSize: '13px', color: '#101025' }}>
                         {d.name}
-                        {d.registration_number ? ` (СЂРµРі. в„– ${d.registration_number})` : ''}
+                        {d.registration_number ? ` (рег. № ${d.registration_number})` : ''}
                         {(d.signature_type === 'UNEP' || d.signature_type === 'UKEP') && (
                           <Chip
-                            label={d.signature_type === 'UKEP' ? 'РЈРљР­Рџ' : 'РЈРќР­Рџ'}
+                            label={d.signature_type === 'UKEP' ? 'УКЭП' : 'УНЭП'}
                             size="small"
                             sx={{ ml: 1, height: 18, fontSize: 10, bgcolor: '#e8f5e9', color: '#2e7d32' }}
                           />
@@ -1360,8 +1360,8 @@ const AppealsPage: React.FC = () => {
                 ) && (
                   <Alert severity="info" sx={{ borderRadius: '8px', mt: 0.5 }}>
                     <Typography sx={{ fontFamily: 'Lato, sans-serif', fontSize: '12.5px' }}>
-                      Рљ РїРёСЃСЊРјСѓ СЃ РЈРќР­Рџ/РЈРљР­Рџ-РґРѕРєСѓРјРµРЅС‚РѕРј Р±СѓРґРµС‚ РїСЂРёР»РѕР¶РµРЅС‹ РєРѕРїРёСЏ СЃРѕ С€С‚Р°РјРїРѕРј Р­Рџ Рё Р°СЂС…РёРІ
-                      СЃ РїРѕРґР»РёРЅРЅРёРєРѕРј. РЎРѕРїСЂРѕРІРѕРґРёС‚РµР»СЊРЅРѕРµ РїРёСЃСЊРјРѕ СЃС„РѕСЂРјРёСЂСѓРµС‚СЃСЏ Р°РІС‚РѕРјР°С‚РёС‡РµСЃРєРё.
+                      К письму с УНЭП/УКЭП-документом будет приложены копия со штампом ЭП и архив
+                      с подлинником. Сопроводительное письмо сформируется автоматически.
                     </Typography>
                   </Alert>
                 )}
@@ -1370,7 +1370,7 @@ const AppealsPage: React.FC = () => {
 
             <Box sx={{ display: 'flex', justifyContent: 'flex-end', gap: 1.5, mt: 2 }}>
               <Button onClick={() => setReplyDialog(false)} sx={{ textTransform: 'none', fontFamily: 'Lato, sans-serif', color: '#87879b' }}>
-                РћС‚РјРµРЅР°
+                Отмена
               </Button>
               <Button
                 variant="contained"
@@ -1379,25 +1379,25 @@ const AppealsPage: React.FC = () => {
                 startIcon={<SendIcon />}
                 sx={{ bgcolor: '#2e7d32', borderRadius: '8px', textTransform: 'none', fontFamily: 'Lato, sans-serif' }}
               >
-                РќР°РїСЂР°РІРёС‚СЊ РѕС‚РІРµС‚
+                Направить ответ
               </Button>
             </Box>
           </Paper>
         </Fade>
       </Modal>
 
-      {/* ===================== Р”РРђР›РћР“: РЎР’РЇР—РђРўР¬ Р”РћРљРЈРњР•РќРў ===================== */}
+      {/* ===================== ДИАЛОГ: СВЯЗАТЬ ДОКУМЕНТ ===================== */}
       <Modal open={linkDialogOpen} onClose={() => setLinkDialogOpen(false)} closeAfterTransition>
         <Fade in={linkDialogOpen}>
           <DialogPaper elevation={8} sx={{ maxWidth: '640px' }}>
             <Typography sx={{ fontFamily: 'Lato, sans-serif', fontWeight: 700, fontSize: '18px', color: '#101025', mb: 1 }}>
-              РЎРІСЏР·Р°С‚СЊ РґРѕРєСѓРјРµРЅС‚ СЃ РѕР±СЂР°С‰РµРЅРёРµРј
+              Связать документ с обращением
             </Typography>
             <Box sx={{ display: 'flex', gap: 1, mb: 2 }}>
               <TextField
                 fullWidth
                 size="small"
-                placeholder="РџРѕРёСЃРє РґРѕРєСѓРјРµРЅС‚Р° РїРѕ РЅР°Р·РІР°РЅРёСЋ РёР»Рё РЅРѕРјРµСЂСѓ"
+                placeholder="Поиск документа по названию или номеру"
                 value={linkSearch}
                 onChange={e => setLinkSearch(e.target.value)}
                 onKeyDown={e => {
@@ -1410,7 +1410,7 @@ const AppealsPage: React.FC = () => {
                 onClick={() => openLinkDialog(linkSearch)}
                 sx={{ borderRadius: '8px', textTransform: 'none', fontFamily: 'Lato, sans-serif', bgcolor: '#4c6ef5', whiteSpace: 'nowrap' }}
               >
-                РќР°Р№С‚Рё
+                Найти
               </Button>
             </Box>
             {linkLoading ? (
@@ -1419,7 +1419,7 @@ const AppealsPage: React.FC = () => {
               </Box>
             ) : linkCandidates.length === 0 ? (
               <Typography sx={{ fontFamily: 'Lato, sans-serif', fontSize: '13px', color: '#87879b' }}>
-                Р”РѕРєСѓРјРµРЅС‚С‹ РЅРµ РЅР°Р№РґРµРЅС‹
+                Документы не найдены
               </Typography>
             ) : (
               <Box sx={{ maxHeight: 360, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 1 }}>
@@ -1435,7 +1435,7 @@ const AppealsPage: React.FC = () => {
                         {doc.name}
                       </Typography>
                       <Typography sx={{ fontFamily: 'Lato, sans-serif', fontSize: '12px', color: '#87879b' }}>
-                        СЂРµРі. в„– {doc.registration_number || 'вЂ”'}
+                        рег. № {doc.registration_number || '—'}
                       </Typography>
                     </Box>
                     <Button
@@ -1444,7 +1444,7 @@ const AppealsPage: React.FC = () => {
                       onClick={() => handleLinkDoc(doc.uuid, doc.name)}
                       sx={{ textTransform: 'none', fontFamily: 'Lato, sans-serif', color: '#4c6ef5' }}
                     >
-                      РЎРІСЏР·Р°С‚СЊ
+                      Связать
                     </Button>
                   </Paper>
                 ))}

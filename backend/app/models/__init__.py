@@ -1,4 +1,4 @@
-﻿# backend/app/models/__init__.py
+# backend/app/models/__init__.py
 from app.models.base import Base
 from app.models.document import Document, DocumentStatus, SignatureType, FolderType, StampMapping, CustomFolder
 from app.models.employee import Employee, EmployeeRoleEnum, DocumentReview

@@ -48,3 +48,6 @@ logs/
 # OS
 .DS_Store
 Thumbs.db
+# SQLite WAL sidecar files
+*.db-shm
+*.db-wal

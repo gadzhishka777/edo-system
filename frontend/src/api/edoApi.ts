@@ -1,4 +1,4 @@
-﻿import axios from 'axios';
+import axios from 'axios';
 
 const API_BASE_URL = process.env.REACT_APP_API_URL || '';
 
@@ -34,7 +34,7 @@ function clearTokens() {
   localStorage.removeItem('employee_roles');
 }
 
-// Р”РѕР±Р°РІР»СЏРµРј access token Рє РєР°Р¶РґРѕРјСѓ Р·Р°РїСЂРѕСЃСѓ
+// Добавляем access token к каждому запросу
 apiClient.interceptors.request.use((config) => {
   const token = getAccessToken();
   if (token) {
@@ -43,7 +43,7 @@ apiClient.interceptors.request.use((config) => {
   return config;
 });
 
-// РђРІС‚РѕРјР°С‚РёС‡РµСЃРєРѕРµ РѕР±РЅРѕРІР»РµРЅРёРµ С‚РѕРєРµРЅР° РїСЂРё 401
+// Автоматическое обновление токена при 401
 let isRefreshing = false;
 let failedQueue: Array<{ resolve: (v: any) => void; reject: (e: any) => void; config: any }> = [];
 
@@ -52,7 +52,7 @@ apiClient.interceptors.response.use(
   async (error) => {
     const originalRequest = error.config;
 
-    // Р•СЃР»Рё 401 Рё СЌС‚Рѕ РЅРµ РїРѕРІС‚РѕСЂРЅС‹Р№ Р·Р°РїСЂРѕСЃ Рё РЅРµ Р·Р°РїСЂРѕСЃ РЅР° login/refresh
+    // Если 401 и это не повторный запрос и не запрос на login/refresh
     if (
       error.response?.status === 401 &&
       !originalRequest._retry &&
@@ -60,7 +60,7 @@ apiClient.interceptors.response.use(
       !originalRequest.url?.includes('/auth/refresh')
     ) {
       if (isRefreshing) {
-        // РЎС‚Р°РІРёРј РІ РѕС‡РµСЂРµРґСЊ РїРѕРєР° РѕР±РЅРѕРІР»СЏРµС‚СЃСЏ С‚РѕРєРµРЅ
+        // Ставим в очередь пока обновляется токен
         return new Promise((resolve, reject) => {
           failedQueue.push({ resolve, reject, config: originalRequest });
         });
@@ -83,7 +83,7 @@ apiClient.interceptors.response.use(
         const { access_token, refresh_token } = response.data;
         setTokens(access_token, refresh_token);
 
-        // РџРѕРІС‚РѕСЂСЏРµРј Р·Р°РїСЂРѕСЃС‹ РёР· РѕС‡РµСЂРµРґРё
+        // Повторяем запросы из очереди
         failedQueue.forEach(({ resolve, config }) => {
           config.headers.Authorization = `Bearer ${access_token}`;
           resolve(apiClient(config));
@@ -491,7 +491,7 @@ export const updateDocumentWithEmployees = async (
   return response.data;
 };
 
-// ===== РџРѕС‡С‚Р° =====
+// ===== Почта =====
 export interface Organization {
   id: number;
   uuid: string;
@@ -608,7 +608,7 @@ export const signAndReplyMail = async (mailUuid: string, sigFile: File): Promise
   return response.data;
 };
 
-// ===== РљРѕРЅС‚Р°РєС‚С‹ =====
+// ===== Контакты =====
 export interface Contact {
   id: number;
   uuid: string;
@@ -661,13 +661,13 @@ export const deleteContact = async (uuid: string): Promise<void> => {
   await apiClient.delete(`/api/contacts/${uuid}`);
 };
 
-// ===== РЁС‚Р°РјРїС‹ (РјР°РїРїРёРЅРі РїРѕРґРїРёСЃР°РЅС‚ в†’ С€С‚Р°РјРї) =====
+// ===== Штампы (маппинг подписант → штамп) =====
 export const getStampMapping = async (): Promise<Record<string, string>> => {
   const response = await apiClient.get(`/api/documents/stamps/mapping`);
   return response.data;
 };
 
-// ===== РљР°СЃС‚РѕРјРЅС‹Рµ РїР°РїРєРё =====
+// ===== Кастомные папки =====
 export interface CustomFolder {
   id: number;
   uuid: string;
@@ -690,7 +690,7 @@ export const deleteCustomFolder = async (uuid: string): Promise<{ message: strin
   return response.data;
 };
 
-// ===== РЎРѕС‚СЂСѓРґРЅРёРєРё =====
+// ===== Сотрудники =====
 export interface Employee {
   id: number;
   uuid: string;
@@ -775,9 +775,9 @@ export const getEmployeeRoles = async (): Promise<EmployeeRoleListResponse> => {
 };
 
 export default apiClient;
-// ===== РћР±СЂР°С‰РµРЅРёСЏ РіСЂР°Р¶РґР°РЅ (РїСѓР±Р»РёС‡РЅС‹Рµ + РІРЅСѓС‚СЂРµРЅРЅРёР№ СЂР°Р·РґРµР») =====
+// ===== Обращения граждан (публичные + внутренний раздел) =====
 
-// РљР»РёРµРЅС‚ Р‘Р•Р— Р°РІС‚РѕСЂРёР·Р°С†РёРё вЂ” РґР»СЏ РїСѓР±Р»РёС‡РЅРѕР№ РёРЅС‚РµСЂРЅРµС‚-РїСЂРёС‘РјРЅРѕР№
+// Клиент БЕЗ авторизации — для публичной интернет-приёмной
 export const publicApiClient = axios.create({
   baseURL: API_BASE_URL,
   timeout: 60000,
@@ -848,7 +848,7 @@ export interface AppealCard extends AppealListItem {
   history: AppealHistoryEntry[];
 }
 
-// ===== РџСѓР±Р»РёС‡РЅС‹Рµ РјРµС‚РѕРґС‹ =====
+// ===== Публичные методы =====
 
 export const getAppealTargets = async (): Promise<AppealTarget[]> => {
   const r = await publicApiClient.get(`/api/public/appeals/targets`);
@@ -868,7 +868,7 @@ export const checkAppealStatus = async (systemNumber: string, email: string) => 
   return r.data;
 };
 
-// ===== Р’РЅСѓС‚СЂРµРЅРЅРёР№ СЂР°Р·РґРµР» =====
+// ===== Внутренний раздел =====
 
 export interface AppealListParams {
   page?: number;

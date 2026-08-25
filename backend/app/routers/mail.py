@@ -33,13 +33,18 @@ async def list_organizations(
     db: AsyncSession = Depends(get_async_db),
     org: Organization = Depends(get_current_org),
 ):
-    """Список организаций для выбора получателя (текущая исключается)"""
-    query = select(Organization).where(Organization.id != org.id).order_by(Organization.name)
+    """Список активных организаций для выбора получателя (текущая исключается)"""
+    query = (
+        select(Organization)
+        .where(Organization.id != org.id)
+        .where(Organization.is_active == True)  # noqa: E712
+        .order_by(Organization.name)
+    )
     if search:
         query = query.where(
             or_(
                 Organization.name.ilike(f"%{search}%"),
-                Organization.inn.ilike(f"%{search}%"),
+                Organization.uuid.ilike(f"%{search}%"),
             )
         )
     result = await db.execute(query)

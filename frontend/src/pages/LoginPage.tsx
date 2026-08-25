@@ -17,15 +17,10 @@ import {
   ArrowBack as ArrowBackIcon,
   Visibility,
   VisibilityOff,
-  Engineering as EngineeringIcon,
 } from '@mui/icons-material';
-import dayjs from 'dayjs';
 import Footer from '../components/Layout/Footer';
 import { authApi } from '../api/edoApi';
 import { getApiErrorMessage } from '../api/edoApi';
-
-// Баннер плановых работ показывается только до конца указанной даты
-const MAINTENANCE_DATE = '2026-08-25';
 
 // ===== СТИЛИЗОВАННЫЕ КОМПОНЕНТЫ =====
 
@@ -301,23 +296,6 @@ const LoginPage: React.FC<LoginPageProps> = ({ onLogin }) => {
             <TitleWrapper>
               <MainTitle variant="h1">ТОР ЭДО</MainTitle>
             </TitleWrapper>
-
-            {dayjs().isBefore(dayjs(MAINTENANCE_DATE).endOf('day')) && (
-              <Alert
-                severity="warning"
-                icon={<EngineeringIcon fontSize="inherit" />}
-                sx={{
-                  mb: 3,
-                  borderRadius: '12px',
-                  fontFamily: 'Lato, sans-serif',
-                  '& .MuiAlert-message': { fontSize: '13px', lineHeight: 1.5 },
-                }}
-              >
-                <strong>Плановые работы на узле.</strong>{' '}
-                24.08.2026 будут проходить плановые технические работы, система может работать с перебоями.
-                Приносим извинения за доставленные неудобства.
-              </Alert>
-            )}
 
             <form onSubmit={handleSubmit}>
               <Subtitle variant="subtitle1">Вход по логину и паролю</Subtitle>

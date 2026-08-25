@@ -373,7 +373,7 @@ class MailPaginatedResponse(BaseModel):
 # ===== Роли сотрудников =====
 
 class EmployeeRoleInfo(BaseModel):
-    """РРЅС„РѕСЂРјР°С†РёСЏ Рѕ СЂРѕР»Рё СЃРѕС‚СЂСѓРґРЅРёРєР°."""
+    """Информация о роли сотрудника."""
     value: str
     label: str
     category: str  # "basic", "clerk", "manager", "admin"
