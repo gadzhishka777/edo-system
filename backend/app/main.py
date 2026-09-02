@@ -26,7 +26,8 @@ from app.models.base import Base
 from app.models.mail import Organization, License
 from app.models.user import AdminUser
 from app.models.employee import Employee
-from app.routers import documents, mail, auth, contacts, admin, employees
+from app.models.vacancy import Vacancy
+from app.routers import documents, mail, auth, contacts, admin, employees, vacancies
 from app.routers import public_appeals, appeals
 from app.core.security import get_password_hash
 
@@ -348,6 +349,7 @@ app.include_router(mail.router, prefix=settings.API_PREFIX)
 app.include_router(contacts.router, prefix=settings.API_PREFIX)
 app.include_router(admin.router, prefix=settings.API_PREFIX)
 app.include_router(employees.router, prefix=settings.API_PREFIX)
+app.include_router(vacancies.router, prefix=settings.API_PREFIX)
 app.include_router(public_appeals.router, prefix=settings.API_PREFIX)
 app.include_router(appeals.router, prefix=settings.API_PREFIX)
 

@@ -34,6 +34,9 @@ import { getApiErrorMessage } from '../api/edoApi';
 
 const PageContainer = styled(Box)({
   padding: '24px 32px',
+  '@media (max-width: 600px)': {
+    padding: '16px',
+  },
   maxWidth: '900px',
   margin: '0 auto',
 });
@@ -493,7 +496,7 @@ const AboutPage: React.FC = () => {
             </InfoRow>
             <InfoRow>
               <InfoLabel>Версия</InfoLabel>
-              <InfoValue>0.4</InfoValue>
+              <InfoValue>0.5</InfoValue>
             </InfoRow>
             <InfoRow>
               <InfoLabel>Статус лицензии</InfoLabel>

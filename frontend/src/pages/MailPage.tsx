@@ -88,6 +88,9 @@ dayjs.locale('ru');
 // ===== СТИЛИЗОВАННЫЕ КОМПОНЕНТЫ =====
 const PageContainer = styled(Box)({
   padding: '24px 32px',
+  '@media (max-width: 600px)': {
+    padding: '16px',
+  },
   maxWidth: '1200px',
   margin: '0 auto',
 });
@@ -189,6 +192,12 @@ const ModalContainer = styled(Box)({
   borderRadius: '16px',
   boxShadow: '0 8px 32px rgba(0, 0, 0, 0.12)',
   overflow: 'hidden',
+  '@media (max-width: 600px)': {
+    width: 'calc(100% - 16px)',
+    maxWidth: 'calc(100% - 16px)',
+    maxHeight: 'calc(100vh - 16px)',
+    borderRadius: '12px',
+  },
   display: 'flex',
   flexDirection: 'column',
 });
@@ -423,12 +432,32 @@ const MailPage: React.FC = () => {
     };
   }, [orgSearch, isComposeOpen]);
 
-  const formatDate = (dateStr: string): string => {
+  // Дата письма в формате ДД.ММ.ГГГГ.
+  // ВАЖНО: нельзя вызывать dayjs(iso, 'DD.MM.YYYY HH:mm:ss') — AdapterDayjs (MUI)
+  // при монтировании LocalizationProvider глобально подключает плагин customParseFormat,
+  // после чего ISO-строка от бэкенда разбирается как ДД.ММ.ГГГГ и получается мусор
+  // вида "21.08.4125". Поэтому парсим только однократным вызовом dayjs(value).
+  const formatDate = (dateStr?: string | null): string => {
     if (!dateStr) return '—';
+    const raw = String(dateStr).trim();
+    if (!raw) return '—';
+
     try {
-      const parsed = dayjs(dateStr, 'DD.MM.YYYY HH:mm:ss');
-      if (parsed.isValid()) return parsed.format('DD.MM.YYYY HH:mm');
-      return dayjs(dateStr).format('DD.MM.YYYY HH:mm');
+      // Значение уже в русском формате: "ДД.ММ.ГГГГ" или "ДД.ММ.ГГГГ ЧЧ:ММ[:СС]"
+      const ruDate = raw.match(/^(\d{2})\.(\d{2})\.(\d{4})/);
+      if (ruDate) {
+        return `${ruDate[1]}.${ruDate[2]}.${ruDate[3]}`;
+      }
+
+      // ISO / SQL-формат от бэкенда: "2026-08-21T01:13:00", "2026-08-21 01:13:00.000000" и т.п.
+      const parsed = dayjs(raw);
+      if (!parsed.isValid()) return '—';
+
+      // Защита от неадекватных дат (например, неверно разобранных подписей)
+      const year = parsed.year();
+      if (year < 1900 || year > 2100) return '—';
+
+      return parsed.format('DD.MM.YYYY');
     } catch {
       return '—';
     }
@@ -1133,7 +1162,7 @@ const MailPage: React.FC = () => {
                 )}
               </EmptyStateContainer>
             ) : (
-              <TableContainer component={Paper} sx={{ borderRadius: '12px', border: '1px solid #eaebf0', boxShadow: 'none' }}>
+              <TableContainer component={Paper} sx={{ borderRadius: '12px', border: '1px solid #eaebf0', boxShadow: 'none', overflowX: 'auto', width: '100%' }}>
                 <Table>
                   <TableHead>
                     <TableRow sx={{ backgroundColor: '#fafafa' }}>

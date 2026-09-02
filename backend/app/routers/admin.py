@@ -16,6 +16,7 @@ from io import BytesIO
 from app.database import get_async_db
 from app.models.mail import Organization, License, MailMessage
 from app.models.document import Document, StampMapping
+from app.models.vacancy import Vacancy
 from app.models.user import AdminUser
 from app.models.employee import Employee
 from app.models.pydantic import DocumentResponse
@@ -345,6 +346,7 @@ async def list_organizations(
             "contact_email": o.contact_email,
             "login": o.login,
             "is_active": o.is_active,
+            "is_school": bool(o.is_school),
             "created_at": o.created_at.isoformat() if o.created_at else None,
             "active_license_id": o.active_license_id,
         } for o in orgs],
@@ -394,6 +396,7 @@ async def create_organization(
         login=login,
         hashed_password=get_password_hash(password),
         is_active=True,
+        is_school=bool(data.get("is_school", False)),
     )
     db.add(org)
     await db.flush()
@@ -460,6 +463,8 @@ async def update_organization(
         org.contact_email = (data["contact_email"] or "").strip() or None
     if "is_active" in data:
         org.is_active = bool(data["is_active"])
+    if "is_school" in data:
+        org.is_school = bool(data["is_school"])
 
     await db.commit()
     await db.refresh(org)
@@ -469,6 +474,7 @@ async def update_organization(
         "name": org.name,
         "login": org.login,
         "is_active": org.is_active,
+        "is_school": bool(org.is_school),
         "message": "Организация обновлена",
     }
 
@@ -965,4 +971,60 @@ async def get_stats(
         "total_licenses": license_count,
         "activated_licenses": activated_licenses,
         "total_messages": mail_count,
+    }
+
+
+@router.get("/vacancies", response_model=dict)
+async def get_all_vacancies(
+    page: int = Query(1, ge=1),
+    size: int = Query(20, ge=1, le=100),
+    search: Optional[str] = Query(None),
+    db: AsyncSession = Depends(get_async_db),
+    _admin: AdminUser = Depends(get_current_admin),
+):
+    """Все вакансии по всем организациям (просмотр для администратора системы)."""
+    query = (
+        select(Vacancy, Organization.name.label("org_name"))
+        .join(Organization, Vacancy.org_id == Organization.id)
+    )
+    count_query = select(func.count()).select_from(Vacancy)
+
+    if search:
+        condition = build_smart_search(
+            [Vacancy.name, Vacancy.position, Vacancy.description],
+            search,
+        )
+        query = query.where(condition)
+        count_query = count_query.where(condition)
+
+    total = (await db.execute(count_query)).scalar() or 0
+    pages = (total + size - 1) // size if total > 0 else 0
+
+    query = query.order_by(Vacancy.created_at.desc()).offset((page - 1) * size).limit(size)
+    result = await db.execute(query)
+    rows = result.all()
+
+    items = [
+        {
+            "id": v.id,
+            "uuid": v.uuid,
+            "org_id": v.org_id,
+            "org_name": org_name,
+            "name": v.name,
+            "position": v.position,
+            "teaching_load": v.teaching_load,
+            "description": v.description,
+            "is_active": v.is_active,
+            "created_at": v.created_at.isoformat() if v.created_at else None,
+            "updated_at": v.updated_at.isoformat() if v.updated_at else None,
+        }
+        for v, org_name in rows
+    ]
+
+    return {
+        "items": items,
+        "total": total,
+        "page": page,
+        "size": size,
+        "pages": pages,
     }

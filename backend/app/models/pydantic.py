@@ -3,7 +3,7 @@ from datetime import datetime
 from enum import Enum
 from typing import Optional, List, Dict, Any, Union
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from app.models.document import SignatureType, DocumentStatus, FolderType
 from app.models.employee import EmployeeRoleEnum
@@ -455,6 +455,139 @@ class EmployeeLoginResponse(BaseModel):
     employee_name: str
     roles: List[str]
     profile_completed: bool
+
+
+# ===== Вакансии =====
+
+class VacancyBase(BaseModel):
+    name: str = Field(..., min_length=1, max_length=500)
+    position: str = Field(..., min_length=1, max_length=500)
+    teaching_load: Optional[int] = Field(None, ge=1, le=35)
+    description: Optional[str] = None
+
+    @field_validator("name", "position", mode="before")
+    @classmethod
+    def _strip_text(cls, v):
+        return v.strip() if isinstance(v, str) else v
+
+    @field_validator("teaching_load", mode="before")
+    @classmethod
+    def _empty_load_to_none(cls, v):
+        """Пустая строка / ноль от фронтенда -> None."""
+        if v in ("", None):
+            return None
+        if isinstance(v, str):
+            v = v.strip()
+            if not v:
+                return None
+            try:
+                v = int(v)
+            except ValueError:
+                return None
+        return v
+
+    @field_validator("position")
+    @classmethod
+    def _position_from_classifier(cls, v):
+        from app.models.vacancy import POSITION_CLASSIFIER
+
+        if v not in POSITION_CLASSIFIER:
+            raise ValueError(
+                "Должность должна быть выбрана из классификатора должностей"
+            )
+        return v
+
+    @model_validator(mode="after")
+    def _teaching_load_rules(self):
+        """Учебная нагрузка обязательна для учителей и запрещена для остальных."""
+        from app.models.vacancy import is_teacher_position
+
+        if is_teacher_position(self.position):
+            if self.teaching_load is None:
+                raise ValueError(
+                    "Для учительской должности обязательна учебная нагрузка (часов в неделю)"
+                )
+        else:
+            self.teaching_load = None
+        return self
+
+
+class VacancyCreate(VacancyBase):
+    pass
+
+
+class VacancyUpdate(BaseModel):
+    name: Optional[str] = Field(None, min_length=1, max_length=500)
+    position: Optional[str] = Field(None, min_length=1, max_length=500)
+    teaching_load: Optional[int] = Field(None, ge=1, le=35)
+    description: Optional[str] = None
+    is_active: Optional[bool] = None
+
+    @field_validator("name", "position", "description", mode="before")
+    @classmethod
+    def _strip_text(cls, v):
+        return v.strip() if isinstance(v, str) else v
+
+    @field_validator("teaching_load", mode="before")
+    @classmethod
+    def _empty_load_to_none(cls, v):
+        if v in ("", None):
+            return None
+        if isinstance(v, str):
+            v = v.strip()
+            if not v:
+                return None
+            try:
+                v = int(v)
+            except ValueError:
+                return None
+        return v
+
+    @field_validator("position")
+    @classmethod
+    def _position_from_classifier(cls, v):
+        from app.models.vacancy import POSITION_CLASSIFIER
+
+        if v is not None and v not in POSITION_CLASSIFIER:
+            raise ValueError(
+                "Должность должна быть выбрана из классификатора должностей"
+            )
+        return v
+
+
+class VacancyResponse(BaseModel):
+    id: int
+    uuid: str
+    org_id: int
+    name: str
+    position: str
+    teaching_load: Optional[int] = None
+    description: Optional[str] = None
+    is_active: bool
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+
+    class Config:
+        from_attributes = True
+
+
+class VacancyPaginatedResponse(BaseModel):
+    items: List[VacancyResponse]
+    total: int
+    page: int
+    size: int
+    pages: int
+
+
+class VacancyPositionInfo(BaseModel):
+    """Элемент классификатора должностей."""
+    value: str
+    label: str
+    is_teacher: bool
+
+
+class VacancyPositionListResponse(BaseModel):
+    positions: List[VacancyPositionInfo]
 
 
 # ===== Завершение профиля =====

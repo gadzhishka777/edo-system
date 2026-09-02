@@ -113,6 +113,9 @@ class Organization(Base):
     # ID активной лицензии
     active_license_id = Column(Integer, ForeignKey("licenses.id"), nullable=True)
 
+    # Признак «Является школой» (школы получают дополнительные возможности в системе)
+    is_school = Column(Boolean, default=False, nullable=False)
+
     # Связи
     employees = relationship("Employee", back_populates="organization", lazy="selectin")
 

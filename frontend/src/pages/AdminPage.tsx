@@ -56,6 +56,7 @@ import {
   Verified as VerifiedIcon,
   Image as ImageIcon,
   Forum as ForumIcon,
+  Work as WorkIcon,
   AttachFile as AttachFileIcon,
   History as HistoryIcon,
 } from '@mui/icons-material';
@@ -73,6 +74,14 @@ const adminApi = {
   getStats: async () => {
     const r = await fetch(`${API_BASE}/api/admin/stats`, { headers: adminApi.getHeaders() });
     if (!r.ok) throw new Error('Ошибка загрузки статистики');
+    return r.json();
+  },
+
+  getVacancies: async (page = 1, size = 20, search = '') => {
+    const params = new URLSearchParams({ page: String(page), size: String(size) });
+    if (search) params.set('search', search);
+    const r = await fetch(`${API_BASE}/api/admin/vacancies?${params}`, { headers: adminApi.getHeaders() });
+    if (!r.ok) throw new Error('Ошибка загрузки вакансий');
     return r.json();
   },
 
@@ -270,6 +279,9 @@ const adminApi = {
 
 const PageContainer = styled(Box)({
   padding: '24px 32px',
+  '@media (max-width: 600px)': {
+    padding: '16px',
+  },
   maxWidth: '1400px',
   margin: '0 auto',
 });
@@ -308,6 +320,12 @@ const StyledModalContainer = styled(Box)({
   width: '90%', maxWidth: '640px', maxHeight: '90vh', backgroundColor: '#ffffff',
   borderRadius: '16px', boxShadow: '0 8px 32px rgba(0, 0, 0, 0.12)', overflow: 'hidden',
   display: 'flex', flexDirection: 'column',
+  '@media (max-width: 600px)': {
+    width: 'calc(100% - 16px)',
+    maxWidth: 'calc(100% - 16px)',
+    maxHeight: 'calc(100vh - 16px)',
+    borderRadius: '12px',
+  },
 });
 
 const ModalHeader = styled(Box)({
@@ -431,6 +449,13 @@ const AdminPage: React.FC = () => {
   const [appealCard, setAppealCard] = useState<any | null>(null);
   const [appealCardOpen, setAppealCardOpen] = useState(false);
 
+  // Вакансии (просмотр по всем организациям)
+  const [vacancies, setVacancies] = useState<any[]>([]);
+  const [vacTotal, setVacTotal] = useState(0);
+  const [vacPage, setVacPage] = useState(1);
+  const [vacSearch, setVacSearch] = useState('');
+  const [vacLoading, setVacLoading] = useState(false);
+
   // Modals
   const [createOrgModal, setCreateOrgModal] = useState(false);
   const [editCredsModal, setEditCredsModal] = useState(false);
@@ -440,9 +465,9 @@ const AdminPage: React.FC = () => {
   const [generating, setGenerating] = useState(false);
 
   // Form data
-  const [orgForm, setOrgForm] = useState({ name: '', login: '', password: '', inn: '', kpp: '', address: '', contact_person: '', contact_email: '' });
+  const [orgForm, setOrgForm] = useState({ name: '', login: '', password: '', inn: '', kpp: '', address: '', contact_person: '', contact_email: '', is_school: false });
   const [credsForm, setCredsForm] = useState({ login: '', password: '' });
-  const [editOrgForm, setEditOrgForm] = useState({ name: '', inn: '', kpp: '', address: '', contact_person: '', contact_email: '', is_active: true });
+  const [editOrgForm, setEditOrgForm] = useState({ name: '', inn: '', kpp: '', address: '', contact_person: '', contact_email: '', is_active: true, is_school: false });
   const [licForm, setLicForm] = useState({ count: 5, duration_days: 180 });
 
   // ===================== STATS =====================
@@ -499,6 +524,25 @@ const AdminPage: React.FC = () => {
   useEffect(() => {
     if (tab === 4) loadAppeals();
   }, [tab, loadAppeals]);
+
+  // ===================== VACANCIES (просмотр всех организаций) =====================
+
+  const loadVacancies = useCallback(async () => {
+    setVacLoading(true);
+    try {
+      const data = await adminApi.getVacancies(vacPage, 20, vacSearch);
+      setVacancies(data.items || []);
+      setVacTotal(data.total || 0);
+    } catch (err: any) {
+      setError(err.message);
+    } finally {
+      setVacLoading(false);
+    }
+  }, [vacPage, vacSearch]);
+
+  useEffect(() => {
+    if (tab === 5) loadVacancies();
+  }, [tab, loadVacancies]);
 
   useEffect(() => {
     const t = setTimeout(() => { setDebouncedAppealsSearch(appealsSearch); setAppealsPage(1); }, 400);
@@ -566,7 +610,7 @@ const AdminPage: React.FC = () => {
   };
 
   const resetOrgForm = () => {
-    setOrgForm({ name: '', login: '', password: '', inn: '', kpp: '', address: '', contact_person: '', contact_email: '' });
+    setOrgForm({ name: '', login: '', password: '', inn: '', kpp: '', address: '', contact_person: '', contact_email: '', is_school: false });
   };
 
   const openCreateOrg = () => { resetOrgForm(); setCreateOrgModal(true); };
@@ -581,6 +625,7 @@ const AdminPage: React.FC = () => {
       contact_person: org.contact_person || '',
       contact_email: org.contact_email || '',
       is_active: org.is_active ?? true,
+      is_school: org.is_school ?? false,
     });
     setEditOrgModal(true);
   };
@@ -824,6 +869,7 @@ const AdminPage: React.FC = () => {
               <Tab icon={<DescriptionIcon fontSize="small" />} label="Документы" disabled={!selectedOrg} />
               <Tab icon={<ImageIcon fontSize="small" />} label="Штампы" />
               <Tab icon={<ForumIcon fontSize="small" />} label="Обращения" />
+              <Tab icon={<WorkIcon fontSize="small" />} label="Вакансии" />
             </Tabs>
 
             {/* TAB: Организации */}
@@ -852,7 +898,7 @@ const AdminPage: React.FC = () => {
                   <Box sx={{ display: 'flex', justifyContent: 'center', py: 6 }}><CircularProgress /></Box>
                 ) : (
                   <>
-                    <TableContainer component={Paper} sx={{ borderRadius: '12px', border: '1px solid #eaebf0', boxShadow: 'none', mb: 2 }}>
+                    <TableContainer component={Paper} sx={{ borderRadius: '12px', border: '1px solid #eaebf0', boxShadow: 'none', mb: 2, overflowX: 'auto', width: '100%' }}>
                       <Table>
                         <TableHead>
                           <TableRow sx={{ backgroundColor: '#fafafa' }}>
@@ -939,7 +985,7 @@ const AdminPage: React.FC = () => {
                   <Box sx={{ display: 'flex', justifyContent: 'center', py: 6 }}><CircularProgress /></Box>
                 ) : (
                   <>
-                    <TableContainer component={Paper} sx={{ borderRadius: '12px', border: '1px solid #eaebf0', boxShadow: 'none', mb: 2 }}>
+                    <TableContainer component={Paper} sx={{ borderRadius: '12px', border: '1px solid #eaebf0', boxShadow: 'none', mb: 2, overflowX: 'auto', width: '100%' }}>
                       <Table>
                         <TableHead>
                           <TableRow sx={{ backgroundColor: '#fafafa' }}>
@@ -1031,7 +1077,7 @@ const AdminPage: React.FC = () => {
                       <Box sx={{ display: 'flex', justifyContent: 'center', py: 6 }}><CircularProgress /></Box>
                     ) : (
                       <>
-                        <TableContainer component={Paper} sx={{ borderRadius: '12px', border: '1px solid #eaebf0', boxShadow: 'none', mb: 2 }}>
+                        <TableContainer component={Paper} sx={{ borderRadius: '12px', border: '1px solid #eaebf0', boxShadow: 'none', mb: 2, overflowX: 'auto', width: '100%' }}>
                           <Table>
                             <TableHead>
                               <TableRow sx={{ backgroundColor: '#fafafa' }}>
@@ -1142,7 +1188,7 @@ const AdminPage: React.FC = () => {
                 {stampsLoading && stamps.length === 0 ? (
                   <Box sx={{ display: 'flex', justifyContent: 'center', py: 6 }}><CircularProgress /></Box>
                 ) : (
-                  <TableContainer component={Paper} sx={{ borderRadius: '12px', border: '1px solid #eaebf0', boxShadow: 'none', mb: 2 }}>
+                  <TableContainer component={Paper} sx={{ borderRadius: '12px', border: '1px solid #eaebf0', boxShadow: 'none', mb: 2, overflowX: 'auto', width: '100%' }}>
                     <Table>
                       <TableHead>
                         <TableRow sx={{ backgroundColor: '#fafafa' }}>
@@ -1332,6 +1378,90 @@ const AdminPage: React.FC = () => {
                 )}
               </Box>
             )}
+
+            {/* TAB: Вакансии (просмотр по всем организациям) */}
+            {tab === 5 && (
+              <Box sx={{ p: 3 }}>
+                <ToolbarContainer>
+                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flex: 1 }}>
+                    <TextField
+                      placeholder="Поиск по наименованию, должности, описанию"
+                      size="small"
+                      value={vacSearch}
+                      onChange={(e) => { setVacSearch(e.target.value); setVacPage(1); }}
+                      slotProps={{
+                        input: {
+                          startAdornment: <InputAdornment position="start"><SearchIcon sx={{ color: '#b0b3c3' }} /></InputAdornment>,
+                        },
+                      }}
+                      sx={{ flex: 1, '& .MuiOutlinedInput-root': { borderRadius: '8px' } }}
+                    />
+                    <Tooltip title="Обновить"><IconButton size="small" onClick={loadVacancies}><RefreshIcon fontSize="small" /></IconButton></Tooltip>
+                  </Box>
+                </ToolbarContainer>
+
+                {vacLoading && vacancies.length === 0 ? (
+                  <Box sx={{ display: 'flex', justifyContent: 'center', py: 6 }}><CircularProgress /></Box>
+                ) : (
+                  <>
+                    <TableContainer component={Paper} sx={{ borderRadius: '12px', border: '1px solid #eaebf0', boxShadow: 'none', mb: 2, overflowX: 'auto', width: '100%' }}>
+                      <Table>
+                        <TableHead>
+                          <TableRow sx={{ backgroundColor: '#fafafa' }}>
+                            <TableCell>Организация</TableCell>
+                            <TableCell>Наименование</TableCell>
+                            <TableCell>Должность по классификатору</TableCell>
+                            <TableCell>Учебная нагрузка</TableCell>
+                            <TableCell>Статус</TableCell>
+                          </TableRow>
+                        </TableHead>
+                        <TableBody>
+                          {vacancies.length === 0 ? (
+                            <TableRow><TableCell colSpan={5} align="center" sx={{ py: 4 }}>
+                              <Typography sx={{ color: '#87879b', fontFamily: 'Lato' }}>Вакансии не найдены</Typography>
+                            </TableCell></TableRow>
+                          ) : vacancies.map((v) => (
+                            <TableRow key={v.uuid} hover>
+                              <TableCell>
+                                <Typography sx={{ fontFamily: 'Lato', fontWeight: 500, fontSize: 14 }}>{v.org_name || '—'}</Typography>
+                              </TableCell>
+                              <TableCell>
+                                <Typography sx={{ fontFamily: 'Lato', fontSize: 14 }}>{v.name || '—'}</Typography>
+                                {v.description && (
+                                  <Typography sx={{ fontSize: 12, color: '#87879b', mt: 0.25, maxWidth: 360, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                    {v.description}
+                                  </Typography>
+                                )}
+                              </TableCell>
+                              <TableCell><Typography sx={{ fontFamily: 'Lato', fontSize: 13 }}>{v.position || '—'}</Typography></TableCell>
+                              <TableCell>
+                                <Typography sx={{ fontFamily: 'Lato', fontSize: 13, color: v.teaching_load != null ? '#101025' : '#87879b' }}>
+                                  {v.teaching_load != null ? `${v.teaching_load} ч/нед` : '—'}
+                                </Typography>
+                              </TableCell>
+                              <TableCell>
+                                <Chip label={v.is_active ? 'Активна' : 'Неактивна'} size="small"
+                                  sx={{
+                                    backgroundColor: v.is_active ? '#e8f5e9' : '#f5f5f5',
+                                    color: v.is_active ? '#2e7d32' : '#9e9e9e',
+                                    fontWeight: 600, fontSize: 12,
+                                  }} />
+                              </TableCell>
+                            </TableRow>
+                          ))}
+                        </TableBody>
+                      </Table>
+                    </TableContainer>
+                    {vacTotal > 20 && (
+                      <Box sx={{ display: 'flex', justifyContent: 'center', mt: 2 }}>
+                        <Pagination count={Math.ceil(vacTotal / 20)} page={vacPage}
+                          onChange={(_, v) => setVacPage(v)} color="primary" shape="rounded" />
+                      </Box>
+                    )}
+                  </>
+                )}
+              </Box>
+            )}
           </Paper>
         </>
       )}
@@ -1358,6 +1488,10 @@ const AdminPage: React.FC = () => {
                 <HalfCol><StyledTextField fullWidth label="Контактное лицо" value={orgForm.contact_person} onChange={(e) => setOrgForm(p => ({ ...p, contact_person: e.target.value }))} /></HalfCol>
                 <HalfCol><StyledTextField fullWidth label="Email" value={orgForm.contact_email} onChange={(e) => setOrgForm(p => ({ ...p, contact_email: e.target.value }))} /></HalfCol>
               </TwoCol>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mt: 1 }}>
+                <input type="checkbox" checked={orgForm.is_school} onChange={(e) => setOrgForm(p => ({ ...p, is_school: e.target.checked }))} id="isSchoolCreate" />
+                <label htmlFor="isSchoolCreate" style={{ fontFamily: 'Lato', fontSize: 14 }}>Является школой</label>
+              </Box>
             </ModalBody>
             <ModalFooter>
               <CancelButton onClick={() => setCreateOrgModal(false)}>Отмена</CancelButton>
@@ -1386,9 +1520,15 @@ const AdminPage: React.FC = () => {
                 <HalfCol><StyledTextField fullWidth label="Контактное лицо" value={editOrgForm.contact_person} onChange={(e) => setEditOrgForm(p => ({ ...p, contact_person: e.target.value }))} /></HalfCol>
                 <HalfCol><StyledTextField fullWidth label="Email" value={editOrgForm.contact_email} onChange={(e) => setEditOrgForm(p => ({ ...p, contact_email: e.target.value }))} /></HalfCol>
               </TwoCol>
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mt: 1, mb: 0 }}>
-                <input type="checkbox" checked={editOrgForm.is_active} onChange={(e) => setEditOrgForm(p => ({ ...p, is_active: e.target.checked }))} id="isActive" />
-                <label htmlFor="isActive" style={{ fontFamily: 'Lato', fontSize: 14 }}>Организация активна</label>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mt: 1, mb: 0, flexWrap: 'wrap' }}>
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                  <input type="checkbox" checked={editOrgForm.is_active} onChange={(e) => setEditOrgForm(p => ({ ...p, is_active: e.target.checked }))} id="isActive" />
+                  <label htmlFor="isActive" style={{ fontFamily: 'Lato', fontSize: 14 }}>Организация активна</label>
+                </Box>
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                  <input type="checkbox" checked={editOrgForm.is_school} onChange={(e) => setEditOrgForm(p => ({ ...p, is_school: e.target.checked }))} id="isSchool" />
+                  <label htmlFor="isSchool" style={{ fontFamily: 'Lato', fontSize: 14 }}>Является школой</label>
+                </Box>
               </Box>
             </ModalBody>
             <ModalFooter>

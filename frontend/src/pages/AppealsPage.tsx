@@ -115,6 +115,9 @@ const STATUS_TABS: { value: AppealStatus | ''; label: string }[] = [
 // ===== СТИЛИ =====
 const PageContainer = styled(Box)({
   padding: '24px 32px',
+  '@media (max-width: 600px)': {
+    padding: '16px',
+  },
   maxWidth: '1400px',
   margin: '0 auto',
 });
@@ -589,7 +592,7 @@ const AppealsPage: React.FC = () => {
           ) : (
             <TableContainer
               component={Paper}
-              sx={{ borderRadius: '12px', border: '1px solid #eaebf0', boxShadow: 'none' }}
+              sx={{ borderRadius: '12px', border: '1px solid #eaebf0', boxShadow: 'none', overflowX: 'auto', width: '100%' }}
             >
               <Table>
                 <TableHead>
@@ -1066,7 +1069,7 @@ const AppealsPage: React.FC = () => {
                           С обращением пока не связаны документы.
                         </Typography>
                       ) : (
-                        <TableContainer component={Paper} variant="outlined" sx={{ borderRadius: '8px' }}>
+                        <TableContainer component={Paper} variant="outlined" sx={{ borderRadius: '8px', overflowX: 'auto', width: '100%' }}>
                           <Table size="small">
                             <TableHead>
                               <TableRow>

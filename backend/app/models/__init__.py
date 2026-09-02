@@ -3,6 +3,7 @@ from app.models.base import Base
 from app.models.document import Document, DocumentStatus, SignatureType, FolderType, StampMapping, CustomFolder
 from app.models.employee import Employee, EmployeeRoleEnum, DocumentReview
 from app.models.user import User, AdminUser
+from app.models.vacancy import Vacancy, POSITION_CLASSIFIER, is_teacher_position
 from app.models.mail import MailMessage, MailDirection, MailStatus, Organization, Contact, License
 from app.models.appeal import Appeal, AppealAttachment, AppealStatusHistory, AppealDocumentLink, AppealKind, AppealApplicantType, AppealStatus
 from app.models.pydantic import (
@@ -33,6 +34,12 @@ from app.models.pydantic import (
     EmployeeLoginResponse,
     EmployeeRoleInfo,
     ProfileCompleteRequest,
+    VacancyCreate,
+    VacancyUpdate,
+    VacancyResponse,
+    VacancyPaginatedResponse,
+    VacancyPositionInfo,
+    VacancyPositionListResponse,
 )
 
 __all__ = [
@@ -55,6 +62,9 @@ __all__ = [
     "DocumentReview",
     "User",
     "AdminUser",
+    "Vacancy",
+    "POSITION_CLASSIFIER",
+    "is_teacher_position",
     "MailMessage",
     "MailDirection",
     "MailStatus",
@@ -88,4 +98,10 @@ __all__ = [
     "EmployeeLoginResponse",
     "EmployeeRoleInfo",
     "ProfileCompleteRequest",
+    "VacancyCreate",
+    "VacancyUpdate",
+    "VacancyResponse",
+    "VacancyPaginatedResponse",
+    "VacancyPositionInfo",
+    "VacancyPositionListResponse",
 ]

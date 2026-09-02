@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
-import { Box } from '@mui/material';
+import { Box, useTheme, useMediaQuery } from '@mui/material';
 import LoginPage from './pages/LoginPage';
 import ProfileCompletionPage from './pages/ProfileCompletionPage';
 import AboutPage from './pages/AboutPage';
@@ -29,10 +29,17 @@ const LicenseChecker: React.FC<{ children: React.ReactNode }> = ({ children }) =
 function App() {
   const [isAuthenticated, setIsAuthenticated] = useState(authApi.isAuthenticated());
   const [sidebarOpen, setSidebarOpen] = useState(true);
+  const theme = useTheme();
+  const isMobile = useMediaQuery(theme.breakpoints.down('md'));
 
   useEffect(() => {
     setIsAuthenticated(authApi.isAuthenticated());
   }, []);
+
+  // На мобильных сайдбар скрыт по умолчанию (открывается по гамбургеру).
+  useEffect(() => {
+    setSidebarOpen(!isMobile);
+  }, [isMobile]);
 
   const handleLogin = () => {
     setIsAuthenticated(true);
@@ -62,7 +69,7 @@ function App() {
                 element={
                   isAuthenticated ? (
                     <Box sx={{ display: 'flex', flex: 1 }}>
-                      <Sidebar open={sidebarOpen} onClose={() => setSidebarOpen(false)} />
+                      <Sidebar open={sidebarOpen} onClose={() => setSidebarOpen(false)} mobile={isMobile} />
                       <Box sx={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: '100vh' }}>
                         <Header onMenuToggle={handleToggleSidebar} onLogout={handleLogout} />
                         <Box sx={{ mt: '64px', flex: 1, backgroundColor: '#f4f4f8' }}>

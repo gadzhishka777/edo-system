@@ -2,23 +2,27 @@ import React, { useState, useEffect } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { Box, Tabs, Tab } from '@mui/material';
 import EmployeesPage from './EmployeesPage';
+import VacanciesPage from './VacanciesPage';
+
+type RegistryTab = 'employees' | 'vacancies';
 
 const RegistriesPage: React.FC = () => {
   const location = useLocation();
   const navigate = useNavigate();
-  const [activeTab, setActiveTab] = useState<'employees' | 'documents'>('employees');
+  const [activeTab, setActiveTab] = useState<RegistryTab>('employees');
 
   // Определяем активную вкладку из URL
   useEffect(() => {
     const path = location.pathname;
-    if (path.includes('employees')) {
+    if (path.includes('vacancies')) {
+      setActiveTab('vacancies');
+    } else {
+      // «Документы» (documents) упразднены — редирект на «Сотрудники»
       setActiveTab('employees');
-    } else if (path.includes('documents')) {
-      setActiveTab('documents');
     }
   }, [location.pathname]);
 
-  const handleTabChange = (_: React.ChangeEvent<{}>, newValue: 'employees' | 'documents') => {
+  const handleTabChange = (_: React.ChangeEvent<{}>, newValue: RegistryTab) => {
     setActiveTab(newValue);
     navigate(`/registries/${newValue}`);
   };
@@ -41,10 +45,11 @@ const RegistriesPage: React.FC = () => {
         }}
       >
         <Tab value="employees" label="Сотрудники" />
-        <Tab value="documents" label="Документы" disabled />
+        <Tab value="vacancies" label="Вакансии" />
       </Tabs>
 
       {activeTab === 'employees' && <EmployeesPage />}
+      {activeTab === 'vacancies' && <VacanciesPage />}
     </Box>
   );
 };

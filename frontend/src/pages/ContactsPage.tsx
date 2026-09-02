@@ -70,6 +70,9 @@ dayjs.locale('ru');
 // ===== СТИЛИ =====
 const PageContainer = styled(Box)({
   padding: '24px 32px',
+  '@media (max-width: 600px)': {
+    padding: '16px',
+  },
   maxWidth: '1200px',
   margin: '0 auto',
 });
@@ -489,7 +492,7 @@ const ContactsPage: React.FC = () => {
                 </Button>
               </EmptyStateContainer>
             ) : (
-              <TableContainer component={Paper} sx={{ borderRadius: '12px', border: '1px solid #eaebf0', boxShadow: 'none' }}>
+              <TableContainer component={Paper} sx={{ borderRadius: '12px', border: '1px solid #eaebf0', boxShadow: 'none', overflowX: 'auto', width: '100%' }}>
                 <Table>
                   <TableHead>
                     <TableRow sx={{ backgroundColor: '#fafafa' }}>

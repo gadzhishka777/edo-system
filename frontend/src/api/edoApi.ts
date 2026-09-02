@@ -774,6 +774,92 @@ export const getEmployeeRoles = async (): Promise<EmployeeRoleListResponse> => {
   return response.data;
 };
 
+// ===== Вакансии (раздел «Реестры → Вакансии») =====
+
+export interface Vacancy {
+  id: number;
+  uuid: string;
+  org_id: number;
+  name: string;                       // Наименование вакансии
+  position: string;                   // Должность по классификатору
+  teaching_load?: number | null;      // Учебная нагрузка, часов в неделю (только для учителей, <= 35)
+  description?: string | null;        // Описание вакансии
+  is_active: boolean;
+  created_at?: string | null;
+  updated_at?: string | null;
+}
+
+export interface VacancyPaginatedResponse {
+  items: Vacancy[];
+  total: number;
+  page: number;
+  size: number;
+  pages: number;
+}
+
+export interface VacancyPosition {
+  value: string;
+  label: string;
+  is_teacher: boolean; // для учительских должностей обязательна учебная нагрузка
+}
+
+export interface VacancyPositionListResponse {
+  positions: VacancyPosition[];
+}
+
+export const getVacancies = async (
+  page: number = 1,
+  size: number = 20,
+  search?: string
+): Promise<VacancyPaginatedResponse> => {
+  const params = new URLSearchParams();
+  params.append('page', String(page));
+  params.append('size', String(size));
+  if (search) params.append('search', search);
+  const response = await apiClient.get(`/api/vacancies/?${params.toString()}`);
+  return response.data;
+};
+
+export const getVacancy = async (uuid: string): Promise<Vacancy> => {
+  const response = await apiClient.get(`/api/vacancies/${uuid}`);
+  return response.data;
+};
+
+/** Классификатор должностей — единый источник списка для выпадающего списка. */
+export const getVacancyPositions = async (): Promise<VacancyPositionListResponse> => {
+  const response = await apiClient.get('/api/vacancies/positions');
+  return response.data;
+};
+
+export const createVacancy = async (data: {
+  name: string;
+  position: string;
+  teaching_load?: number | null;
+  description?: string | null;
+}): Promise<Vacancy> => {
+  const response = await apiClient.post('/api/vacancies/', data);
+  return response.data;
+};
+
+export const updateVacancy = async (
+  uuid: string,
+  data: {
+    name?: string;
+    position?: string;
+    teaching_load?: number | null;
+    description?: string | null;
+    is_active?: boolean;
+  }
+): Promise<Vacancy> => {
+  const response = await apiClient.put(`/api/vacancies/${uuid}`, data);
+  return response.data;
+};
+
+export const deactivateVacancy = async (uuid: string): Promise<{ message: string }> => {
+  const response = await apiClient.delete(`/api/vacancies/${uuid}`);
+  return response.data;
+};
+
 export default apiClient;
 // ===== Обращения граждан (публичные + внутренний раздел) =====
 

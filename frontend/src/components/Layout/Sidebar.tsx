@@ -169,12 +169,17 @@ export const Sidebar: React.FC<SidebarProps> = ({ open, onClose, mobile = false 
           <LogoText variant="caption">ТОР ЭДО</LogoText>
           <LogoSubText variant="caption">электронный документооборот</LogoSubText>
         </LogoBox>
-        <VersionText variant="caption">v0.4</VersionText>
+        <VersionText variant="caption">v0.5</VersionText>
       </LogoContainer>
 
       <List sx={{ flex: 1, px: 1 }}>
         {visibleItems.map((item) => {
-          const isSelected = location.pathname === item.path;
+          // Точное совпадение пути ИЛИ принадлежность к разделу (первый сегмент URL).
+          // Нужно, чтобы пункт «Реестры» оставался подсвеченным при переключении
+          // вложенных вкладок: /registries/employees, /registries/vacancies и т.д.
+          const currentSegment = location.pathname.split('/')[1] || '';
+          const itemSegment = item.path.split('/')[1] || '';
+          const isSelected = location.pathname === item.path || currentSegment === itemSegment;
           return (
             <ListItem key={item.path} disablePadding>
               <StyledListItemButton
