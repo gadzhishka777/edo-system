@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Box,
@@ -11,14 +11,15 @@ import {
   Alert,
   CircularProgress,
   Divider,
+  Snackbar,
 } from '@mui/material';
 import { styled } from '@mui/material/styles';
 import {
-  ArrowBack as ArrowBackIcon,
   Visibility,
   VisibilityOff,
 } from '@mui/icons-material';
 import Footer from '../components/Layout/Footer';
+import CertBanner from '../components/Layout/CertBanner';
 import { authApi } from '../api/edoApi';
 import { getApiErrorMessage } from '../api/edoApi';
 
@@ -224,6 +225,89 @@ const PedIdWrapper = styled(Box)({
   padding: '4px 0',
 });
 
+// ===== ЭКРАН ПРИВЕТСТВИЯ (ВХОД ЧЕРЕЗ ЕИС) =====
+const WelcomeWrapper = styled(Box)({
+  display: 'flex',
+  flexDirection: 'column',
+  alignItems: 'center',
+  gap: '32px',
+  textAlign: 'center',
+});
+
+const WelcomeTextBlock = styled(Box)({
+  display: 'flex',
+  flexDirection: 'column',
+  alignItems: 'center',
+  gap: '24px',
+});
+
+const WelcomeText = styled(Typography)({
+  color: '#5a5a72',
+  fontFamily: 'Lato, sans-serif',
+  fontSize: '16px',
+  fontWeight: 500,
+  lineHeight: '24px',
+  margin: 0,
+});
+
+const EisButton = styled(Button)({
+  width: '100%',
+  height: '52px',
+  backgroundColor: '#7950f2',
+  borderRadius: '12px',
+  color: '#ffffff',
+  fontFamily: 'Lato, sans-serif',
+  fontSize: '15px',
+  fontWeight: 600,
+  textTransform: 'none',
+  boxShadow: 'none',
+  '&:hover': {
+    backgroundColor: 'rgba(121, 80, 242, 0.8)',
+    boxShadow: 'none',
+  },
+});
+
+const BottomActions = styled(Box)({
+  display: 'flex',
+  flexDirection: 'column',
+  alignItems: 'center',
+  gap: '16px',
+  width: '100%',
+  marginTop: '72px',
+});
+
+const CredentialsLinkButton = styled(Button)({
+  width: 'fit-content',
+  fontFamily: 'Lato, sans-serif',
+  fontSize: '16px',
+  fontWeight: 500,
+  textTransform: 'none',
+  color: '#7950f2',
+  background: 'none',
+  boxShadow: 'none',
+  '&:hover': {
+    backgroundColor: 'rgba(121, 80, 242, 0.1)',
+    boxShadow: 'none',
+  },
+});
+
+const BackButton = styled(Button)({
+  width: 'fit-content',
+  marginTop: '16px',
+  fontFamily: 'Lato, sans-serif',
+  fontSize: '14px',
+  fontWeight: 500,
+  textTransform: 'none',
+  color: '#87879b',
+  background: 'none',
+  boxShadow: 'none',
+  '&:hover': {
+    color: '#7950f2',
+    backgroundColor: 'transparent',
+    boxShadow: 'none',
+  },
+});
+
 // ===== ПРОПСЫ ДЛЯ КОМПОНЕНТА =====
 interface LoginPageProps {
   onLogin: () => void;
@@ -238,6 +322,16 @@ const LoginPage: React.FC<LoginPageProps> = ({ onLogin }) => {
   const [errors, setErrors] = useState<{ login?: string; password?: string }>({});
   const [authError, setAuthError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  // Экран приветствия с входом через ЕИС показан по умолчанию,
+  // форма логина/пароля открывается по кнопке «Вход по логину и паролю».
+  const [showCredentials, setShowCredentials] = useState(false);
+  const [eisLoading, setEisLoading] = useState(false);
+  const [eisError, setEisError] = useState<string | null>(null);
+  const eisTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => () => {
+    if (eisTimerRef.current) clearTimeout(eisTimerRef.current);
+  }, []);
 
   const validateForm = () => {
     const newErrors: { login?: string; password?: string } = {};
@@ -282,6 +376,22 @@ const LoginPage: React.FC<LoginPageProps> = ({ onLogin }) => {
     if (errors.password) setErrors({ ...errors, password: '' });
   };
 
+  // Заглушка входа через ЕИС: реальная интеграция пока не подключена.
+  // Показываем лоадер, затем — ошибку во всплывающем уведомлении (тосте).
+  const handleEisLogin = () => {
+    if (eisLoading) return;
+    setEisError(null);
+    setEisLoading(true);
+    eisTimerRef.current = setTimeout(() => {
+      setEisLoading(false);
+      setEisError(
+        'Не удалось войти через ЕИС «Образовательный портал». Войдите по логину и паролю.',
+      );
+    }, 1200);
+  };
+
+  const closeEisToast = () => setEisError(null);
+
   const handlePedIdLogin = () => {
     // Здесь логика входа через Пед.ID
     console.log('Вход через Пед.ID');
@@ -290,9 +400,44 @@ const LoginPage: React.FC<LoginPageProps> = ({ onLogin }) => {
 
   return (
     <PageWrapper>
+      <CertBanner />
       <LoginBackground>
         <LoginContainer>
           <LoginCard elevation={0}>
+            {!showCredentials ? (
+              <WelcomeWrapper>
+                <MainTitle variant="h1">ТОР ЭДО</MainTitle>
+
+                <WelcomeTextBlock>
+                  <WelcomeText>
+                    Чтобы зайти в подсистему электронного документооборота, авторизуйтесь через ЕИС
+                  </WelcomeText>
+                  <EisButton
+                    variant="contained"
+                    disableElevation
+                    onClick={handleEisLogin}
+                    disabled={eisLoading}
+                    startIcon={eisLoading ? <CircularProgress size={20} sx={{ color: '#ffffff' }} /> : undefined}
+                  >
+                    {eisLoading ? 'Вход через ЕИС…' : 'Войти через ЕИС'}
+                  </EisButton>
+                </WelcomeTextBlock>
+
+                <BottomActions>
+                  <Divider sx={{ width: '100%' }} />
+                  <CredentialsLinkButton
+                    disableRipple
+                    onClick={() => {
+                      setEisError(null);
+                      setShowCredentials(true);
+                    }}
+                  >
+                    Вход по логину и паролю
+                  </CredentialsLinkButton>
+                </BottomActions>
+              </WelcomeWrapper>
+            ) : (
+              <>
             <TitleWrapper>
               <MainTitle variant="h1">ТОР ЭДО</MainTitle>
             </TitleWrapper>
@@ -365,11 +510,46 @@ const LoginPage: React.FC<LoginPageProps> = ({ onLogin }) => {
               </SubmitButton>
             </form>
 
-            
+            <Box sx={{ display: 'flex', justifyContent: 'center' }}>
+              <BackButton
+                disableRipple
+                onClick={() => {
+                  setAuthError(null);
+                  setShowCredentials(false);
+                }}
+              >
+                Другие способы входа
+              </BackButton>
+            </Box>
+              </>
+            )}
           </LoginCard>
         </LoginContainer>
       </LoginBackground>
       <Footer />
+
+      {/* Ошибка входа через ЕИС — всплывающее уведомление */}
+      <Snackbar
+        open={!!eisError}
+        autoHideDuration={6000}
+        onClose={closeEisToast}
+        anchorOrigin={{ vertical: 'top', horizontal: 'right' }}
+        sx={{ mt: '96px' }}
+      >
+        <Alert
+          onClose={closeEisToast}
+          severity="error"
+          sx={{
+            borderRadius: '12px',
+            boxShadow: '0 4px 16px rgba(0,0,0,0.1)',
+            minWidth: '300px',
+            maxWidth: '420px',
+            fontFamily: 'Lato, sans-serif',
+          }}
+        >
+          {eisError}
+        </Alert>
+      </Snackbar>
     </PageWrapper>
   );
 };

@@ -5,7 +5,11 @@ from app.models.employee import Employee, EmployeeRoleEnum, DocumentReview
 from app.models.user import User, AdminUser
 from app.models.vacancy import Vacancy, POSITION_CLASSIFIER, is_teacher_position
 from app.models.mail import MailMessage, MailDirection, MailStatus, Organization, Contact, License
-from app.models.appeal import Appeal, AppealAttachment, AppealStatusHistory, AppealDocumentLink, AppealKind, AppealApplicantType, AppealStatus
+from app.models.appeal import (
+    Appeal, AppealAttachment, AppealStatusHistory, AppealDocumentLink,
+    AppealKind, AppealApplicantType, AppealStatus,
+    AppealReplyType, AppealReplyFormat, AppealReplyState, ResponseTemplate,
+)
 from app.models.pydantic import (
     DocumentCreate,
     DocumentUpdate,
@@ -50,6 +54,10 @@ __all__ = [
     "AppealKind",
     "AppealApplicantType",
     "AppealStatus",
+    "AppealReplyType",
+    "AppealReplyFormat",
+    "AppealReplyState",
+    "ResponseTemplate",
     "Base",
     "Document",
     "DocumentStatus",

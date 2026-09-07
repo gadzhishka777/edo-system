@@ -83,7 +83,7 @@ function App() {
                             <Route path="/about" element={<AboutPage />} />
                           </Routes>
                         </Box>
-                        <Footer />
+                        <Footer variant="light" />
                       </Box>
                     </Box>
                   ) : (

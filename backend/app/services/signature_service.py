@@ -1,10 +1,13 @@
 # backend/app/services/signature_service.py
 import httpx
 import json
+import logging
 from typing import Dict, Any, Optional
 from datetime import datetime
 
 from app.config import settings
+
+logger = logging.getLogger("edo.signature")
 
 # Настройки Go GOST
 GOST_API_URL = settings.GOST_API_URL
@@ -89,6 +92,21 @@ async def verify_signature(
             
             data = response.json()
             payload = data.get("payload", {})
+
+            # Логируем сырой ответ GOST — особенно при отклонении подписи,
+            # чтобы было видно, почему Validity=false (текст ошибки / статус).
+            if not payload.get("Validity"):
+                logger.warning(
+                    "GOST отклонил подпись: status=%s payload=%s",
+                    response.status_code,
+                    json.dumps(data, ensure_ascii=False)[:2000],
+                )
+            else:
+                logger.info(
+                    "GOST подтвердил подпись: signer=%s date=%s",
+                    payload.get("Signer", {}).get("CommonName", ""),
+                    payload.get("SigningTime", ""),
+                )
             
             # Извлекаем данные из ответа Go GOST
             signer = payload.get("Signer", {})

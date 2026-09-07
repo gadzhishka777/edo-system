@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import {
   Drawer,
@@ -9,8 +9,10 @@ import {
   ListItemText,
   Box,
   Typography,
+  Tooltip,
 } from '@mui/material';
 import { styled } from '@mui/material/styles';
+import { getPendingApprovalCount } from '../../api/edoApi';
 import {
   Mail as MailIcon,
   Description as DocumentsIcon,
@@ -149,6 +151,26 @@ export const Sidebar: React.FC<SidebarProps> = ({ open, onClose, mobile = false 
   const navigate = useNavigate();
   const location = useLocation();
 
+  // Красный счётчик: сколько ответов ждут согласования
+  const [pendingCount, setPendingCount] = useState(0);
+  const loadPendingCount = React.useCallback(async () => {
+    try {
+      setPendingCount(await getPendingApprovalCount());
+    } catch {
+      /* счётчик — не критично */
+    }
+  }, []);
+
+  useEffect(() => {
+    loadPendingCount();
+    const timer = window.setInterval(loadPendingCount, 60_000);
+    window.addEventListener('appeals:changed', loadPendingCount);
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener('appeals:changed', loadPendingCount);
+    };
+  }, [loadPendingCount]);
+
   const userRoles = getUserRoles();
   const visibleItems = menuItems.filter(
     item => !item.requiredRoles || item.requiredRoles.some(r => userRoles.includes(r)),
@@ -190,6 +212,30 @@ export const Sidebar: React.FC<SidebarProps> = ({ open, onClose, mobile = false 
                   <item.icon />
                 </ListItemIcon>
                 <ListItemText primary={item.label} />
+                {item.path === '/appeals' && pendingCount > 0 && (
+                  <Tooltip title="Обращения, ожидающие согласования ответа">
+                    <Box
+                      sx={{
+                        ml: 1,
+                        minWidth: 22,
+                        height: 22,
+                        px: 0.75,
+                        borderRadius: '11px',
+                        bgcolor: '#e53935',
+                        color: '#ffffff',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        fontSize: '12px',
+                        fontWeight: 700,
+                        fontFamily: 'Lato, sans-serif',
+                        lineHeight: 1,
+                      }}
+                    >
+                      {pendingCount > 99 ? '99+' : pendingCount}
+                    </Box>
+                  </Tooltip>
+                )}
               </StyledListItemButton>
             </ListItem>
           );

@@ -32,6 +32,28 @@ class AppealStatus(str, enum.Enum):
     REDIRECTED = "redirected"      # Перенаправлено в другую организацию
 
 
+class AppealReplyType(str, enum.Enum):
+    """Тип резолюции по обращению (итог рассмотрения)."""
+    RESOLVED = "resolved"            # Решено
+    UNRESOLVED = "unresolved"        # Не решено
+    POSTPONED = "postponed"          # Отложено
+    NOT_CONSIDERED = "not_considered"  # Оставлено без рассмотрения
+
+
+class AppealReplyFormat(str, enum.Enum):
+    """Формат направляемого ответа."""
+    MESSAGE = "message"      # Текстовое сообщение (с шаблоном)
+    DOCUMENT = "document"    # Электронный документ (сопроводительное письмо авто)
+
+
+class AppealReplyState(str, enum.Enum):
+    """Состояние подготовки ответа (маршрут согласования)."""
+    DRAFT = "draft"                      # Черновик (сохранён, не отправлен)
+    PENDING_APPROVAL = "pending_approval"  # На согласовании у Администратора/Руководителя
+    APPROVED = "approved"                # Согласован
+    SENT = "sent"                        # Направлен заявителю (обращение → ANSWERED)
+
+
 class Appeal(Base):
     __tablename__ = "appeals"
 
@@ -63,6 +85,20 @@ class Appeal(Base):
     status = Column(SQLEnum(AppealStatus), default=AppealStatus.NEW, index=True)
     consent_given = Column(Boolean, default=True)          # ознакомление с информацией
     pd_consent_given = Column(Boolean, default=False)      # согласие на обработку ПДн
+
+    # Ответ: тип резолюции, формат и маршрут согласования
+    reply_type = Column(SQLEnum(AppealReplyType), nullable=True)   # Решено/Не решено/...
+    reply_format = Column(SQLEnum(AppealReplyFormat),
+                          default=AppealReplyFormat.MESSAGE, nullable=False)
+    reply_state = Column(SQLEnum(AppealReplyState), nullable=True)  # черновик→согласование→sent
+    # id связей appeal_document_links, выбранных исполнителем для ответа (JSON-массив).
+    # Нужно, чтобы согласующий при «Утвердить» из карточки отправил ровно выбранные
+    # документы, а не все УНЭП/УКЭП-документы обращения подряд.
+    reply_link_ids = Column(Text, nullable=True)
+    reply_prepared_by_id = Column(Integer, ForeignKey("employees.id"), nullable=True)
+    reply_prepared_by_name = Column(String(255), nullable=True)
+    reply_approved_by_id = Column(Integer, ForeignKey("employees.id"), nullable=True)
+    reply_approved_by_name = Column(String(255), nullable=True)
 
     # Даты и сроки (календарные дни)
     created_at = Column(DateTime, default=datetime.now)          # дата поступления
@@ -129,4 +165,27 @@ class AppealDocumentLink(Base):
     appeal_id = Column(Integer, ForeignKey("appeals.id"), nullable=False, index=True)
     document_id = Column(Integer, ForeignKey("documents.id"), nullable=False, index=True)
     linked_by_employee_id = Column(Integer, ForeignKey("employees.id"))
+    created_at = Column(DateTime, default=datetime.now)
+    # Признак: документ уже использован в направленном ответе — отвязать нельзя
+    used_in_reply = Column(Boolean, default=False, nullable=False)
+
+
+class ResponseTemplate(Base):
+    """Шаблон ответа по обращению.
+
+    Системные шаблоны (is_system=True) принадлежат платформе (org_id=NULL) и
+    доступны всем организациям, редактировать/удалять их нельзя.
+    Пользовательские (is_system=False) привязаны к организации (org_id) и
+    создаются/редактируются/удаляются сотрудниками своей организации."""
+    __tablename__ = "response_templates"
+
+    id = Column(Integer, primary_key=True, index=True)
+    uuid = Column(String(36), unique=True, index=True, nullable=False)
+    org_id = Column(Integer, ForeignKey("organizations.id"), nullable=True, index=True)
+
+    name = Column(String(255), nullable=False)            # видимое имя шаблона
+    body = Column(Text, nullable=False)                   # текст с плейсхолдерами
+    is_system = Column(Boolean, default=False, nullable=False)
+
+    created_by_employee_id = Column(Integer, ForeignKey("employees.id"), nullable=True)
     created_at = Column(DateTime, default=datetime.now)

@@ -605,12 +605,7 @@ const PublicAppealPage: React.FC = () => {
               <StyledField fullWidth label="Адрес электронной почты" size="small" required type="email"
                 value={email} onChange={e => { setEmail(e.target.value); setFieldErrors(p => ({ ...p, email: '', emailConfirm: '' })); }}
                 error={!!fieldErrors.email}
-                helperText={fieldErrors.email || '⚠ Временно письма на адреса с доменом mail.ru могут не доходить'}
-                slotProps={{
-                  formHelperText: fieldErrors.email
-                    ? undefined
-                    : { sx: { color: '#b45309', fontFamily: 'Lato, sans-serif', fontSize: '12px' } },
-                }}
+                helperText={fieldErrors.email}
                 sx={{ flex: '1 1 240px' }} />
               <StyledField fullWidth label="Подтвердите адрес электронной почты" size="small" required type="email"
                 value={emailConfirm} onChange={e => { setEmailConfirm(e.target.value); setFieldErrors(p => ({ ...p, emailConfirm: '' })); }}
@@ -620,8 +615,6 @@ const PublicAppealPage: React.FC = () => {
             <HintText>
               Ответ на Ваше обращение, уведомления о его статусах либо уведомление о его переадресации
               будут направлены в форме электронного документа по указанному адресу электронной почты.
-              Временно на почту с доменом <strong>mail.ru</strong> письма могут не доходить — при
-              возможности укажите адрес на другом домене.
             </HintText>
 
             <StyledField fullWidth label="Контактный телефон" size="small" placeholder="+7 (___) ___-__-__"

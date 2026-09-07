@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   Box,
   Paper,
@@ -29,6 +29,9 @@ import {
   Select,
   Checkbox,
   FormControlLabel,
+  Radio,
+  RadioGroup,
+  Menu,
 } from '@mui/material';
 import { styled } from '@mui/material/styles';
 import dayjs from 'dayjs';
@@ -49,6 +52,8 @@ import {
   History as HistoryIcon,
   Send as SendIcon,
   Redo as RedoIcon,
+  Edit as EditIcon,
+  Delete as DeleteIcon,
 } from '@mui/icons-material';
 import {
   getAppeals,
@@ -61,14 +66,19 @@ import {
   unlinkDocumentFromAppeal,
   downloadAppealAttachment,
   getDocuments,
-  getDocumentEmployees,
+  getAppealExecutors,
   getOrganizations,
+  getResponseTemplates,
+  createResponseTemplate,
+  updateResponseTemplate,
+  deleteResponseTemplate,
   type AppealListItem,
   type AppealCard,
   type AppealStatus,
-  type DocumentEmployee,
+  type AppealExecutor,
   type Organization,
   type Document,
+  type ResponseTemplate,
 } from '../api/edoApi';
 import { getApiErrorMessage } from '../api/edoApi';
 import { useEvents } from '../context/EventContext';
@@ -111,6 +121,19 @@ const STATUS_TABS: { value: AppealStatus | ''; label: string }[] = [
   { value: 'answered', label: 'Ответ направлен' },
   { value: 'redirected', label: 'Перенаправленные' },
 ];
+
+const REPLY_TYPE_LABELS: Record<string, string> = {
+  resolved: 'Решено',
+  unresolved: 'Не решено',
+  postponed: 'Отложено',
+  not_considered: 'Оставлено без рассмотрения',
+};
+
+const REPLY_STATE_LABELS: Record<string, string> = {
+  draft: 'черновик',
+  pending_approval: 'на согласовании',
+  sent: 'направлен',
+};
 
 // ===== СТИЛИ =====
 const PageContainer = styled(Box)({
@@ -214,7 +237,9 @@ const AppealsPage: React.FC = () => {
   const [takeWorkDialog, setTakeWorkDialog] = useState(false);
   const [executorId, setExecutorId] = useState<number | ''>('');
   const [takeWorkComment, setTakeWorkComment] = useState('');
-  const [employeesList, setEmployeesList] = useState<DocumentEmployee[]>([]);
+  const [employeesList, setEmployeesList] = useState<AppealExecutor[]>([]);
+
+  const [recallDialog, setRecallDialog] = useState(false);
 
   const [redirectDialog, setRedirectDialog] = useState(false);
   const [targetOrgId, setTargetOrgId] = useState<number | ''>('');
@@ -224,6 +249,35 @@ const AppealsPage: React.FC = () => {
   const [replyDialog, setReplyDialog] = useState(false);
   const [replyText, setReplyText] = useState('');
   const [replyDocIds, setReplyDocIds] = useState<number[]>([]);
+  const [replyType, setReplyType] = useState<string>('');
+  const [replyFormat, setReplyFormat] = useState<'message' | 'document'>('message');
+  const [templates, setTemplates] = useState<ResponseTemplate[]>([]);
+  const [templatesLoading, setTemplatesLoading] = useState(false);
+  const [replyHintAnchor, setReplyHintAnchor] = useState<null | HTMLElement>(null);
+  const [templateMenuAnchor, setTemplateMenuAnchor] = useState<null | HTMLElement>(null);
+  const replyTextRef = useRef<HTMLTextAreaElement | null>(null);
+  const [templateEditor, setTemplateEditor] = useState<{
+    open: boolean;
+    uuid: string | null;
+    name: string;
+    body: string;
+  }>({ open: false, uuid: null, name: '', body: '' });
+  const [templateEditorError, setTemplateEditorError] = useState('');
+
+  // Роли текущего сотрудника (для гейта согласования/утверждения)
+  const currentRoles: string[] = (() => {
+    try {
+      return JSON.parse(localStorage.getItem('employee_roles') || '[]');
+    } catch {
+      return [];
+    }
+  })();
+  const IS_APPROVER = currentRoles.some(r =>
+    ['org_admin', 'department_head', 'final_approver'].includes(r),
+  );
+  // Текущий сотрудник — подготовивший ответ (нужно для кнопки «Отозвать с согласования»)
+  const currentEmployeeId = Number(localStorage.getItem('employee_id') || 0) || null;
+  const IS_PREPARER = !!card && !!currentEmployeeId && card.reply_prepared_by_id === currentEmployeeId;
 
   // Связывание документов
   const [linkDialogOpen, setLinkDialogOpen] = useState(false);
@@ -267,10 +321,12 @@ const AppealsPage: React.FC = () => {
 
   // ===== СПРАВОЧНИКИ ДЛЯ ДИАЛОГОВ =====
   useEffect(() => {
-    if (takeWorkDialog && employeesList.length === 0) {
-      getDocumentEmployees().then(setEmployeesList).catch(() => {});
+    if (takeWorkDialog) {
+      // Только сотрудники с правом согласования: иначе обращение гарантированно
+      // застрянет на этапе согласования ответа.
+      getAppealExecutors().then(setEmployeesList).catch(() => setEmployeesList([]));
     }
-  }, [takeWorkDialog, employeesList.length]);
+  }, [takeWorkDialog]);
 
   useEffect(() => {
     if (redirectDialog && orgsList.length === 0) {
@@ -297,6 +353,8 @@ const AppealsPage: React.FC = () => {
   };
 
   const reloadCardAndList = async () => {
+    // Счётчик обращений на согласовании в меню обновится сразу, не дожидаясь polling
+    window.dispatchEvent(new Event('appeals:changed'));
     await loadAppeals();
     if (card) {
       try {
@@ -374,30 +432,204 @@ const AppealsPage: React.FC = () => {
     }
   };
 
-  // Шаблоны ответа
-  const buildTemplate = (variant: 'considered' | 'acknowledged'): string => {
-    if (!card) return '';
-    const parts = card.applicant.full_name.split(' ');
-    const nameOtch = parts.slice(1).join(' ') || card.applicant.full_name;
-    const dateStr = card.created_at ? dayjs(card.created_at).format('DD.MM.YYYY') : '___';
-    const header = `Уважаемый(ая) ${nameOtch}!`;
-    const intro = `Ваше обращение, поступившее в Единую цифровую платформу обратной связи от ${dateStr} № ${card.system_number}`;
-    if (variant === 'considered') {
-      return (
-        `${header}\n\n${intro} рассмотрено. По существу вопроса сообщаем следующее.\n\n` +
-        `\n\nБлагодарим за использование Единого цифрового портала обратной связи!`
+  // ===== ШАБЛОНЫ И ОТВЕТ =====
+  const openReplyDialog = async () => {
+    // Если есть сохранённый черновик или ответ на согласовании —
+    // восстанавливаем сохранённые данные в поля формы.
+    if (card?.reply_state === 'draft' || card?.reply_state === 'pending_approval') {
+      setReplyText(card.reply_text || '');
+      setReplyType(card.reply_type || 'resolved');
+      setReplyFormat(
+        card.reply_format === 'document' ? 'document' : 'message',
       );
+    } else {
+      setReplyText('');
+      setReplyType('resolved');
+      setReplyFormat('message');
     }
-    return `${header}\n\n${intro} рассмотрено. Изложенная информация принята к сведению.\n\nБлагодарим за использование Единого цифрового портала обратной связи!`;
+    setReplyDocIds([]);
+    setReplyDialog(true);
+    setTemplatesLoading(true);
+    try {
+      const t = await getResponseTemplates();
+      setTemplates(t);
+    } catch {
+      /* ignore */
+    } finally {
+      setTemplatesLoading(false);
+    }
   };
 
-  const handleReply = async () => {
-    if (!card || !replyText.trim()) return;
-    const res = await runAction(() => replyToAppeal(card!.uuid, replyText.trim(), replyDocIds));
+  // Подставляет в текст реальные значения вместо {{подсказок}}.
+  // Понимает и описательные подсказки из меню, и короткие имена из системных шаблонов.
+  const resolveHints = (text: string): string => {
+    if (!card) return text;
+    const parts = (card.applicant?.full_name || '').split(' ').filter(Boolean);
+    const nameOtch = parts.slice(1).join(' ') || card.applicant?.full_name || '';
+    const fmt = (v?: string | null) => (v ? dayjs(v).format('DD.MM.YYYY') : '___');
+    const values: Record<string, string> = {
+      // описательные подсказки (вставляет пользователь)
+      'ФИО заявителя': card.applicant?.full_name || '',
+      'Системный номер сообщения': card.system_number || '',
+      'Наименование ЛКО': card.org_name || '',
+      'Дата создания сообщения': fmt(card.created_at),
+      'Регистрационный номер сообщения': card.reg_number || '___',
+      'Дата регистрации': fmt(card.registered_at),
+      // короткие имена из системных шаблонов
+      ИМЯ_ОТЧЕСТВО: nameOtch,
+      СИСТЕМНЫЙ_НОМЕР: card.system_number || '',
+      ОРГАНИЗАЦИЯ: card.org_name || '',
+      ДАТА_СОЗДАНИЯ: fmt(card.created_at),
+    };
+    return text.replace(/\{\{(.+?)\}\}/g, (m, raw: string) => {
+      const key = String(raw).trim();
+      return values[key] !== undefined ? values[key] : m;
+    });
+  };
+
+  // Шаблон вставляется уже с подставленными данными
+  const applyTemplate = (uuid: string) => {
+    const t = templates.find(x => x.uuid === uuid);
+    if (t) setReplyText(resolveHints(t.body));
+  };
+
+  const REPLY_HINTS: { label: string; token: string }[] = [
+    { label: 'ФИО заявителя', token: '{{ФИО заявителя}}' },
+    { label: 'Системный номер сообщения', token: '{{Системный номер сообщения}}' },
+    { label: 'Наименование ЛКО', token: '{{Наименование ЛКО}}' },
+    { label: 'Дата создания сообщения', token: '{{Дата создания сообщения}}' },
+    { label: 'Регистрационный номер сообщения', token: '{{Регистрационный номер сообщения}}' },
+    { label: 'Дата регистрации', token: '{{Дата регистрации}}' },
+  ];
+
+  // Вставляем по курсору готовое значение, а не переменную
+  const insertHint = (token: string) => {
+    setReplyHintAnchor(null);
+    const value = resolveHints(token);
+    const el = replyTextRef.current;
+    const start = el?.selectionStart ?? replyText.length;
+    const end = el?.selectionEnd ?? replyText.length;
+    setReplyText(replyText.slice(0, start) + value + replyText.slice(end));
+  };
+
+  const openCreateTemplate = () => {
+    setTemplateEditor({ open: true, uuid: null, name: '', body: '' });
+    setTemplateEditorError('');
+  };
+
+  const openEditTemplate = (t: ResponseTemplate) => {
+    setTemplateEditor({ open: true, uuid: t.uuid, name: t.name, body: t.body });
+    setTemplateEditorError('');
+  };
+
+  const handleSaveTemplate = async () => {
+    if (!templateEditor.name.trim() || !templateEditor.body.trim()) {
+      setTemplateEditorError('Заполните название и текст шаблона');
+      return;
+    }
+    const fn = templateEditor.uuid
+      ? updateResponseTemplate(templateEditor.uuid, templateEditor.name.trim(), templateEditor.body.trim())
+      : createResponseTemplate(templateEditor.name.trim(), templateEditor.body.trim());
+    const res = await runAction(() => fn);
+    if (res) {
+      setTemplateEditor({ open: false, uuid: null, name: '', body: '' });
+      setTemplateEditorError('');
+      try {
+        setTemplates(await getResponseTemplates());
+      } catch {
+        /* ignore */
+      }
+    }
+  };
+
+  const handleDeleteTemplate = async (uuid: string) => {
+    const res = await runAction(() => deleteResponseTemplate(uuid));
+    if (res) {
+      try {
+        setTemplates(await getResponseTemplates());
+      } catch {
+        /* ignore */
+      }
+    }
+  };
+
+  const handleReply = async (decision: string) => {
+    if (!card) return;
+
+    // Отзыв с согласования: форма ответа не нужна, документы не переприкрепляем
+    if (decision === 'recall') {
+      const res = await runAction(() =>
+        replyToAppeal(card!.uuid, '', [], card!.reply_type || undefined,
+          card!.reply_format === 'document' ? 'document' : 'message', 'recall'),
+      );
+      if (res) {
+        setRecallDialog(false);
+        await reloadCardAndList();
+      }
+      return;
+    }
+
+    // approve/reject из карточки (без диалога) — утверждаем/возвращаем
+    // уже сохранённый черновик: берём данные из card, а не из полей формы.
+    const fromCard = !replyDialog && (decision === 'approve' || decision === 'reject');
+
+    if (fromCard) {
+      // При approve в формате «Электронный документ» нужно передать
+      // link_id всех связанных УНЭП/УКЭП-документов — иначе прикреплённые
+      // документы «потеряются» и заявитель получит пустое письмо.
+      // Документы НЕ перечисляем: бэкенд берёт сохранённые при подготовке ответа
+      // appeal.reply_link_ids — ровно те, что выбрал исполнитель.
+      const res = await runAction(() =>
+        replyToAppeal(
+          card!.uuid,
+          card!.reply_text?.trim() || '',
+          [],
+          card!.reply_type || 'resolved',
+          card!.reply_format === 'document' ? 'document' : 'message',
+          decision,
+        ),
+      );
+      if (res) {
+        setReplyDialog(false);
+        setReplyText('');
+        setReplyDocIds([]);
+        setReplyType('resolved');
+        setReplyFormat('message');
+        await reloadCardAndList();
+      }
+      return;
+    }
+
+    // Из диалога — валидация по выбранному формату (message/document).
+    if (replyFormat === 'message') {
+      if (!replyText.trim()) {
+        addWarning('Нужен текст', 'Введите текст ответа или примените шаблон');
+        return;
+      }
+    } else if (replyDocIds.length === 0) {
+      addWarning('Нужен документ', 'Для формата «Электронный документ» выберите хотя бы один документ с электронной подписью (УНЭП/УКЭП)');
+      return;
+    }
+
+    const res = await runAction(() =>
+      replyToAppeal(
+        card!.uuid,
+        // В формате «Электронный документ» текст не отправляется —
+        // сопроводительное письмо формируется автоматически.
+        replyFormat === 'message' ? replyText.trim() : '',
+        // В формате «Сообщение» вложения не отправляются.
+        replyFormat === 'message' ? [] : replyDocIds,
+        replyType || undefined,
+        replyFormat,
+        decision,
+      ),
+    );
     if (res) {
       setReplyDialog(false);
       setReplyText('');
       setReplyDocIds([]);
+      setReplyType('resolved');
+      setReplyFormat('message');
       await reloadCardAndList();
     }
   };
@@ -878,10 +1110,24 @@ const AppealsPage: React.FC = () => {
                         {card.reply_text && (
                           <>
                             <Divider sx={{ my: 2.5 }} />
-                            <DetailLabel>Направленный ответ ({fmtDate(card.answered_at)})</DetailLabel>
+                            <DetailLabel>
+                              {card.reply_state === 'draft'
+                                ? 'Черновик ответа'
+                                : card.reply_state === 'pending_approval'
+                                  ? 'Согласуемый текст ответа'
+                                  : `Направленный ответ (${fmtDate(card.answered_at)})`}
+                            </DetailLabel>
                             <Paper
                               variant="outlined"
-                              sx={{ p: 1.5, mt: 0.5, borderRadius: '8px', bgcolor: '#f1f8e9', maxHeight: 200, overflowY: 'auto' }}
+                              sx={{
+                                p: 1.5, mt: 0.5, borderRadius: '8px',
+                                bgcolor: card.reply_state === 'draft'
+                                  ? '#fff8e1'
+                                  : card.reply_state === 'pending_approval'
+                                    ? '#e3f2fd'
+                                    : '#f1f8e9',
+                                maxHeight: 200, overflowY: 'auto',
+                              }}
                             >
                               <Typography sx={{ fontFamily: 'Lato, sans-serif', fontSize: '13.5px', lineHeight: 1.6, whiteSpace: 'pre-line' }}>
                                 {card.reply_text}
@@ -956,21 +1202,74 @@ const AppealsPage: React.FC = () => {
                             </Button>
                           )}
 
-                          {card.status === 'on_execution' && (
+                          {card.status === 'on_execution' && card.reply_state !== 'pending_approval' && (
                             <Button
                               fullWidth
                               variant="contained"
                               startIcon={<SendIcon />}
                               disabled={actionLoading}
-                              onClick={() => {
-                                setReplyText(buildTemplate('considered'));
-                                setReplyDocIds([]);
-                                setReplyDialog(true);
-                              }}
+                              onClick={openReplyDialog}
                               sx={{ borderRadius: '8px', textTransform: 'none', fontFamily: 'Lato, sans-serif', bgcolor: '#2e7d32' }}
                             >
                               Направить ответ
                             </Button>
+                          )}
+
+                          {/* Кнопки согласующего при ответе на согласовании */}
+                          {card.status === 'on_execution' && card.reply_state === 'pending_approval' && IS_APPROVER && (
+                            <>
+                              <Button
+                                fullWidth
+                                variant="contained"
+                                startIcon={<SendIcon />}
+                                disabled={actionLoading}
+                                onClick={() => handleReply('approve')}
+                                sx={{ borderRadius: '8px', textTransform: 'none', fontFamily: 'Lato, sans-serif', bgcolor: '#2e7d32' }}
+                              >
+                                Утвердить
+                              </Button>
+                              <Button
+                                fullWidth
+                                variant="outlined"
+                                startIcon={<EditIcon />}
+                                disabled={actionLoading}
+                                onClick={openReplyDialog}
+                                sx={{ borderRadius: '8px', textTransform: 'none', fontFamily: 'Lato, sans-serif', borderColor: '#d6d6df', color: '#5a5a72' }}
+                              >
+                                Редактировать
+                              </Button>
+                              <Button
+                                fullWidth
+                                variant="outlined"
+                                startIcon={<RedoIcon />}
+                                disabled={actionLoading}
+                                onClick={() => handleReply('reject')}
+                                sx={{ borderRadius: '8px', textTransform: 'none', fontFamily: 'Lato, sans-serif', borderColor: '#e57373', color: '#e57373' }}
+                              >
+                                Вернуть на доработку
+                              </Button>
+                            </>
+                          )}
+
+                          {/* Ответ на согласовании, но сотрудник не согласующий */}
+                          {card.status === 'on_execution' && card.reply_state === 'pending_approval' && !IS_APPROVER && (
+                            <>
+                              <Typography sx={{ fontFamily: 'Lato, sans-serif', fontSize: '12px', color: '#87879b' }}>
+                                Ответ на согласовании у Администратора или Руководителя.
+                              </Typography>
+                              {IS_PREPARER && (
+                                <Button
+                                  fullWidth
+                                  variant="outlined"
+                                  startIcon={<RedoIcon />}
+                                  disabled={actionLoading}
+                                  onClick={() => setRecallDialog(true)}
+                                  sx={{ borderRadius: '8px', textTransform: 'none', fontFamily: 'Lato, sans-serif', borderColor: '#e57373', color: '#e57373' }}
+                                >
+                                  Отозвать с согласования
+                                </Button>
+                              )}
+                            </>
                           )}
 
                           {card.status === 'registered' && (
@@ -1002,6 +1301,35 @@ const AppealsPage: React.FC = () => {
                             </Typography>
                           )}
                         </Paper>
+
+                        {/* Статус подготовки ответа */}
+                        {card.reply_state && (
+                          <Paper variant="outlined" sx={{ p: 1.5, borderRadius: '8px', mt: 2, bgcolor: '#f7f8fc' }}>
+                            <Typography sx={{ fontFamily: 'Lato, sans-serif', fontWeight: 600, fontSize: '12.5px', color: '#101025', mb: 0.5 }}>
+                              Ответ: {REPLY_STATE_LABELS[card.reply_state] || card.reply_state}
+                            </Typography>
+                            {card.reply_type && (
+                              <Typography sx={{ fontFamily: 'Lato, sans-serif', fontSize: '12px', color: '#5a5a72' }}>
+                                Тип: {REPLY_TYPE_LABELS[card.reply_type] || card.reply_type}
+                              </Typography>
+                            )}
+                            {card.reply_format && (
+                              <Typography sx={{ fontFamily: 'Lato, sans-serif', fontSize: '12px', color: '#5a5a72' }}>
+                                Формат: {card.reply_format === 'document' ? 'Электронный документ' : 'Сообщение'}
+                              </Typography>
+                            )}
+                            {card.reply_prepared_by_name && (
+                              <Typography sx={{ fontFamily: 'Lato, sans-serif', fontSize: '12px', color: '#5a5a72' }}>
+                                Подготовил: {card.reply_prepared_by_name}
+                              </Typography>
+                            )}
+                            {card.reply_approved_by_name && (
+                              <Typography sx={{ fontFamily: 'Lato, sans-serif', fontSize: '12px', color: '#5a5a72' }}>
+                                Утвердил: {card.reply_approved_by_name}
+                              </Typography>
+                            )}
+                          </Paper>
+                        )}
                       </Box>
                     </Box>
                   )}
@@ -1097,9 +1425,19 @@ const AppealsPage: React.FC = () => {
                                     )}
                                   </TableCell>
                                   <TableCell align="right">
-                                    <IconButton size="small" onClick={() => handleUnlinkDoc(d.document_uuid, d.name)}>
-                                      <LinkOffIcon fontSize="small" sx={{ color: '#c62828' }} />
-                                    </IconButton>
+                                    {d.used_in_reply ? (
+                                      <Tooltip title="Нельзя отвязать: документ уже используется в отправленном ответе">
+                                        <Chip
+                                          label="в ответе"
+                                          size="small"
+                                          sx={{ height: 22, fontSize: '10px', bgcolor: '#fff3e0', color: '#e65100' }}
+                                        />
+                                      </Tooltip>
+                                    ) : (
+                                      <IconButton size="small" onClick={() => handleUnlinkDoc(d.document_uuid, d.name)}>
+                                        <LinkOffIcon fontSize="small" sx={{ color: '#c62828' }} />
+                                      </IconButton>
+                                    )}
                                   </TableCell>
                                 </TableRow>
                               ))}
@@ -1162,6 +1500,11 @@ const AppealsPage: React.FC = () => {
             <Typography sx={{ fontFamily: 'Lato, sans-serif', fontSize: '13px', color: '#87879b', mb: 2.5 }}>
               Назначьте исполнителя обращения. Статус изменится на «На исполнении». Можно оставить внутренний комментарий.
             </Typography>
+            <Typography sx={{ fontFamily: 'Lato, sans-serif', fontSize: '12.5px', color: '#87879b', mb: 2 }}>
+              Исполнителем может быть любой сотрудник — он готовит проект ответа.
+              Утвердить ответ вправе только Администратор, Руководитель или Утверждающий
+              (отмечены значком «согласующий»).
+            </Typography>
             <FormControl fullWidth size="small" sx={{ mb: 2 }}>
               <InputLabel>Исполнитель *</InputLabel>
               <Select
@@ -1172,10 +1515,22 @@ const AppealsPage: React.FC = () => {
               >
                 {employeesList.map(emp => (
                   <MenuItem key={emp.id} value={emp.id}>
-                    {emp.full_name}
+                    {emp.full_name}{emp.position ? ` — ${emp.position}` : ''}
+                    {emp.is_approver ? '  · согласующий' : ''}
                   </MenuItem>
                 ))}
               </Select>
+              {employeesList.length === 0 && (
+                <Typography sx={{ fontFamily: 'Lato, sans-serif', fontSize: '12px', color: '#e57373', mt: 0.5 }}>
+                  В организации нет активных сотрудников. Добавьте сотрудника, чтобы назначить исполнителя.
+                </Typography>
+              )}
+              {employeesList.length > 0 && !employeesList.some(e => e.is_approver) && (
+                <Typography sx={{ fontFamily: 'Lato, sans-serif', fontSize: '12px', color: '#ed6c02', mt: 0.5 }}>
+                  Внимание: в организации нет сотрудника с правом согласования. Ответ не получится
+                  направить на согласование — назначьте Администратора или Руководителя.
+                </Typography>
+              )}
             </FormControl>
             <TextField
               fullWidth
@@ -1197,6 +1552,33 @@ const AppealsPage: React.FC = () => {
                 sx={{ bgcolor: '#4c6ef5', borderRadius: '8px', textTransform: 'none', fontFamily: 'Lato, sans-serif' }}
               >
                 Назначить исполнителя
+              </Button>
+            </Box>
+          </DialogPaper>
+        </Fade>
+      </Modal>
+
+      {/* ===================== ДИАЛОГ: ОТЗЫВ С СОГЛАСОВАНИЯ ===================== */}
+      <Modal open={recallDialog} onClose={() => setRecallDialog(false)} closeAfterTransition>
+        <Fade in={recallDialog}>
+          <DialogPaper elevation={8}>
+            <Typography sx={{ fontFamily: 'Lato, sans-serif', fontWeight: 700, fontSize: '18px', color: '#101025', mb: 1 }}>
+              Отозвать ответ с согласования?
+            </Typography>
+            <Typography sx={{ fontFamily: 'Lato, sans-serif', fontSize: '13px', color: '#87879b', mb: 2.5 }}>
+              Ответ вернётся в черновик — его можно будет поправить и снова направить на согласование.
+            </Typography>
+            <Box sx={{ display: 'flex', justifyContent: 'flex-end', gap: 1.5, mt: 2 }}>
+              <Button onClick={() => setRecallDialog(false)} sx={{ textTransform: 'none', fontFamily: 'Lato, sans-serif', color: '#87879b' }}>
+                Отмена
+              </Button>
+              <Button
+                variant="contained"
+                disabled={actionLoading}
+                onClick={() => handleReply('recall')}
+                sx={{ bgcolor: '#e57373', borderRadius: '8px', textTransform: 'none', fontFamily: 'Lato, sans-serif' }}
+              >
+                Отозвать
               </Button>
             </Box>
           </DialogPaper>
@@ -1278,55 +1660,198 @@ const AppealsPage: React.FC = () => {
               Направить ответ заявителю
             </Typography>
             <Typography sx={{ fontFamily: 'Lato, sans-serif', fontSize: '13px', color: '#87879b', mb: 2 }}>
-              Письмо будет отправлено на {card?.applicant.email}. Можно использовать шаблон и вложить связанные
-              с обращением документы.
+              Письмо будет отправлено на {card?.applicant.email}.{' '}
+              {replyFormat === 'document'
+                ? 'К письму будут приложены выбранные документы с электронной подписью (УНЭП/УКЭП), а сопроводительное письмо сформируется автоматически.'
+                : 'В формате «Сообщение» ответ отправляется текстом письма, вложения недоступны.'}
             </Typography>
 
-            {/* Шаблоны */}
-            <Box sx={{ display: 'flex', gap: 1, mb: 2, flexWrap: 'wrap' }}>
-              <Button
-                size="small"
-                variant="outlined"
-                onClick={() => setReplyText(buildTemplate('considered'))}
-                sx={{ borderRadius: '20px', textTransform: 'none', fontFamily: 'Lato, sans-serif', fontSize: '12px', borderColor: '#4c6ef5', color: '#4c6ef5' }}
+            {/* Тип ответа */}
+            <FormControl fullWidth size="small" sx={{ mb: 2 }}>
+              <InputLabel>Тип ответа</InputLabel>
+              <Select
+                value={replyType}
+                label="Тип ответа"
+                onChange={e => setReplyType(e.target.value)}
               >
-                Шаблон: рассмотрен по существу
-              </Button>
-              <Button
-                size="small"
-                variant="outlined"
-                onClick={() => setReplyText(buildTemplate('acknowledged'))}
-                sx={{ borderRadius: '20px', textTransform: 'none', fontFamily: 'Lato, sans-serif', fontSize: '12px', borderColor: '#4c6ef5', color: '#4c6ef5' }}
-              >
-                Шаблон: принято к сведению
-              </Button>
-            </Box>
+                <MenuItem value=""><em>— не выбран —</em></MenuItem>
+                <MenuItem value="resolved">Решено</MenuItem>
+                <MenuItem value="unresolved">Не решено</MenuItem>
+                <MenuItem value="postponed">Отложено</MenuItem>
+                <MenuItem value="not_considered">Оставлено без рассмотрения</MenuItem>
+              </Select>
+            </FormControl>
 
-            <TextField
-              fullWidth
-              multiline
-              rows={9}
-              value={replyText}
-              onChange={e => setReplyText(e.target.value)}
-              placeholder="Текст ответа заявителю…"
-              sx={{
-                mb: 2,
-                '& .MuiOutlinedInput-root': { borderRadius: '10px' },
-                '& textarea': { fontFamily: 'Lato, sans-serif', fontSize: '14px' },
+            {/* Формат ответа */}
+            <Typography sx={{ fontFamily: 'Lato, sans-serif', fontWeight: 600, fontSize: '13px', color: '#101025', mb: 0.5 }}>
+              Формат ответа:
+            </Typography>
+            <RadioGroup
+              row
+              value={replyFormat}
+              onChange={e => {
+                const value = e.target.value as 'message' | 'document';
+                setReplyFormat(value);
+                if (value === 'message') {
+                  // В формате «Сообщение» вложения недоступны — сбрасываем выбранные документы
+                  setReplyDocIds([]);
+                } else {
+                  // В формате «Электронный документ» принимаются только документы
+                  // с электронной подписью (УНЭП/УКЭП) — оставляем в выборе только их.
+                  const epIds = new Set(
+                    (card?.linked_documents || [])
+                      .filter(d => d.signature_type === 'UNEP' || d.signature_type === 'UKEP')
+                      .map(d => d.link_id),
+                  );
+                  setReplyDocIds(prev => prev.filter(id => epIds.has(id)));
+                  // Текст ответа в этом формате не используется (сопроводительное письмо
+                  // формируется автоматически) — сбрасываем, чтобы не ушёл лишний текст.
+                  setReplyText('');
+                }
               }}
-            />
+              sx={{ mb: 1.5 }}
+            >
+              <FormControlLabel value="message" control={<Radio size="small" />} label="Сообщение" />
+              <FormControlLabel value="document" control={<Radio size="small" />} label="Электронный документ" />
+            </RadioGroup>
 
-            {/* Вложения из связанных документов */}
-            <Typography sx={{ fontFamily: 'Lato, sans-serif', fontWeight: 600, fontSize: '13px', color: '#101025', mb: 1 }}>
-              Приложить связанные документы:
-            </Typography>
-            {!card || card.linked_documents.length === 0 ? (
+            {/* Формат: сообщение — шаблоны, подсказки, текст */}
+            {replyFormat === 'message' && (
+              <>
+                <Box sx={{ display: 'flex', gap: 1, mb: 1.5, flexWrap: 'wrap', alignItems: 'center' }}>
+                  <Button
+                    size="small"
+                    variant="outlined"
+                    onClick={(e: React.MouseEvent<HTMLElement>) => setTemplateMenuAnchor(e.currentTarget)}
+                    disabled={templatesLoading}
+                    sx={{ borderRadius: '20px', textTransform: 'none', fontFamily: 'Lato, sans-serif', fontSize: '12px', borderColor: '#4c6ef5', color: '#4c6ef5' }}
+                  >
+                    {templatesLoading ? 'Загрузка шаблонов…' : 'Применить шаблон'}
+                  </Button>
+                  <Menu anchorEl={templateMenuAnchor} open={!!templateMenuAnchor} onClose={() => setTemplateMenuAnchor(null)}>
+                    {templates.length === 0 && <MenuItem disabled>Нет доступных шаблонов</MenuItem>}
+                    {templates.filter(t => t.is_system).map(t => (
+                      <MenuItem key={t.uuid} onClick={() => { applyTemplate(t.uuid); setTemplateMenuAnchor(null); }}>
+                        {t.name} (системный)
+                      </MenuItem>
+                    ))}
+                    {templates.filter(t => !t.is_system).map(t => (
+                      <MenuItem key={t.uuid} onClick={() => { applyTemplate(t.uuid); setTemplateMenuAnchor(null); }}>
+                        {t.name}
+                      </MenuItem>
+                    ))}
+                  </Menu>
+                  <Button
+                    size="small"
+                    variant="outlined"
+                    onClick={(e: React.MouseEvent<HTMLElement>) => setReplyHintAnchor(e.currentTarget)}
+                    sx={{ borderRadius: '20px', textTransform: 'none', fontFamily: 'Lato, sans-serif', fontSize: '12px', borderColor: '#87879b', color: '#5a5a72' }}
+                  >
+                    Вставить подсказку
+                  </Button>
+                  <Menu anchorEl={replyHintAnchor} open={!!replyHintAnchor} onClose={() => setReplyHintAnchor(null)}>
+                    {REPLY_HINTS.map(h => (
+                      <MenuItem
+                        key={h.token}
+                        onClick={() => insertHint(h.token)}
+                        sx={{ display: 'flex', justifyContent: 'space-between', gap: 2 }}
+                      >
+                        <Typography sx={{ fontFamily: 'Lato, sans-serif', fontSize: '13px' }}>
+                          {h.label}
+                        </Typography>
+                        <Typography
+                          sx={{
+                            fontFamily: 'Lato, sans-serif',
+                            fontSize: '12px',
+                            color: '#87879b',
+                            maxWidth: '190px',
+                            overflow: 'hidden',
+                            textOverflow: 'ellipsis',
+                            whiteSpace: 'nowrap',
+                          }}
+                        >
+                          {resolveHints(h.token) || '—'}
+                        </Typography>
+                      </MenuItem>
+                    ))}
+                  </Menu>
+                  <Button
+                    size="small"
+                    onClick={openCreateTemplate}
+                    sx={{ textTransform: 'none', fontFamily: 'Lato, sans-serif', fontSize: '12px', color: '#4c6ef5' }}
+                  >
+                    + Создать свой шаблон
+                  </Button>
+                </Box>
+
+                {templates.some(t => !t.is_system) && (
+                  <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5, mb: 1.5 }}>
+                    {templates.filter(t => !t.is_system).map(t => (
+                      <Box key={t.uuid} sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                        <Typography sx={{ fontFamily: 'Lato, sans-serif', fontSize: '12.5px', color: '#101025', flex: 1 }}>
+                          Мой шаблон: {t.name}
+                        </Typography>
+                        <IconButton size="small" onClick={() => openEditTemplate(t)}>
+                          <EditIcon fontSize="small" />
+                        </IconButton>
+                        <IconButton size="small" onClick={() => handleDeleteTemplate(t.uuid)}>
+                          <DeleteIcon fontSize="small" sx={{ color: '#c62828' }} />
+                        </IconButton>
+                      </Box>
+                    ))}
+                  </Box>
+                )}
+
+                <TextField
+                  fullWidth
+                  multiline
+                  rows={9}
+                  value={replyText}
+                  onChange={e => setReplyText(e.target.value)}
+                  inputRef={replyTextRef}
+                  placeholder="Текст ответа заявителю… Подсказки вставляются уже с реальными данными."
+                  sx={{
+                    mb: 2,
+                    '& .MuiOutlinedInput-root': { borderRadius: '10px' },
+                    '& textarea': { fontFamily: 'Lato, sans-serif', fontSize: '14px' },
+                  }}
+                />
+              </>
+            )}
+
+            {/* Формат: электронный документ */}
+            {replyFormat === 'document' && (
+              <Alert severity="info" sx={{ borderRadius: '8px', mb: 2 }}>
+                <Typography sx={{ fontFamily: 'Lato, sans-serif', fontSize: '12.5px' }}>
+                  Текст ответа не вводится — сопроводительное письмо формируется автоматически
+                  на основе выбранного документа с электронной подписью (УНЭП/УКЭП) и прикладывается
+                  к нему. Можно прикрепить только документы с УНЭП/УКЭП.
+                </Typography>
+              </Alert>
+            )}
+
+            {/* Вложения из связанных документов — только для формата «Электронный документ» */}
+            {replyFormat === 'message' ? (
               <Typography sx={{ fontFamily: 'Lato, sans-serif', fontSize: '12.5px', color: '#87879b', mb: 2 }}>
-                Нет связанных документов. Перейдите на вкладку «Связанные документы», чтобы прикрепить их к обращению.
+                Вложения недоступны: ответ в формате «Сообщение» отправляется текстом письма.
+                Чтобы приложить документы, выберите формат «Электронный документ».
+              </Typography>
+            ) : (
+            <>
+            <Typography sx={{ fontFamily: 'Lato, sans-serif', fontWeight: 600, fontSize: '13px', color: '#101025', mb: 1 }}>
+              Документы для ответа — только с электронной подписью (УНЭП/УКЭП), обязательно:
+            </Typography>
+            {!card || card.linked_documents.filter(d => d.signature_type === 'UNEP' || d.signature_type === 'UKEP').length === 0 ? (
+              <Typography sx={{ fontFamily: 'Lato, sans-serif', fontSize: '12.5px', color: '#87879b', mb: 2 }}>
+                {card && card.linked_documents.length > 0
+                  ? 'Нет связанных документов с электронной подписью (УНЭП/УКЭП). Для формата «Электронный документ» нужен хотя бы один такой документ.'
+                  : 'Нет связанных документов. Перейдите на вкладку «Связанные документы», чтобы прикрепить документ с электронной подписью (УНЭП/УКЭП).'}
               </Typography>
             ) : (
               <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.75, mb: 1 }}>
-                {card.linked_documents.map(d => (
+                {card.linked_documents
+                  .filter(d => d.signature_type === 'UNEP' || d.signature_type === 'UKEP')
+                  .map(d => (
                   <FormControlLabel
                     key={d.document_uuid}
                     sx={{ ml: 0, alignItems: 'flex-start' }}
@@ -1343,17 +1868,17 @@ const AppealsPage: React.FC = () => {
                       />
                     }
                     label={
-                      <Typography sx={{ fontFamily: 'Lato, sans-serif', fontSize: '13px', color: '#101025' }}>
-                        {d.name}
-                        {d.registration_number ? ` (рег. № ${d.registration_number})` : ''}
-                        {(d.signature_type === 'UNEP' || d.signature_type === 'UKEP') && (
-                          <Chip
-                            label={d.signature_type === 'UKEP' ? 'УКЭП' : 'УНЭП'}
-                            size="small"
-                            sx={{ ml: 1, height: 18, fontSize: 10, bgcolor: '#e8f5e9', color: '#2e7d32' }}
-                          />
-                        )}
-                      </Typography>
+                      <Box sx={{ fontFamily: 'Lato, sans-serif', fontSize: '13px', color: '#101025', display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 0.5 }}>
+                        <Box component="span" sx={{ fontFamily: 'Lato, sans-serif', fontSize: '13px', color: '#101025' }}>
+                          {d.name}
+                          {d.registration_number ? ` (рег. № ${d.registration_number})` : ''}
+                        </Box>
+                        <Chip
+                          label={d.signature_type === 'UKEP' ? 'УКЭП' : 'УНЭП'}
+                          size="small"
+                          sx={{ ml: 0.5, height: 18, fontSize: 10, bgcolor: '#e8f5e9', color: '#2e7d32' }}
+                        />
+                      </Box>
                     }
                   />
                 ))}
@@ -1370,19 +1895,126 @@ const AppealsPage: React.FC = () => {
                 )}
               </Box>
             )}
+            </>
+            )}
 
-            <Box sx={{ display: 'flex', justifyContent: 'flex-end', gap: 1.5, mt: 2 }}>
+            {/* Статус ответа (если черновик / на согласовании) */}
+            {card?.reply_state && ['draft', 'pending_approval'].includes(card.reply_state) && (
+              <Alert severity="info" sx={{ borderRadius: '8px', mb: 2 }}>
+                <Typography sx={{ fontFamily: 'Lato, sans-serif', fontSize: '12.5px' }}>
+                  {card.reply_state === 'draft'
+                    ? 'Сохранён черновик ответа.'
+                    : 'Ответ ожидает согласования / утверждения.'}
+                  {card.reply_prepared_by_name ? ` Подготовил: ${card.reply_prepared_by_name}.` : ''}
+                </Typography>
+              </Alert>
+            )}
+
+            {/* Действия */}
+            <Box sx={{ display: 'flex', justifyContent: 'flex-end', gap: 1.5, mt: 2, flexWrap: 'wrap' }}>
               <Button onClick={() => setReplyDialog(false)} sx={{ textTransform: 'none', fontFamily: 'Lato, sans-serif', color: '#87879b' }}>
+                Отмена
+              </Button>
+              {/* На согласовании черновик сохранить нельзя (бэкенд вернёт 400) */}
+              {card?.reply_state !== 'pending_approval' && (
+                <Button
+                  variant="outlined"
+                  disabled={actionLoading}
+                  onClick={() => handleReply('save')}
+                  sx={{ borderRadius: '8px', textTransform: 'none', fontFamily: 'Lato, sans-serif', borderColor: '#d6d6df', color: '#5a5a72' }}
+                >
+                  Сохранить черновик
+                </Button>
+              )}
+              {IS_APPROVER ? (
+                <Button
+                  variant="contained"
+                  disabled={actionLoading || (replyFormat === 'message' && !replyText.trim()) || (replyFormat === 'document' && replyDocIds.length === 0)}
+                  onClick={() => handleReply('approve')}
+                  startIcon={<SendIcon />}
+                  sx={{ bgcolor: '#2e7d32', borderRadius: '8px', textTransform: 'none', fontFamily: 'Lato, sans-serif' }}
+                >
+                  Утвердить
+                </Button>
+              ) : (
+                <Button
+                  variant="contained"
+                  disabled={actionLoading || (replyFormat === 'message' && !replyText.trim())}
+                  onClick={() => handleReply('submit')}
+                  startIcon={<SendIcon />}
+                  sx={{ bgcolor: '#4c6ef5', borderRadius: '8px', textTransform: 'none', fontFamily: 'Lato, sans-serif' }}
+                >
+                  Отправить на согласование
+                </Button>
+              )}
+            </Box>
+          </Paper>
+        </Fade>
+      </Modal>
+
+      {/* ===================== ДИАЛОГ: ШАБЛОН ОТВЕТА ===================== */}
+      <Modal open={templateEditor.open} onClose={() => setTemplateEditor({ ...templateEditor, open: false })} closeAfterTransition>
+        <Fade in={templateEditor.open}>
+          <Paper
+            elevation={8}
+            sx={{
+              position: 'absolute',
+              top: '50%',
+              left: '50%',
+              transform: 'translate(-50%, -50%)',
+              width: '92%',
+              maxWidth: '560px',
+              borderRadius: '14px',
+              p: 3,
+            }}
+          >
+            <Typography sx={{ fontFamily: 'Lato, sans-serif', fontWeight: 700, fontSize: '18px', color: '#101025', mb: 1 }}>
+              {templateEditor.uuid ? 'Редактировать шаблон' : 'Новый шаблон ответа'}
+            </Typography>
+            <Typography sx={{ fontFamily: 'Lato, sans-serif', fontSize: '13px', color: '#87879b', mb: 2 }}>
+              Шаблон применяется только в формате «Сообщение». Можно использовать подсказки вида {'{{ФИО заявителя}}'}.
+            </Typography>
+            <StyledField
+              fullWidth
+              size="small"
+              label="Название шаблона *"
+              value={templateEditor.name}
+              onChange={e => setTemplateEditor({ ...templateEditor, name: e.target.value })}
+              sx={{ mb: 2 }}
+            />
+            <TextField
+              fullWidth
+              multiline
+              rows={8}
+              label="Текст шаблона *"
+              value={templateEditor.body}
+              onChange={e => setTemplateEditor({ ...templateEditor, body: e.target.value })}
+              placeholder="Текст ответа… Подсказки: {{ФИО заявителя}}, {{Системный номер сообщения}}, {{Дата создания сообщения}} и др."
+              sx={{
+                mb: 1,
+                '& .MuiOutlinedInput-root': { borderRadius: '10px' },
+                '& textarea': { fontFamily: 'Lato, sans-serif', fontSize: '14px' },
+              }}
+            />
+            {templateEditorError && (
+              <Typography sx={{ fontFamily: 'Lato, sans-serif', fontSize: '12.5px', color: '#c62828', mb: 1 }}>
+                {templateEditorError}
+              </Typography>
+            )}
+            <Box sx={{ display: 'flex', justifyContent: 'flex-end', gap: 1.5, mt: 2 }}>
+              <Button
+                onClick={() => setTemplateEditor({ ...templateEditor, open: false })}
+                sx={{ textTransform: 'none', fontFamily: 'Lato, sans-serif', color: '#87879b' }}
+              >
                 Отмена
               </Button>
               <Button
                 variant="contained"
-                disabled={!replyText.trim() || actionLoading}
-                onClick={handleReply}
-                startIcon={<SendIcon />}
+                disabled={actionLoading}
+                onClick={handleSaveTemplate}
                 sx={{ bgcolor: '#2e7d32', borderRadius: '8px', textTransform: 'none', fontFamily: 'Lato, sans-serif' }}
               >
-                Направить ответ
+                Сохранить
               </Button>
             </Box>
           </Paper>

@@ -1,5 +1,6 @@
 import uuid
 import json
+import logging
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -27,6 +28,7 @@ from app.utils.file_utils import save_upload_file, delete_file
 from app.utils.search import build_smart_search
 
 router = APIRouter(prefix="/documents", tags=["documents"])
+logger = logging.getLogger("edo.documents")
 
 
 async def _accessible_doc(doc_uuid: str, org: Organization, db: AsyncSession) -> Document:
@@ -413,21 +415,62 @@ async def verify_signature_endpoint(
     
     if not doc.signature_file_path:
         raise HTTPException(400, "Файл подписи (.sig) не загружен")
-    
+
+    # Защищённое чтение файлов: если файл(ы) отсутствуют на диске (например,
+    # остались после частично откатившегося удаления), не падать с 500, а
+    # вернуть понятную ошибку. Иначе браузер увидит CORS-блок (500 без CORS-заголовков).
+    import os as _os
+    missing = []
+    if not doc.original_file_path or not _os.path.isfile(doc.original_file_path):
+        missing.append("документ")
+    if not _os.path.isfile(doc.signature_file_path):
+        missing.append("файл подписи (.sig)")
+    if missing:
+        # Файлы утеряны, а запись в БД ещё жива — убираем «битый» документ,
+        # чтобы повторная проверка не падала 500.
+        try:
+            await db.delete(doc)
+            await db.commit()
+        except Exception:
+            await db.rollback()
+        raise HTTPException(
+            409,
+            f"Файл(ы) документа на сервере отсутствуют ({', '.join(missing)}). "
+            "Документ удалён. Загрузите документ и подпись заново.",
+        )
+
     with open(doc.original_file_path, "rb") as f:
         doc_content = f.read()
-    
+
     with open(doc.signature_file_path, "rb") as f:
         sig_content = f.read()
     
     verification_result = await verify_signature(doc_content, sig_content, doc.signature_type.value)
-    
+
+    # Логируем результат проверки GOST (детали, а не только HTTP-код), чтобы
+    # при отклонении подписи было видно, что именно вернул сервис проверки.
+    logger.info(
+        "verify %s: valid=%s signer=%r date=%r details=%r",
+        doc.uuid,
+        verification_result.get("signature_valid"),
+        verification_result.get("signer_name"),
+        verification_result.get("signature_date"),
+        verification_result.get("verification_details"),
+    )
+
     # Проверяем валидность подписи
     if not verification_result["signature_valid"]:
-        # Отклонённые документы не храним — удаляем полностью
-        await _delete_document_files(doc)
-        await db.delete(doc)
-        await db.commit()
+        # Отклонённые документы не храним — удаляем полностью.
+        # Важно: сначала коммитим удаление из БД, и только потом стираем файлы.
+        # Если сделать наоборот и коммит упадёт — файлы будут утеряны, а «битая»
+        # запись останется (повторная проверка → 500 на чтении отсутствующего файла).
+        try:
+            await db.delete(doc)
+            await db.commit()
+        except Exception:
+            await db.rollback()
+            raise HTTPException(500, "Не удалось удалить отклонённый документ из базы")
+        _delete_document_files(doc)
 
         return {
             "document_uuid": doc.uuid,
@@ -446,12 +489,12 @@ async def verify_signature_endpoint(
     # Подпись валидна — ищем сотрудника по ФИО из ГОСТ
     signer_name_from_gost = verification_result.get("signer_name", "")
     signature_date_from_gost = verification_result.get("signature_date", "")
-    
+
     matched_employee = None
     if signer_name_from_gost:
         # Нормализуем ФИО из ГОСТ: lowercase, strip, убираем лишние пробелы
         normalized = " ".join(signer_name_from_gost.lower().split())
-        
+
         # Ищем сотрудника в организации
         employees_result = await db.execute(
             select(Employee).where(
@@ -460,59 +503,56 @@ async def verify_signature_endpoint(
             )
         )
         all_employees = employees_result.scalars().all()
-        
+
         for emp in all_employees:
             full_name = f"{emp.last_name} {emp.first_name}{' ' + emp.middle_name if emp.middle_name else ''}".strip().lower()
             full_name = " ".join(full_name.split())
             if full_name == normalized:
                 matched_employee = emp
                 break
-    
-    if not matched_employee:
-        # Не нашли сотрудника с таким ФИО — отклонённые документы не храним
-        await _delete_document_files(doc)
-        await db.delete(doc)
-        await db.commit()
 
-        return {
-            "document_uuid": doc.uuid,
-            "signature_valid": False,
-            "signature_type": doc.signature_type,
-            "signer_name": signer_name_from_gost,
-            "signer_inn": "",
-            "signature_date": "",
-            "certificate_serial": verification_result.get("certificate_serial", ""),
-            "hash_algorithm": verification_result.get("hash_algorithm", ""),
-            "verification_details": f"Подпись валидна, но сотрудник с ФИО «{signer_name_from_gost}» не найден в вашей организации. Обращение отклонено, документ удалён.",
-            "ocsp_status": verification_result.get("ocsp_status"),
-            "document_deleted": True,
-        }
-    
-    # Нашли сотрудника — фиксируем
-    doc.goskey_valid = True
-    doc.goskey_data = json.dumps(verification_result)
-    doc.status = DocumentStatus.SIGNED
-    doc.signed_by_employee_id = matched_employee.id
-    doc.signer = f"{matched_employee.last_name} {matched_employee.first_name}{' ' + (matched_employee.middle_name or '')}".strip()
-    doc.signer_full_name = doc.signer
-    doc.signature_date = _parse_gost_date(signature_date_from_gost) or datetime.now()
-    
+    # ВАЖНО: неподтверждённый сотрудник НЕ повод удалять документ!
+    # Подпись валидна (GOST подтвердил) — документ сохраняем. Сопоставление
+    # подписанта с сотрудником — отдельный шаг: если не найден, фронтенд
+    # предложит заполнить метаданные вручную (warning, не удаление).
+    if matched_employee:
+        # Нашли сотрудника — фиксируем
+        doc.goskey_valid = True
+        doc.goskey_data = json.dumps(verification_result)
+        doc.status = DocumentStatus.SIGNED
+        doc.signed_by_employee_id = matched_employee.id
+        doc.signer = f"{matched_employee.last_name} {matched_employee.first_name}{' ' + (matched_employee.middle_name or '')}".strip()
+        doc.signer_full_name = doc.signer
+        doc.signature_date = _parse_gost_date(signature_date_from_gost) or datetime.now()
+    else:
+        # Сотрудник не сопоставлен — всё равно сохраняем валидный документ,
+        # подпись подтверждена. ФИО из ГОСТ подставляем как есть.
+        doc.goskey_valid = True
+        doc.goskey_data = json.dumps(verification_result)
+        doc.status = DocumentStatus.SIGNED
+        doc.signer = signer_name_from_gost or doc.signer or "Не указан"
+        doc.signer_full_name = signer_name_from_gost or doc.signer_full_name or ""
+        doc.signature_date = _parse_gost_date(signature_date_from_gost) or datetime.now()
+
     await db.commit()
     await db.refresh(doc)
-    
+
     return {
         "document_uuid": doc.uuid,
         "signature_valid": True,
         "signature_type": doc.signature_type,
         "signer_name": doc.signer,
         "signer_inn": "",
-        "signature_date": doc.signature_date.isoformat(),
+        "signature_date": doc.signature_date.isoformat() if doc.signature_date else "",
         "certificate_serial": verification_result.get("certificate_serial", ""),
         "hash_algorithm": verification_result.get("hash_algorithm", ""),
         "verification_details": verification_result.get("verification_details", ""),
         "ocsp_status": verification_result.get("ocsp_status"),
-        "matched_employee_id": matched_employee.id,
-        "matched_employee_name": f"{matched_employee.last_name} {matched_employee.first_name}",
+        "matched_employee_id": matched_employee.id if matched_employee else None,
+        "matched_employee_name": (
+            f"{matched_employee.last_name} {matched_employee.first_name}"
+            if matched_employee else None
+        ),
     }
 
 
@@ -809,16 +849,25 @@ async def delete_document(
         raise HTTPException(404, "Документ не найден")
     if doc.owner_org_id != org.id:
         raise HTTPException(403, "Удалить может только владелец документа")
-    
+
+    # Удаляем связи обращение↔документ, иначе они станут «осиротевшими» и
+    # вызовут 500 при загрузке карточки обращения (JOIN с несуществующим документом).
+    from app.models.appeal import AppealDocumentLink
+    links_result = await db.execute(
+        select(AppealDocumentLink).where(AppealDocumentLink.document_id == doc.id)
+    )
+    for link in links_result.scalars().all():
+        await db.delete(link)
+
     delete_file(doc.original_file_path)
     if doc.signature_file_path:
         delete_file(doc.signature_file_path)
     if doc.signed_copy_path:
         delete_file(doc.signed_copy_path)
-    
+
     await db.delete(doc)
     await db.commit()
-    
+
     return {"message": "Документ удалён"}
 
 

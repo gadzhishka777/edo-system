@@ -912,7 +912,14 @@ export interface AppealCard extends AppealListItem {
   content: string;
   internal_comment?: string | null;
   reply_text?: string | null;
+  reply_type?: string | null;
+  reply_format?: string;
+  reply_state?: string | null;
+  reply_prepared_by_name?: string | null;
+  reply_prepared_by_id?: number | null;
+  reply_approved_by_name?: string | null;
   register_deadline_iso?: string | null;
+  org_name?: string | null;
   applicant: {
     full_name: string;
     email: string;
@@ -930,8 +937,18 @@ export interface AppealCard extends AppealListItem {
     original_file_name: string;
     has_signed_copy: boolean;
     signature_type?: string | null;
+    used_in_reply: boolean;
   }[];
   history: AppealHistoryEntry[];
+}
+
+export interface ResponseTemplate {
+  uuid: string;
+  name: string;
+  body: string;
+  is_system: boolean;
+  org_id?: number | null;
+  created_by_employee_id?: number | null;
 }
 
 // ===== Публичные методы =====
@@ -985,6 +1002,27 @@ export const registerAppeal = async (uuid: string, regNumber: string) => {
   return response.data;
 };
 
+/** Исполнители, которых можно назначить на обращение (только с правом согласования). */
+export interface AppealExecutor {
+  id: number;
+  full_name: string;
+  position: string;
+  department: string;
+  /** true, если сотрудник вправе согласовать/утвердить ответ (Админ/Руководитель/Утверждающий) */
+  is_approver?: boolean;
+}
+
+export const getAppealExecutors = async (): Promise<AppealExecutor[]> => {
+  const response = await apiClient.get(`/api/appeals/executors`);
+  return response.data;
+};
+
+/** Сколько обращений ждут согласования ответа (красный счётчик в меню). */
+export const getPendingApprovalCount = async (): Promise<number> => {
+  const response = await apiClient.get(`/api/appeals/pending-approval/count`);
+  return Number(response.data?.count || 0);
+};
+
 export const takeAppealToWork = async (uuid: string, executorId: number, comment?: string) => {
   const response = await apiClient.post(`/api/appeals/${uuid}/take-work`, {
     executor_id: executorId,
@@ -1005,10 +1043,16 @@ export const replyToAppeal = async (
   uuid: string,
   text: string,
   linkIds: number[],
-): Promise<{ message: string; email_sent: boolean; warning?: string }> => {
+  replyType?: string,
+  replyFormat?: string,
+  decision?: string,
+): Promise<{ message: string; email_sent: boolean; warning?: string; reply_state?: string }> => {
   const response = await apiClient.post(`/api/appeals/${uuid}/reply`, {
     text,
     link_ids: linkIds,
+    reply_type: replyType || null,
+    reply_format: replyFormat || 'message',
+    decision: decision || 'send',
   });
   return response.data;
 };
@@ -1025,6 +1069,32 @@ export const linkDocumentToAppeal = async (appealUuid: string, documentUuid: str
 
 export const unlinkDocumentFromAppeal = async (appealUuid: string, documentUuid: string) => {
   const response = await apiClient.delete(`/api/appeals/${appealUuid}/documents/${documentUuid}`);
+  return response.data;
+};
+
+// ===== Шаблоны ответов =====
+
+export const getResponseTemplates = async (): Promise<ResponseTemplate[]> => {
+  const response = await apiClient.get(`/api/appeals/response-templates`);
+  return response.data;
+};
+
+export const createResponseTemplate = async (name: string, body: string): Promise<ResponseTemplate> => {
+  const response = await apiClient.post(`/api/appeals/response-templates`, { name, body });
+  return response.data;
+};
+
+export const updateResponseTemplate = async (
+  templateUuid: string,
+  name: string,
+  body: string,
+): Promise<ResponseTemplate> => {
+  const response = await apiClient.put(`/api/appeals/response-templates/${templateUuid}`, { name, body });
+  return response.data;
+};
+
+export const deleteResponseTemplate = async (templateUuid: string) => {
+  const response = await apiClient.delete(`/api/appeals/response-templates/${templateUuid}`);
   return response.data;
 };
 

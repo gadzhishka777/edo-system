@@ -1,6 +1,8 @@
 # backend/app/routers/public_appeals.py
 """Публичный приём обращений граждан и организаций (без авторизации)."""
+import logging
 import re
+import shutil
 import uuid as uuid_lib
 from collections import defaultdict, deque
 from datetime import datetime, timedelta
@@ -18,32 +20,51 @@ from app.models.appeal import (
     AppealKind, AppealApplicantType, AppealStatus,
 )
 from app.models.mail import Organization
-from app.services.email_service import send_email
+from app.services.appeal_email import send_appeal_email, date_short
 
 router = APIRouter(prefix="/public/appeals", tags=["public-appeals"])
+logger = logging.getLogger("edo.public_appeals")
 
 # ===== Простая защита от спама =====
 
-_RATE_LIMIT = 3          # заявок с одного IP в час
+_RATE_LIMIT = 5          # принятых обращений с одного IP в час
+_RATE_WINDOW = 3600      # секунд
 _rate_bucket: dict[str, deque] = defaultdict(deque)
 
 HONEYPOT_FIELD = "website"   # скрытое поле: боты его заполняют, люди — нет
 
 
 def _check_rate_limit(ip: str) -> None:
+    """Проверка лимита БЕЗ списания попытки.
+
+    Счётчик расходуется только после успешной валидации (см. _commit_rate_limit):
+    иначе заявитель, трижды ошибшийся в форме, получает бан на час.
+    """
     now = datetime.now().timestamp()
     bucket = _rate_bucket[ip]
-    while bucket and now - bucket[0] > 3600:
+    while bucket and now - bucket[0] > _RATE_WINDOW:
         bucket.popleft()
     if len(bucket) >= _RATE_LIMIT:
         raise HTTPException(429, "Слишком много обращений с этого адреса. Попробуйте позже.")
-    bucket.append(now)
+
+
+def _commit_rate_limit(ip: str) -> None:
+    """Списание попытки + периодическая чистка памяти."""
+    _rate_bucket[ip].append(datetime.now().timestamp())
+    if len(_rate_bucket) > 1000:
+        cutoff = datetime.now().timestamp() - _RATE_WINDOW
+        for key in [k for k, v in _rate_bucket.items() if not v or v[-1] < cutoff]:
+            _rate_bucket.pop(key, None)
 
 
 def _client_ip(request: Request) -> str:
-    forwarded = request.headers.get("x-forwarded-for")
-    if forwarded:
-        return forwarded.split(",")[0].strip()
+    """Реальный IP заявителя.
+
+    Заголовку X-Forwarded-For доверять нельзя — он подделывается клиентом,
+    поэтому лимит обходился сменой заголовка. Бэкенд запускается с
+    --proxy-headers --forwarded-allow-ips (см. deploy/start_backend.sh),
+    поэтому request.client.host уже содержит IP, подставленный доверенным nginx.
+    """
     return request.client.host if request.client else "unknown"
 
 
@@ -107,7 +128,6 @@ async def submit_appeal(
 ):
     """Подача обращения через интернет-приёмную."""
     ip = _client_ip(request)
-    _check_rate_limit(ip)
 
     # Honeypot: заполнено только ботами — маскируем успех
     if website.strip():
@@ -139,7 +159,9 @@ async def submit_appeal(
         kind_enum = AppealKind(kind)
     except ValueError:
         errors["kind"] = "Выберите вид обращения"
+        kind_enum = None
 
+    applicant_enum: Optional[AppealApplicantType] = None
     try:
         applicant_enum = AppealApplicantType(applicant_type)
     except ValueError:
@@ -154,7 +176,7 @@ async def submit_appeal(
     org_full_name_c = _clean(org_full_name, 500)
     org_short_name_c = _clean(org_short_name, 255)
     org_director_c = _clean(org_director, 255)
-    if applicant_enum == AppealApplicantType.ORGANIZATION and not org_full_name_c:
+    if applicant_enum is not None and applicant_enum == AppealApplicantType.ORGANIZATION and not org_full_name_c:
         errors["org_full_name"] = "Укажите полное наименование организации"
 
     if errors:
@@ -167,6 +189,9 @@ async def submit_appeal(
     target_org = org_result.scalar_one_or_none()
     if not target_org:
         raise HTTPException(400, "Выбранная организация недоступна")
+
+    # Лимит проверяем только после успешной валидации формы
+    _check_rate_limit(ip)
 
     # Вложения
     file_list = [f for f in (files or []) if f and f.filename]
@@ -214,56 +239,75 @@ async def submit_appeal(
         register_deadline=now + timedelta(days=settings.APPEAL_REGISTER_DAYS),
         ip_address=ip,
     )
-    db.add(appeal)
-    await db.flush()
+    # Запись обращения, вложений и истории — единой транзакцией.
+    # При любом сбое откатываем БД и удаляем уже записанные файлы,
+    # чтобы на диске не оставалось осиротевших вложений.
+    appeal_dir: Optional[Path] = None
+    try:
+        db.add(appeal)
+        await db.flush()
 
-    appeal.system_number = f"ОБР-{now.year}-{appeal.id:06d}"
+        appeal.system_number = f"ОБР-{now.year}-{appeal.id:06d}"
 
-    # Сохраняем вложения
-    appeal_dir = Path(settings.APPEALS_UPLOAD_DIR) / appeal_uuid
-    appeal_dir.mkdir(parents=True, exist_ok=True)
-    used_names: set[str] = set()
-    for original_name, data in prepared:
-        safe_stem = re.sub(r"[^\w\-. ]", "_", Path(original_name).stem)[:120] or "file"
-        name = f"{safe_stem}{Path(original_name).suffix.lower()}"
-        counter = 1
-        while name in used_names:
-            name = f"{safe_stem}({counter}){Path(original_name).suffix.lower()}"
-            counter += 1
-        used_names.add(name)
-        path = appeal_dir / name
-        path.write_bytes(data)
-        db.add(AppealAttachment(
+        # Сохраняем вложения
+        appeal_dir = Path(settings.APPEALS_UPLOAD_DIR) / appeal_uuid
+        appeal_dir.mkdir(parents=True, exist_ok=True)
+        used_names: set[str] = set()
+        for original_name, data in prepared:
+            safe_stem = re.sub(r"[^\w\-. ]", "_", Path(original_name).stem)[:120] or "file"
+            name = f"{safe_stem}{Path(original_name).suffix.lower()}"
+            counter = 1
+            while name in used_names:
+                name = f"{safe_stem}({counter}){Path(original_name).suffix.lower()}"
+                counter += 1
+            used_names.add(name)
+            path = appeal_dir / name
+            path.write_bytes(data)
+            db.add(AppealAttachment(
+                appeal_id=appeal.id,
+                file_name=name,
+                file_path=str(path),
+                file_size=len(data),
+            ))
+
+        db.add(AppealStatusHistory(
             appeal_id=appeal.id,
-            file_name=name,
-            file_path=str(path),
-            file_size=len(data),
+            employee_id=None,
+            employee_name="Интернет-приёмная",
+            action="Обращение подано через интернет-приёмную (получено согласие на обработку персональных данных)",
         ))
-
-    db.add(AppealStatusHistory(
-        appeal_id=appeal.id,
-        employee_id=None,
-        employee_name="Интернет-приёмная",
-        action="Обращение подано через интернет-приёмную (получено согласие на обработку персональных данных)",
-    ))
-    await db.commit()
+        await db.commit()
+        _commit_rate_limit(ip)
+    except Exception as e:
+        await db.rollback()
+        if appeal_dir and appeal_dir.exists():
+            shutil.rmtree(appeal_dir, ignore_errors=True)
+        logger.error("submit_appeal failed (ip=%s): %s", ip, e)
+        raise HTTPException(
+            500, "Не удалось сохранить обращение. Попробуйте отправить его ещё раз.",
+        )
 
     # Квитанция о приёме (best-effort — сбой SMTP не мешает подаче)
     full_name = f"{last_name} {first_name}".strip()
     try:
-        await send_email(
+        await send_appeal_email(
             to_email=email,
-            subject=f"Обращение {appeal.system_number} принято",
-            body=(
-                f"{full_name}, здравствуйте!\n\n"
-                f"Ваше обращение принято Единой цифровой платформой обратной связи.\n\n"
-                f"Системный номер обращения: {appeal.system_number}\n"
-                f"Дата поступления: {now.strftime('%d.%m.%Y')}\n"
-                f"Организация-адресат: {target_org.name}\n\n"
-                f"Срок регистрации обращения — до "
-                f"{appeal.register_deadline.strftime('%d.%m.%Y')} включительно.\n"
-                f"Ответ будет направлен на указанный вами адрес электронной почты.\n\n"
-                f"Это автоматическое уведомление, отвечать на него не нужно."
+            subject=f"Ваше обращение {appeal.system_number} принято",
+            heading="Ваше обращение принято",
+            to_name=full_name,
+            org_name=target_org.name,
+            lead=(
+                "Ваше обращение принято Единым цифровым порталом обратной связи."
+            ),
+            rows=[
+                ("Системный номер обращения", appeal.system_number),
+                ("Дата поступления", date_short(now)),
+                ("Организация-адресат", target_org.name),
+                ("Срок регистрации обращения — до", date_short(appeal.register_deadline)),
+            ],
+            body_text=(
+                "Обращение поступило на регистрацию и рассмотрение в выбранную организацию.\n"
+                "Ответ будет направлен на указанный вами адрес электронной почты."
             ),
         )
     except Exception:

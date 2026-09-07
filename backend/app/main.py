@@ -218,6 +218,28 @@ async def create_employees_table():
                 appeal_columns = [c['name'] for c in inspector.get_columns('appeals')]
                 if 'pd_consent_given' not in appeal_columns:
                     connection.execute(text("ALTER TABLE appeals ADD COLUMN pd_consent_given BOOLEAN DEFAULT 0"))
+                # Миграция: поля ответа (тип/формат/маршрут согласования)
+                new_appeal_columns = {
+                    'reply_type': 'VARCHAR(32)',
+                    'reply_format': "VARCHAR(32) DEFAULT 'MESSAGE'",
+                    'reply_state': 'VARCHAR(32)',
+                    'reply_link_ids': 'TEXT',
+                    'reply_prepared_by_id': 'INTEGER REFERENCES employees(id)',
+                    'reply_prepared_by_name': 'VARCHAR(255)',
+                    'reply_approved_by_id': 'INTEGER REFERENCES employees(id)',
+                    'reply_approved_by_name': 'VARCHAR(255)',
+                }
+                for col_name, col_def in new_appeal_columns.items():
+                    if col_name not in appeal_columns:
+                        connection.execute(text(f"ALTER TABLE appeals ADD COLUMN {col_name} {col_def}"))
+                # Нормализация данных: SQLEnum хранит ИМЯ значения (верхний регистр),
+                # а первая версия миграции задавала DEFAULT в нижнем регистре ('message').
+                # Иначе при чтении строки SQLAlchemy падает:
+                # LookupError: 'message' is not among the defined enum values.
+                connection.execute(text(
+                    "UPDATE appeals SET reply_format = 'MESSAGE' "
+                    "WHERE reply_format = 'message'"
+                ))
 
             if "appeal_attachments" not in tables:
                 connection.execute(text("""
@@ -257,6 +279,28 @@ async def create_employees_table():
                     )
                 """))
                 connection.execute(text("CREATE INDEX ix_appeal_document_links_appeal_id ON appeal_document_links(appeal_id)"))
+
+            # Миграция: признак «использован в ответе» у связанного документа
+            if 'appeal_document_links' in tables:
+                adl_columns = [c['name'] for c in inspector.get_columns('appeal_document_links')]
+                if 'used_in_reply' not in adl_columns:
+                    connection.execute(text("ALTER TABLE appeal_document_links ADD COLUMN used_in_reply BOOLEAN DEFAULT 0"))
+
+            # Таблица шаблонов ответов (системные + пользовательские)
+            if "response_templates" not in tables:
+                connection.execute(text("""
+                    CREATE TABLE response_templates (
+                        id INTEGER PRIMARY KEY,
+                        uuid VARCHAR(36) UNIQUE NOT NULL,
+                        org_id INTEGER REFERENCES organizations(id),
+                        name VARCHAR(255) NOT NULL,
+                        body TEXT NOT NULL,
+                        is_system BOOLEAN DEFAULT 0,
+                        created_by_employee_id INTEGER REFERENCES employees(id),
+                        created_at TIMESTAMP
+                    )
+                """))
+                connection.execute(text("CREATE INDEX ix_response_templates_org_id ON response_templates(org_id)"))
 
         await conn.run_sync(_migrate_all)
 
@@ -315,12 +359,79 @@ async def migrate_orgs_to_employees():
         print(f"\n✅ Миграция завершена: создано сотрудников-админов: {created}")
 
 
+SYSTEM_RESPONSE_TEMPLATES = [
+    {
+        "name": "Рассмотрено",
+        "body": (
+            "Уважаемый(ая) {{ИМЯ_ОТЧЕСТВО}}!\n"
+            "Ваше обращение, поступившее в Единый цифровой портал обратной связи "
+            "от {{ДАТА_СОЗДАНИЯ}} № {{СИСТЕМНЫЙ_НОМЕР}} рассмотрено. "
+            "По существу вопроса сообщаем следующее.\n\n"
+            "…\n\n"
+            "Благодарим за использование Единого цифрового портала обратной связи!"
+        ),
+    },
+    {
+        "name": "Принято к сведению",
+        "body": (
+            "Уважаемый(ая) {{ИМЯ_ОТЧЕСТВО}}!\n"
+            "Ваше обращение, поступившее в Единый цифровой портал обратной связи "
+            "от {{ДАТА_СОЗДАНИЯ}} № {{СИСТЕМНЫЙ_НОМЕР}} рассмотрено. "
+            "Изложенная информация принята к сведению.\n\n"
+            "Благодарим за использование Единого цифрового портала обратной связи!"
+        ),
+    },
+    {
+        "name": "Отклонено (СНПМ)",
+        "body": (
+            "Ваше сообщение оставлено без рассмотрения, в соответствии с Инструкцией "
+            "о порядке организации работы с обращениями граждан и организаций в "
+            'Межрегиональной общественной организации "Содружество наставников, '
+            'педагогов и молодежи" и структурных подразделениях, утвержденной приказом '
+            'Межрегиональной общественной организации "Содружество наставников, '
+            'педагогов и молодежи" от 24.08.2026 г. № 17.\n\n'
+            "Текст сообщения не позволяет определить суть предложения, заявления или жалобы."
+        ),
+    },
+]
+
+
+async def seed_response_templates():
+    """Создание системных шаблонов ответов при первом запуске (идемпотентно)."""
+    from app.models.appeal import ResponseTemplate
+
+    async with AsyncSessionLocal() as db:
+        result = await db.execute(
+            select(ResponseTemplate).where(ResponseTemplate.is_system == True)  # noqa: E712
+        )
+        existing = {t.name for t in result.scalars().all()}
+        created = 0
+        for spec in SYSTEM_RESPONSE_TEMPLATES:
+            if spec["name"] in existing:
+                continue
+            db.add(ResponseTemplate(
+                uuid=str(uuid_lib.uuid4()),
+                org_id=None,
+                name=spec["name"],
+                body=spec["body"],
+                is_system=True,
+                created_at=datetime.now(),
+            ))
+            created += 1
+        if created:
+            await db.commit()
+            print(f"✅ Создано системных шаблонов ответов: {created}")
+        else:
+            print("⏭️  Системные шаблоны ответов уже существуют")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Жизненный цикл приложения."""
     await create_default_admin()
     await create_employees_table()
     await migrate_orgs_to_employees()
+    await seed_response_templates()
     yield
 
 

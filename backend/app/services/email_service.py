@@ -22,6 +22,7 @@ def _build_message(
     subject: str,
     body: str,
     attachments: list[tuple[str, bytes]] | None = None,
+    html: str | None = None,
 ) -> EmailMessage:
     from_addr = settings.SMTP_FROM or settings.SMTP_USER
     msg = EmailMessage()
@@ -29,6 +30,9 @@ def _build_message(
     msg["To"] = to_email
     msg["Subject"] = subject
     msg.set_content(body)
+    if html:
+        # Текстовая версия + HTML: почтовый клиент покажет что умеет
+        msg.add_alternative(html, subtype="html")
 
     for file_name, data in (attachments or []):
         maintype, _, subtype = "application", "", "octet-stream"
@@ -53,8 +57,8 @@ def _build_message(
     return msg
 
 
-def _send_sync(to_email: str, subject: str, body: str, attachments) -> None:
-    msg = _build_message(to_email, subject, body, attachments)
+def _send_sync(to_email: str, subject: str, body: str, attachments, html=None) -> None:
+    msg = _build_message(to_email, subject, body, attachments, html)
 
     if settings.SMTP_PORT == 465:
         # Implicit SSL/TLS (SMTPS)
@@ -85,15 +89,19 @@ async def send_email(
     subject: str,
     body: str,
     attachments: list[tuple[str, bytes]] | None = None,
+    html: str | None = None,
 ) -> bool:
     """Отправляет письмо. Возвращает True при успехе; False — если SMTP не настроен;
-    бросает EmailSendError при ошибке отправки."""
+    бросает EmailSendError при ошибке отправки.
+
+    body — текстовая версия (fallback), html — HTML-версия (необязательно).
+    """
     if not settings.smtp_configured:
         logger.warning("SMTP не настроен — письмо на %s не отправлено: %s", to_email, subject)
         return False
 
     try:
-        await asyncio.to_thread(_send_sync, to_email, subject, body, attachments)
+        await asyncio.to_thread(_send_sync, to_email, subject, body, attachments, html)
         return True
     except Exception as e:
         logger.error("Ошибка отправки письма на %s: %s", to_email, e)
