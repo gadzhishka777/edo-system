@@ -124,6 +124,17 @@ class _ExchangeStore:
             return None
         return item["value"]
 
+    def peek(self, code: str) -> Optional[Dict[str, Any]]:
+        """Читает значение БЕЗ удаления (для шага «покажи кандидатов»).
+        Одноразовый код удаляется только при финальной выдаче токенов."""
+        self._gc()
+        item = self._codes.get(code)
+        if not item:
+            return None
+        if item["exp"] < time.time():
+            return None
+        return item["value"]
+
     def _gc(self) -> None:
         now = time.time()
         expired = [k for k, v in self._codes.items() if v["exp"] < now]

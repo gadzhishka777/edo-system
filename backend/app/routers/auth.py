@@ -202,7 +202,7 @@ async def eis_exchange(data: EisExchangeRequest, db: AsyncSession = Depends(get_
     Если kind=='choose' и в data передан employee_id — привязывает ESA-учётку к этому
     сотруднику, выдаёт JWT и возвращает kind='tokens'.
     """
-    stored = exchange_store.pop(data.code)
+    stored = exchange_store.peek(data.code)
     if not stored:
         raise HTTPException(
             status_code=status.HTTP_410_GONE,
@@ -211,6 +211,8 @@ async def eis_exchange(data: EisExchangeRequest, db: AsyncSession = Depends(get_
 
     kind = stored.get("kind")
     if kind == "tokens":
+        # Финальная выдача токенов — код одноразовый, удаляем.
+        exchange_store.pop(data.code)
         return stored["tokens"]
 
     if kind == "choose":
@@ -219,6 +221,7 @@ async def eis_exchange(data: EisExchangeRequest, db: AsyncSession = Depends(get_
         candidates: List[dict] = stored.get("candidates") or []
 
         # Если employee_id не выбран — возвращаем список для UI.
+        # Код пока НЕ удаляем, чтобы второй запрос с выбором смог его использовать.
         if not data.employee_id:
             return {"kind": "choose", "candidates": candidates}
 
@@ -245,6 +248,8 @@ async def eis_exchange(data: EisExchangeRequest, db: AsyncSession = Depends(get_
         await db.commit()
         # Перезагрузим с organization.
         await db.refresh(employee, attribute_names=["organization"])
+        # Финальная выдача токенов — код одноразовый, удаляем.
+        exchange_store.pop(data.code)
         return {"kind": "tokens", **build_employee_login_response(employee)}
 
     raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Неизвестный формат кода обмена.")

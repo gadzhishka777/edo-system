@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
   Alert,
@@ -130,6 +130,22 @@ const EisCallbackPage: React.FC = () => {
   const [candidates, setCandidates] = useState<EisEmployeeCandidate[]>([]);
   const [selectedId, setSelectedId] = useState<number | null>(null);
 
+  // Захватываем параметры один раз — ДО того, как эффект очистки удалит ?code из
+  // адресной строки. Иначе повторный рендер после очистки передаст code=null,
+  // эффект обмена перезапустится и выдаст «Не задан код обмена» (хотя код был).
+  const initialRef = useRef<{
+    code: string | null;
+    error: string | null;
+    desc: string | null;
+  } | null>(null);
+  if (initialRef.current === null) {
+    initialRef.current = {
+      code: searchParams.get('code'),
+      error: searchParams.get('error'),
+      desc: searchParams.get('error_description'),
+    };
+  }
+
   // Чистим URL от ?code сразу после чтения, чтобы F5 не делал повторный exchange.
   useEffect(() => {
     if (searchParams.toString()) {
@@ -143,6 +159,12 @@ const EisCallbackPage: React.FC = () => {
   }, []);
 
   useEffect(() => {
+    // Читаем параметры из захваченного рефа, а не из реактивного searchParams,
+    // чтобы очистка URL ниже не перезапустила эффект с code=null.
+    const code = initialRef.current?.code ?? null;
+    const errorCode = initialRef.current?.error ?? null;
+    const errorDescription = initialRef.current?.desc ?? null;
+
     if (errorCode) {
       setPhase('error');
       setErrorMessage(describeError(errorCode, errorDescription));
@@ -202,9 +224,11 @@ const EisCallbackPage: React.FC = () => {
     return () => {
       cancelled = true;
     };
-  }, [code, errorCode, errorDescription, navigate]);
+  }, []);
 
   const handleChoose = async () => {
+    // Берём код из захваченного рефа, т.к. после очистки URL реактивный code === null.
+    const code = initialRef.current?.code ?? null;
     if (!code || !selectedId) return;
     setPhase('submitting');
     try {
