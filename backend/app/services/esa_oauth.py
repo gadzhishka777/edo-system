@@ -179,7 +179,7 @@ def build_authorize_url(state: str) -> str:
     params = {
         "app_id": settings.ESA_APP_ID,
         "redirect_uri": settings.ESA_REDIRECT_URI,
-        "scope": ",".join(settings.ESA_SCOPES),
+        "scope": ",".join(settings.esa_scopes),
         "state": state,
         "response_type": "code",
     }

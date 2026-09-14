@@ -1,11 +1,37 @@
 import os
+import json
 from pathlib import Path
 from pydantic_settings import BaseSettings
 from dotenv import load_dotenv
 
+
 load_dotenv()
 
 BASE_DIR = Path(__file__).resolve().parent.parent
+
+
+def _parse_list_env(v):
+    """Парсит list-поле из env: поддерживает и JSON-массив, и строку через запятую.
+
+    pydantic-settings по умолчанию требует JSON для list-полей, из-за чего
+    запятая-строка (например ESA_SCOPES=scope1,scope2) падала с SettingsError
+    при старте приложения.
+    """
+    if isinstance(v, list):
+        return [str(x).strip() for x in v if str(x).strip()]
+    if v is None:
+        return []
+    v = str(v).strip()
+    if not v:
+        return []
+    if v.startswith("["):
+        try:
+            parsed = json.loads(v)
+            if isinstance(parsed, list):
+                return [str(x).strip() for x in parsed if str(x).strip()]
+        except Exception:
+            pass
+    return [s.strip() for s in v.split(",") if s.strip()]
 
 class Settings(BaseSettings):
     # Сервер
@@ -43,9 +69,11 @@ class Settings(BaseSettings):
     LICENSE_MAX_DOCS: int = 10000
     LICENSE_EXPIRE_DATE: str = "2027-12-31"
     
-    # CORS — список разрешённых origins через запятую в env
-    # По умолчанию localhost для разработки; для prod задать CORS_ORIGINS в .env
-    CORS_ORIGINS: list = ["http://localhost:3000", "http://127.0.0.1:3000", "http://localhost:8000"]
+    # CORS — список разрешённых origins (JSON-массив или строка через запятую в env).
+    # Храним как строку, чтобы pydantic-settings не падал при запятой-строке
+    # (он пытается JSON-декодировать complex-поля до применения env_parse).
+    # Список — через property cors_origins.
+    CORS_ORIGINS: str = "http://localhost:3000,http://127.0.0.1:3000,http://localhost:8000"
     
     # Go GOST
     GOST_API_URL: str = os.getenv("GOST_API_URL", "http://localhost:8080")
@@ -71,16 +99,12 @@ class Settings(BaseSettings):
     ESA_REDIRECT_URI: str = os.getenv(
         "ESA_REDIRECT_URI", "https://toredo.mroo-snpm.ru/api/auth/eis/callback"
     )
-    # Скоупы через запятую. Строго те, что согласованы при регистрации сервиса.
-    ESA_SCOPES: list = [
-        "scopes.viewFullName",
-        "scopes.viewEmail",
-        "scopes.viewPhone",
-        "scopes.viewBirthday",
-        "scopes.viewVkID",
-        "scopes.viewMaxID",
-        "scopes.viewTeamHistory",
-    ]
+    # Скоупы (JSON-массив или строка через запятую в env). Строго те, что согласованы.
+    # Храним как строку (см. обоснование у CORS_ORIGINS); список — через property esa_scopes.
+    ESA_SCOPES: str = (
+        "scopes.viewFullName,scopes.viewEmail,scopes.viewPhone,"
+        "scopes.viewBirthday,scopes.viewVkID,scopes.viewMaxID,scopes.viewTeamHistory"
+    )
     # HMAC-секрет для подписи одноразовых state-токенов.
     # Если не задан — берётся из SECRET_KEY (НЕ идеально, но работает).
     ESA_STATE_SECRET: str = os.getenv("ESA_STATE_SECRET", "")
@@ -103,6 +127,16 @@ class Settings(BaseSettings):
     def esa_state_signing_key(self) -> str:
         """Ключ для подписи state. Приоритет — ESA_STATE_SECRET, иначе SECRET_KEY."""
         return self.ESA_STATE_SECRET or self.SECRET_KEY
+
+    @property
+    def esa_scopes(self) -> list:
+        """Скоупы ESA как список (парсит ESA_SCOPES: запятая или JSON)."""
+        return _parse_list_env(self.ESA_SCOPES)
+
+    @property
+    def cors_origins(self) -> list:
+        """Разрешённые CORS-ориджины как список (парсит CORS_ORIGINS: запятая или JSON)."""
+        return _parse_list_env(self.CORS_ORIGINS)
 
     # ===== SMTP для отправки писем по обращениям =====
     SMTP_HOST: str = os.getenv("SMTP_HOST", "")
