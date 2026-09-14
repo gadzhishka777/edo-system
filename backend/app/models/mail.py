@@ -116,6 +116,10 @@ class Organization(Base):
     # Признак «Является школой» (школы получают дополнительные возможности в системе)
     is_school = Column(Boolean, default=False, nullable=False)
 
+    # Принудительная авторизация через ЕИС «Образовательный портал»:
+    # вход по логину/паролю для сотрудников организации запрещён.
+    force_esa_auth = Column(Boolean, default=False, nullable=False)
+
     # Связи
     employees = relationship("Employee", back_populates="organization", lazy="selectin")
 

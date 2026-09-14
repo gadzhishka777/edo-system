@@ -11,7 +11,6 @@ import {
   Alert,
   CircularProgress,
   Divider,
-  Snackbar,
 } from '@mui/material';
 import { styled } from '@mui/material/styles';
 import {
@@ -326,12 +325,15 @@ const LoginPage: React.FC<LoginPageProps> = ({ onLogin }) => {
   // форма логина/пароля открывается по кнопке «Вход по логину и паролю».
   const [showCredentials, setShowCredentials] = useState(false);
   const [eisLoading, setEisLoading] = useState(false);
-  const [eisError, setEisError] = useState<string | null>(null);
   const eisTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => () => {
     if (eisTimerRef.current) clearTimeout(eisTimerRef.current);
   }, []);
+
+  // Если вернулись сюда после ESA-входа без ?code (например, ошибка no_profile
+  // на стороне SPA вернула пользователя на /login) — LoginPage остаётся как есть,
+  // ошибку покажет /auth/eis/success.
 
   const validateForm = () => {
     const newErrors: { login?: string; password?: string } = {};
@@ -376,21 +378,13 @@ const LoginPage: React.FC<LoginPageProps> = ({ onLogin }) => {
     if (errors.password) setErrors({ ...errors, password: '' });
   };
 
-  // Заглушка входа через ЕИС: реальная интеграция пока не подключена.
-  // Показываем лоадер, затем — ошибку во всплывающем уведомлении (тосте).
+  // Вход через ЕИС: редиректим на бэкенд, который сформирует state и уйдёт на ESA.
+// Спиннер показываем, пока идёт window.location.assign — он снимется сам при уходе со страницы.
   const handleEisLogin = () => {
     if (eisLoading) return;
-    setEisError(null);
     setEisLoading(true);
-    eisTimerRef.current = setTimeout(() => {
-      setEisLoading(false);
-      setEisError(
-        'Не удалось войти через ЕИС «Образовательный портал». Войдите по логину и паролю.',
-      );
-    }, 1200);
+    window.location.assign('/api/auth/eis/login');
   };
-
-  const closeEisToast = () => setEisError(null);
 
   const handlePedIdLogin = () => {
     // Здесь логика входа через Пед.ID
@@ -428,7 +422,6 @@ const LoginPage: React.FC<LoginPageProps> = ({ onLogin }) => {
                   <CredentialsLinkButton
                     disableRipple
                     onClick={() => {
-                      setEisError(null);
                       setShowCredentials(true);
                     }}
                   >
@@ -527,29 +520,6 @@ const LoginPage: React.FC<LoginPageProps> = ({ onLogin }) => {
         </LoginContainer>
       </LoginBackground>
       <Footer />
-
-      {/* Ошибка входа через ЕИС — всплывающее уведомление */}
-      <Snackbar
-        open={!!eisError}
-        autoHideDuration={6000}
-        onClose={closeEisToast}
-        anchorOrigin={{ vertical: 'top', horizontal: 'right' }}
-        sx={{ mt: '96px' }}
-      >
-        <Alert
-          onClose={closeEisToast}
-          severity="error"
-          sx={{
-            borderRadius: '12px',
-            boxShadow: '0 4px 16px rgba(0,0,0,0.1)',
-            minWidth: '300px',
-            maxWidth: '420px',
-            fontFamily: 'Lato, sans-serif',
-          }}
-        >
-          {eisError}
-        </Alert>
-      </Snackbar>
     </PageWrapper>
   );
 };

@@ -6,8 +6,13 @@ login/refresh/me работают через Employee, а не Organization.
 import json
 import uuid as uuid_lib
 import secrets
+import logging
 from datetime import datetime, timedelta, timezone
-from fastapi import APIRouter, Depends, HTTPException, status
+from typing import Optional, List
+from urllib.parse import urlencode
+
+from fastapi import APIRouter, Depends, HTTPException, status, Query, Request
+from fastapi.responses import RedirectResponse, JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
 from sqlalchemy.orm import joinedload
@@ -26,6 +31,8 @@ from app.models.pydantic import (
     EmployeeLoginResponse,
     ProfileCompleteRequest,
     EmployeeResponse,
+    EisEmployeeCandidate,
+    EisExchangeRequest,
 )
 from app.core.security import (
     verify_password,
@@ -35,8 +42,212 @@ from app.core.security import (
 )
 from app.core.dependencies import get_current_org, get_current_employee
 from app.config import settings
+from app.services.esa_oauth import (
+    build_authorize_url,
+    build_employee_login_response,
+    create_employee_from_esa,
+    employee_to_candidate_dict,
+    exchange_code_for_token,
+    exchange_store,
+    fetch_userinfo,
+    find_or_match_employee,
+    link_employee_to_esa,
+    make_signed_state,
+    verify_signed_state,
+)
+
+logger = logging.getLogger("edo.auth")
 
 router = APIRouter(prefix="/auth", tags=["auth"])
+
+
+# ===================== ЕИС «Образовательный портал» (ESA) =====================
+
+
+@router.get("/eis/status", response_model=dict)
+async def eis_status():
+    """Публичный статус интеграции с ЕИС (включена ли авторизация через ЕИС)."""
+    return {"enabled": bool(settings.ESA_ENABLED)}
+
+
+def _redirect_to_spa(payload: dict) -> RedirectResponse:
+    """Редирект на SPA-страницу /auth/eis/success c одноразовым кодом в query."""
+    base = settings.FRONTEND_BASE_URL.rstrip("/") if settings.FRONTEND_BASE_URL else ""
+    target = f"{base}/auth/eis/success?code={payload['code']}"
+    return RedirectResponse(url=target, status_code=302)
+
+
+def _redirect_to_spa_error(error: str, description: str = "") -> RedirectResponse:
+    base = settings.FRONTEND_BASE_URL.rstrip("/") if settings.FRONTEND_BASE_URL else ""
+    target = f"{base}/auth/eis/success?error={error}"
+    if description:
+        target += f"&error_description={description}"
+    return RedirectResponse(url=target, status_code=302)
+
+
+@router.get("/eis/login")
+async def eis_login():
+    """Шаг 1 OAuth-flow: редирект на страницу авторизации ESA."""
+    if not settings.esa_configured:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Вход через ЕИС не настроен (ESA_APP_ID/ESA_APP_SECRET/ESA_REDIRECT_URI).",
+        )
+    state = make_signed_state()
+    url = build_authorize_url(state)
+    return RedirectResponse(url=url, status_code=302)
+
+
+@router.get("/eis/callback")
+async def eis_callback(
+    request: Request,
+    code: Optional[str] = Query(default=None),
+    state: Optional[str] = Query(default=None),
+    error: Optional[str] = Query(default=None),
+    error_description: Optional[str] = Query(default=None),
+    db: AsyncSession = Depends(get_async_db),
+):
+    """Шаг 2 OAuth-flow: ESA возвращает пользователя сюда с code или error."""
+    if not settings.esa_configured:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Вход через ЕИС не настроен.",
+        )
+
+    # 1) Отказ на экране согласия ESA.
+    if error:
+        logger.info("ESA callback error: %s — %s", error, error_description)
+        return _redirect_to_spa_error(error, error_description or "")
+
+    # 2) Проверка state.
+    if not code or not state:
+        return _redirect_to_spa_error("invalid_request", "missing code or state")
+    ok, payload = verify_signed_state(state)
+    if not ok:
+        logger.warning("ESA callback: state не прошёл проверку (истёк/подделан)")
+        return _redirect_to_spa_error("invalid_state")
+
+    # 3) Обмен code → токены (server→server).
+    try:
+        tokens = await exchange_code_for_token(code)
+    except Exception as e:
+        logger.exception("ESA token exchange failed")
+        return _redirect_to_spa_error("token_exchange_failed", str(e)[:200])
+
+    access_token = tokens.get("access_token")
+    refresh_token = tokens.get("refresh_token")
+    if not access_token:
+        return _redirect_to_spa_error("token_exchange_failed", "no access_token")
+
+    # 4) userinfo.
+    try:
+        userinfo_payload = await fetch_userinfo(access_token)
+    except Exception as e:
+        logger.exception("ESA userinfo failed")
+        return _redirect_to_spa_error("userinfo_failed", str(e)[:200])
+    userinfo = userinfo_payload.get("data") or {}
+
+    # 5) Маппинг ESA → Employee.
+    candidates, fast_match = await find_or_match_employee(db, userinfo)
+
+    if not candidates:
+        # Ничего не нашли — пользователю нужно обратиться к администратору,
+        # чтобы его завели в ТОР ЭДО.
+        return _redirect_to_spa_error(
+            "no_profile",
+            "Для вашей учётной записи ЕИС не найдено ни одной организации в ТОР ЭДО. "
+            "Обратитесь к администратору.",
+        )
+
+    if fast_match is not None and len(candidates) == 1:
+        # Один кандидат — сразу линкуем и кладём JWT в обменный код.
+        employee = fast_match
+        # Загружаем organization для ответа.
+        if employee.org_id and not getattr(employee, "organization", None):
+            org_result = await db.execute(select(Organization).where(Organization.id == employee.org_id))
+            employee.organization = org_result.scalar_one_or_none()
+        employee = await link_employee_to_esa(db, employee, userinfo, tokens)
+        await db.commit()
+        login_resp = build_employee_login_response(employee)
+        code_token = exchange_store.put({"kind": "tokens", "tokens": login_resp})
+        return _redirect_to_spa({"code": code_token})
+
+    # Несколько кандидатов — отдаём список, выбор делает пользователь на SPA.
+    # Подгружаем organization для каждого.
+    org_ids = {c.org_id for c in candidates if c.org_id}
+    org_map = {}
+    if org_ids:
+        org_rows = await db.execute(select(Organization).where(Organization.id.in_(org_ids)))
+        for org in org_rows.scalars().all():
+            org_map[org.id] = org
+    for c in candidates:
+        if c.org_id in org_map:
+            c.organization = org_map[c.org_id]
+    candidates_payload = [employee_to_candidate_dict(c) for c in candidates]
+    code_token = exchange_store.put(
+        {"kind": "choose", "userinfo": userinfo, "tokens": tokens, "candidates": candidates_payload}
+    )
+    return _redirect_to_spa({"code": code_token})
+
+
+@router.post("/eis/exchange")
+async def eis_exchange(data: EisExchangeRequest, db: AsyncSession = Depends(get_async_db)):
+    """Шаг 3 OAuth-flow: SPA обменивает одноразовый код на JWT или список кандидатов.
+
+    Возвращает:
+      - {"kind": "tokens",  ...EmployeeLoginResponse}      — если ESA-юзер однозначно мапится;
+      - {"kind": "choose",  "candidates": [...]}            — если нужно выбрать организацию;
+      - HTTPException 400/410 — если код просрочен или невалиден.
+
+    Если kind=='choose' и в data передан employee_id — привязывает ESA-учётку к этому
+    сотруднику, выдаёт JWT и возвращает kind='tokens'.
+    """
+    stored = exchange_store.pop(data.code)
+    if not stored:
+        raise HTTPException(
+            status_code=status.HTTP_410_GONE,
+            detail="Код обмена истёк или уже использован. Попробуйте войти через ЕИС ещё раз.",
+        )
+
+    kind = stored.get("kind")
+    if kind == "tokens":
+        return stored["tokens"]
+
+    if kind == "choose":
+        userinfo = stored.get("userinfo") or {}
+        tokens = stored.get("tokens") or {}
+        candidates: List[dict] = stored.get("candidates") or []
+
+        # Если employee_id не выбран — возвращаем список для UI.
+        if not data.employee_id:
+            return {"kind": "choose", "candidates": candidates}
+
+        # Проверяем, что выбранный employee_id действительно в списке кандидатов.
+        if not any(c["employee_id"] == data.employee_id for c in candidates):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Выбранный профиль не соответствует учётной записи ЕИС.",
+            )
+
+        result = await db.execute(
+            select(Employee).options(joinedload(Employee.organization)).where(Employee.id == data.employee_id)
+        )
+        employee = result.unique().scalar_one_or_none()
+        if not employee:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Профиль не найден")
+        if not employee.is_active:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Профиль деактивирован. Обратитесь к администратору.",
+            )
+
+        employee = await link_employee_to_esa(db, employee, userinfo, tokens)
+        await db.commit()
+        # Перезагрузим с organization.
+        await db.refresh(employee, attribute_names=["organization"])
+        return {"kind": "tokens", **build_employee_login_response(employee)}
+
+    raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Неизвестный формат кода обмена.")
 
 
 def _generate_license_key() -> str:
@@ -218,6 +429,23 @@ async def login(data: LoginRequest, db: AsyncSession = Depends(get_async_db)):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Аккаунт сотрудника деактивирован. Обратитесь к администратору.",
+        )
+
+    # Принудительная авторизация через ЕИС: блокируем вход по логину/паролю.
+    # Проверяем только при работающей интеграции ЕИС, иначе пользователи
+    # окажутся заперты без альтернативного способа входа.
+    org = employee.organization
+    if (
+        settings.ESA_ENABLED
+        and org is not None
+        and getattr(org, "force_esa_auth", False)
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=(
+                "Для Вашей организации отключена возможность авторизации "
+                "по логину и паролю. Вам необходимо войти через ЕИС."
+            ),
         )
 
     # Парсим роли

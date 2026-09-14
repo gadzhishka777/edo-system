@@ -81,6 +81,19 @@ class Employee(Base):
     is_active = Column(Boolean, default=True)
     profile_completed = Column(Boolean, default=False)
 
+    # ===== Привязка к ЕИС «Образовательный портал» (ESA) =====
+    # auth_provider: 'local' — логин/пароль как раньше, 'esa' — вход через ЕИС.
+    auth_provider = Column(String(16), nullable=False, default="local")
+    # Идентификатор пользователя ESA (esa_user_id). Не UNIQUE — сотрудник может
+    # работать в нескольких организациях и иметь несколько учёток Employee.
+    esa_user_id = Column(Integer, nullable=True, index=True)
+    # ESA refresh_token (хранится для будущего автопродления, пока не используется).
+    esa_refresh_token = Column(String(128), nullable=True)
+    # ESA access_token (последний выданный). Опционально кэшируется.
+    esa_access_token = Column(String(128), nullable=True)
+    # Момент истечения ESA access_token (UTC). None — неизвестно.
+    esa_token_expires_at = Column(DateTime(timezone=True), nullable=True)
+
     # Даты
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())

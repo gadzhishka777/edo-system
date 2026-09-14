@@ -24,6 +24,17 @@ function setTokens(access: string, refresh: string) {
   localStorage.setItem('refresh_token', refresh);
 }
 
+/** Сохраняет в localStorage всё, что фронт кладёт после успешного логина
+ *  (используется и обычным login, и ESA-exchange, чтобы не дублировать). */
+export function persistLogin(resp: EmployeeLoginResponse): void {
+  setTokens(resp.access_token, resp.refresh_token);
+  localStorage.setItem('org_name', resp.org_name);
+  localStorage.setItem('org_id', String(resp.org_id));
+  localStorage.setItem('employee_id', String(resp.employee_id));
+  localStorage.setItem('employee_name', resp.employee_name);
+  localStorage.setItem('employee_roles', JSON.stringify(resp.roles));
+}
+
 function clearTokens() {
   localStorage.removeItem('access_token');
   localStorage.removeItem('refresh_token');
@@ -119,6 +130,24 @@ export interface EmployeeLoginResponse {
   profile_completed: boolean;
 }
 
+/** Карточка сотрудника для UI-выбора, когда ESA-юзеру соответствует >1 профиля. */
+export interface EisEmployeeCandidate {
+  employee_id: number;
+  employee_name: string;
+  position?: string | null;
+  department?: string | null;
+  roles: string[];
+  org_id: number;
+  org_name: string;
+  is_active: boolean;
+  profile_completed: boolean;
+}
+
+/** Ответ /api/auth/eis/exchange: либо токены, либо список кандидатов на выбор. */
+export type EisExchangeResult =
+  | (EmployeeLoginResponse & { kind: 'tokens'; auth_provider?: string })
+  | { kind: 'choose'; candidates: EisEmployeeCandidate[] };
+
 export interface EmployeeInfo {
   id: number;
   uuid: string;
@@ -190,12 +219,7 @@ export function getApiErrorMessage(err: any, fallback = 'Ошибка запро
 export const authApi = {
   login: async (login: string, password: string): Promise<EmployeeLoginResponse> => {
     const response = await apiClient.post('/api/auth/login', { login, password });
-    setTokens(response.data.access_token, response.data.refresh_token);
-    localStorage.setItem('org_name', response.data.org_name);
-    localStorage.setItem('org_id', String(response.data.org_id));
-    localStorage.setItem('employee_id', String(response.data.employee_id));
-    localStorage.setItem('employee_name', response.data.employee_name);
-    localStorage.setItem('employee_roles', JSON.stringify(response.data.roles));
+    persistLogin(response.data);
     return response.data;
   },
 
@@ -220,12 +244,7 @@ export const authApi = {
 
   completeProfile: async (data: ProfileCompleteRequest): Promise<EmployeeLoginResponse> => {
     const response = await apiClient.post('/api/auth/complete-profile', data);
-    setTokens(response.data.access_token, response.data.refresh_token);
-    localStorage.setItem('org_name', response.data.org_name);
-    localStorage.setItem('org_id', String(response.data.org_id));
-    localStorage.setItem('employee_id', String(response.data.employee_id));
-    localStorage.setItem('employee_name', response.data.employee_name);
-    localStorage.setItem('employee_roles', JSON.stringify(response.data.roles));
+    persistLogin(response.data);
     return response.data;
   },
 
@@ -241,6 +260,14 @@ export const authApi = {
 
   isAuthenticated: () => {
     return !!getAccessToken();
+  },
+
+  /** Завершение ESA-входа: обмен одноразового кода из /auth/eis/success на JWT или список кандидатов. */
+  exchangeEis: async (code: string, employeeId?: number): Promise<EisExchangeResult> => {
+    const body: { code: string; employee_id?: number } = { code };
+    if (employeeId !== undefined) body.employee_id = employeeId;
+    const response = await apiClient.post('/api/auth/eis/exchange', body);
+    return response.data;
   },
 
   getOrgName: () => localStorage.getItem('org_name'),

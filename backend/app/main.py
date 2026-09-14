@@ -305,6 +305,44 @@ async def create_employees_table():
         await conn.run_sync(_migrate_all)
 
 
+async def migrate_esa_columns():
+    """Идемпотентная миграция: добавляет ESA-колонки в employees и organizations."""
+    from sqlalchemy import inspect as _sqla_inspect
+
+    async with async_engine.begin() as conn:
+        def _add_esa_columns(connection):
+            inspector = _sqla_inspect(connection)
+            tables = inspector.get_table_names()
+            if "employees" not in tables:
+                return
+            columns = {c["name"] for c in inspector.get_columns("employees")}
+            additions = {
+                "auth_provider": "VARCHAR(16) NOT NULL DEFAULT 'local'",
+                "esa_user_id": "INTEGER",
+                "esa_refresh_token": "VARCHAR(128)",
+                "esa_access_token": "VARCHAR(128)",
+                "esa_token_expires_at": "TIMESTAMP",
+            }
+            for col, ddl in additions.items():
+                if col not in columns:
+                    connection.execute(text(f"ALTER TABLE employees ADD COLUMN {col} {ddl}"))
+            indexes = {ix["name"] for ix in inspector.get_indexes("employees")}
+            if "ix_employees_esa_user_id" not in indexes:
+                connection.execute(text(
+                    "CREATE INDEX ix_employees_esa_user_id ON employees(esa_user_id)"
+                ))
+
+            # Признак принудительной авторизации через ЕИС на стороне организации
+            if "organizations" in tables:
+                org_columns = {c["name"] for c in inspector.get_columns("organizations")}
+                if "force_esa_auth" not in org_columns:
+                    connection.execute(text(
+                        "ALTER TABLE organizations ADD COLUMN force_esa_auth BOOLEAN NOT NULL DEFAULT 0"
+                    ))
+
+        await conn.run_sync(_add_esa_columns)
+
+
 async def migrate_orgs_to_employees():
     """
     Идемпотентная миграция: для каждой организации без сотрудников создаёт
@@ -430,6 +468,7 @@ async def lifespan(app: FastAPI):
     """Жизненный цикл приложения."""
     await create_default_admin()
     await create_employees_table()
+    await migrate_esa_columns()
     await migrate_orgs_to_employees()
     await seed_response_templates()
     yield

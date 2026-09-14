@@ -12,6 +12,7 @@ import AdminPage from './pages/AdminPage';
 import AdminLoginPage from './pages/AdminLoginPage';
 import AppealsPage from './pages/AppealsPage';
 import PublicAppealPage from './pages/PublicAppealPage';
+import EisCallbackPage from './pages/EisCallbackPage';
 import { Header } from './components/Layout/Header';
 import { Sidebar } from './components/Layout/Sidebar';
 import Footer from './components/Layout/Footer';
@@ -64,6 +65,7 @@ function App() {
               <Route path="/admin/login" element={<AdminLoginPage />} />
               <Route path="/admin" element={<AdminPage />} />
               <Route path="/appeal" element={<PublicAppealPage />} />
+              <Route path="/auth/eis/success" element={<EisCallbackPage />} />
               <Route
                 path="/*"
                 element={

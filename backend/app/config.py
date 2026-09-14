@@ -30,7 +30,7 @@ class Settings(BaseSettings):
     # Безопасность
     SECRET_KEY: str = os.getenv("SECRET_KEY", "edo-secret-key-change-in-production-2026")
     ALGORITHM: str = "HS256"
-    ACCESS_TOKEN_EXPIRE_MINUTES: int = 30  # 30 минут
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 60  # 60 минут — время жизни сессии
     REFRESH_TOKEN_EXPIRE_DAYS: int = 7  # 7 дней
     
     # Администратор по умолчанию
@@ -52,7 +52,59 @@ class Settings(BaseSettings):
     GOST_API_KEY: str = os.getenv("GOST_API_KEY", "")
     GOST_TIMEOUT: int = int(os.getenv("GOST_TIMEOUT", "30"))
 
-    # SMTP для отправки писем по обращениям
+    # ===== ЕИС «Образовательный портал» (ESA) =====
+    # OAuth 2.0 Authorization Code flow.
+    # Документация: см. backend/ESA_INTEGRATION_NOTES.md и Downloads/ESA_INTEGRATION.md
+    ESA_ENABLED: bool = os.getenv("ESA_ENABLED", "false").lower() in ("1", "true", "yes")
+    ESA_APP_ID: str = os.getenv("ESA_APP_ID", "")
+    ESA_APP_SECRET: str = os.getenv("ESA_APP_SECRET", "")
+    ESA_AUTHORIZE_URL: str = os.getenv(
+        "ESA_AUTHORIZE_URL", "https://esa.mroo-snpm.ru/oauth/authorize"
+    )
+    ESA_TOKEN_URL: str = os.getenv(
+        "ESA_TOKEN_URL", "https://api.mroo-snpm.ru/oauth/token.php"
+    )
+    ESA_USERINFO_URL: str = os.getenv(
+        "ESA_USERINFO_URL", "https://api.mroo-snpm.ru/auth/userinfo.php"
+    )
+    # Redirect URI должен ТОЧНО совпадать с зарегистрированным в ESA (включая https/host/path).
+    ESA_REDIRECT_URI: str = os.getenv(
+        "ESA_REDIRECT_URI", "https://toredo.mroo-snpm.ru/api/auth/eis/callback"
+    )
+    # Скоупы через запятую. Строго те, что согласованы при регистрации сервиса.
+    ESA_SCOPES: list = [
+        "scopes.viewFullName",
+        "scopes.viewEmail",
+        "scopes.viewPhone",
+        "scopes.viewBirthday",
+        "scopes.viewVkID",
+        "scopes.viewMaxID",
+        "scopes.viewTeamHistory",
+    ]
+    # HMAC-секрет для подписи одноразовых state-токенов.
+    # Если не задан — берётся из SECRET_KEY (НЕ идеально, но работает).
+    ESA_STATE_SECRET: str = os.getenv("ESA_STATE_SECRET", "")
+    # TTL подписанного state в секундах.
+    ESA_STATE_TTL_SECONDS: int = int(os.getenv("ESA_STATE_TTL_SECONDS", "300"))
+    # TTL одноразового кода обмена (передаётся из callback в SPA на /auth/eis/success).
+    ESA_EXCHANGE_CODE_TTL_SECONDS: int = int(os.getenv("ESA_EXCHANGE_CODE_TTL_SECONDS", "60"))
+    # Таймаут HTTP-запросов к ESA (сек).
+    ESA_HTTP_TIMEOUT: int = int(os.getenv("ESA_HTTP_TIMEOUT", "15"))
+    # Базовый URL фронтенда для редиректов после ESA-входа.
+    # В проде это обычно пустая строка — бэкенд смотрит на тот же origin.
+    FRONTEND_BASE_URL: str = os.getenv("FRONTEND_BASE_URL", "")
+
+    @property
+    def esa_configured(self) -> bool:
+        """True, если ESA-интеграция включена и оба ключа заданы."""
+        return bool(self.ESA_APP_ID and self.ESA_APP_SECRET and self.ESA_REDIRECT_URI)
+
+    @property
+    def esa_state_signing_key(self) -> str:
+        """Ключ для подписи state. Приоритет — ESA_STATE_SECRET, иначе SECRET_KEY."""
+        return self.ESA_STATE_SECRET or self.SECRET_KEY
+
+    # ===== SMTP для отправки писем по обращениям =====
     SMTP_HOST: str = os.getenv("SMTP_HOST", "")
     SMTP_PORT: int = int(os.getenv("SMTP_PORT", "587"))
     SMTP_USER: str = os.getenv("SMTP_USER", "")

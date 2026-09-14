@@ -467,8 +467,10 @@ const AdminPage: React.FC = () => {
   // Form data
   const [orgForm, setOrgForm] = useState({ name: '', login: '', password: '', inn: '', kpp: '', address: '', contact_person: '', contact_email: '', is_school: false });
   const [credsForm, setCredsForm] = useState({ login: '', password: '' });
-  const [editOrgForm, setEditOrgForm] = useState({ name: '', inn: '', kpp: '', address: '', contact_person: '', contact_email: '', is_active: true, is_school: false });
+  const [editOrgForm, setEditOrgForm] = useState({ name: '', inn: '', kpp: '', address: '', contact_person: '', contact_email: '', is_active: true, is_school: false, force_esa_auth: false });
   const [licForm, setLicForm] = useState({ count: 5, duration_days: 180 });
+  // Статус интеграции с ЕИС (включена ли авторизация через ЕИС на уровне системы)
+  const [esaEnabled, setEsaEnabled] = useState<boolean>(false);
 
   // ===================== STATS =====================
 
@@ -482,6 +484,16 @@ const AdminPage: React.FC = () => {
   }, []);
 
   useEffect(() => { loadStats(); }, [loadStats]);
+
+  // Статус интеграции ЕИС (для показа/блокировки тоггла принудительного входа)
+  useEffect(() => {
+    let cancelled = false;
+    fetch(`${API_BASE}/api/auth/eis/status`)
+      .then((r) => r.json())
+      .then((d) => { if (!cancelled) setEsaEnabled(!!d.enabled); })
+      .catch(() => { if (!cancelled) setEsaEnabled(false); });
+    return () => { cancelled = true; };
+  }, []);
 
   // ===================== ORGANIZATIONS =====================
 
@@ -626,6 +638,7 @@ const AdminPage: React.FC = () => {
       contact_email: org.contact_email || '',
       is_active: org.is_active ?? true,
       is_school: org.is_school ?? false,
+      force_esa_auth: org.force_esa_auth ?? false,
     });
     setEditOrgModal(true);
   };
@@ -907,12 +920,13 @@ const AdminPage: React.FC = () => {
                             <TableCell>ИНН</TableCell>
                             <TableCell>Контакты</TableCell>
                             <TableCell align="center">Статус</TableCell>
+                            <TableCell align="center">ЕИС (вход)</TableCell>
                             <TableCell align="right">Действия</TableCell>
                           </TableRow>
                         </TableHead>
                         <TableBody>
                           {orgs.length === 0 ? (
-                            <TableRow><TableCell colSpan={6} align="center" sx={{ py: 4 }}>
+                            <TableRow><TableCell colSpan={7} align="center" sx={{ py: 4 }}>
                               <Typography sx={{ color: '#87879b', fontFamily: 'Lato' }}>Организации не найдены</Typography>
                             </TableCell></TableRow>
                           ) : orgs.map((org) => (
@@ -934,6 +948,14 @@ const AdminPage: React.FC = () => {
                                     color: org.is_active ? '#2e7d32' : '#c62828',
                                     fontWeight: 600, fontSize: 12,
                                   }} />
+                              </TableCell>
+                              <TableCell align="center">
+                                {org.force_esa_auth ? (
+                                  <Chip label="Только ЕИС" size="small"
+                                    sx={{ backgroundColor: '#ede7f6', color: '#5e35b1', fontWeight: 600, fontSize: 12 }} />
+                                ) : (
+                                  <Typography sx={{ fontSize: 12, color: '#b0b3c3', fontFamily: 'Lato' }}>—</Typography>
+                                )}
                               </TableCell>
                               <TableCell align="right">
                                 <Box sx={{ display: 'flex', justifyContent: 'flex-end', gap: 0.5 }}>
@@ -1529,7 +1551,29 @@ const AdminPage: React.FC = () => {
                   <input type="checkbox" checked={editOrgForm.is_school} onChange={(e) => setEditOrgForm(p => ({ ...p, is_school: e.target.checked }))} id="isSchool" />
                   <label htmlFor="isSchool" style={{ fontFamily: 'Lato', fontSize: 14 }}>Является школой</label>
                 </Box>
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                  <input
+                    type="checkbox"
+                    checked={editOrgForm.force_esa_auth}
+                    disabled={!esaEnabled}
+                    onChange={(e) => setEditOrgForm(p => ({ ...p, force_esa_auth: e.target.checked }))}
+                    id="forceEsa"
+                  />
+                  <label htmlFor="forceEsa" style={{ fontFamily: 'Lato', fontSize: 14, opacity: esaEnabled ? 1 : 0.5 }}>
+                    Обязательная авторизация через ЕИС
+                  </label>
+                </Box>
               </Box>
+              {!esaEnabled && (
+                <Typography sx={{ fontFamily: 'Lato', fontSize: 12, color: '#e53935', mt: 1 }}>
+                  Тоггл недоступен: интеграция с ЕИС отключена на уровне системы. Включите ESA в настройках, чтобы запретить вход по логину и паролю.
+                </Typography>
+              )}
+              {esaEnabled && editOrgForm.force_esa_auth && (
+                <Typography sx={{ fontFamily: 'Lato', fontSize: 12, color: '#5e35b1', mt: 1 }}>
+                  Внимание: при включении сотрудники организации не смогут войти по логину и паролю — только через ЕИС. Это затронет и администратора организации.
+                </Typography>
+              )}
             </ModalBody>
             <ModalFooter>
               <CancelButton onClick={() => setEditOrgModal(false)}>Отмена</CancelButton>

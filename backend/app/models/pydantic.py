@@ -603,3 +603,25 @@ class ProfileCompleteRequest(LenientBirthdayMixin):
     email: Optional[str] = None
     birthday: Optional[datetime] = None
     notes: Optional[str] = None
+
+
+# ===== ESA (ЕИС «Образовательный портал») =====
+
+class EisEmployeeCandidate(BaseModel):
+    """Карточка сотрудника для UI-выбора, если ESA-юзеру соответствует несколько профилей."""
+    employee_id: int
+    employee_name: str
+    position: Optional[str] = None
+    department: Optional[str] = None
+    roles: List[str] = []
+    org_id: int
+    org_name: str = ""
+    is_active: bool = True
+    profile_completed: bool = False
+
+
+class EisExchangeRequest(BaseModel):
+    """Запрос от SPA: обменять одноразовый код на JWT (или получить список кандидатов)."""
+    code: str
+    # Если ESA-юзеру соответствует несколько профилей — обязательно указать выбранный.
+    employee_id: Optional[int] = None

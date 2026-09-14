@@ -347,6 +347,7 @@ async def list_organizations(
             "login": o.login,
             "is_active": o.is_active,
             "is_school": bool(o.is_school),
+            "force_esa_auth": bool(o.force_esa_auth),
             "created_at": o.created_at.isoformat() if o.created_at else None,
             "active_license_id": o.active_license_id,
         } for o in orgs],
@@ -397,6 +398,7 @@ async def create_organization(
         hashed_password=get_password_hash(password),
         is_active=True,
         is_school=bool(data.get("is_school", False)),
+        force_esa_auth=bool(data.get("force_esa_auth", False)),
     )
     db.add(org)
     await db.flush()
@@ -465,6 +467,8 @@ async def update_organization(
         org.is_active = bool(data["is_active"])
     if "is_school" in data:
         org.is_school = bool(data["is_school"])
+    if "force_esa_auth" in data:
+        org.force_esa_auth = bool(data["force_esa_auth"])
 
     await db.commit()
     await db.refresh(org)
@@ -475,6 +479,7 @@ async def update_organization(
         "login": org.login,
         "is_active": org.is_active,
         "is_school": bool(org.is_school),
+        "force_esa_auth": bool(org.force_esa_auth),
         "message": "Организация обновлена",
     }
 
