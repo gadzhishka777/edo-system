@@ -26,6 +26,7 @@ from urllib.parse import urlencode
 
 import httpx
 from sqlalchemy import select
+from sqlalchemy.orm import joinedload
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
@@ -248,14 +249,20 @@ async def find_or_match_employee(
     fast_match: Optional[Employee] = None
     if esa_user_id is not None:
         result = await db.execute(
-            select(Employee).where(Employee.esa_user_id == esa_user_id, Employee.is_active == True)  # noqa: E712
+            select(Employee)
+            .options(joinedload(Employee.organization))
+            .where(Employee.esa_user_id == esa_user_id, Employee.is_active == True)  # noqa: E712
         )
         fast_match = result.scalar_one_or_none()
         if fast_match is not None:
             return [fast_match], fast_match
 
     # 2) Маппинг по ФИО (+ email, если есть).
-    stmt = select(Employee).where(Employee.is_active == True)  # noqa: E712
+    stmt = (
+        select(Employee)
+        .options(joinedload(Employee.organization))
+        .where(Employee.is_active == True)  # noqa: E712
+    )
     if last:
         stmt = stmt.where(Employee.last_name.ilike(last))
     if first:
@@ -279,7 +286,9 @@ async def find_or_match_employee(
     # Если по строгому ФИО не нашли — fallback: ищем только по email.
     if not candidates and email:
         result = await db.execute(
-            select(Employee).where(
+            select(Employee)
+            .options(joinedload(Employee.organization))
+            .where(
                 Employee.is_active == True,  # noqa: E712
                 Employee.email.ilike(email),
             )
