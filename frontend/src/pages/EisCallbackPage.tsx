@@ -201,6 +201,7 @@ const EisCallbackPage: React.FC = () => {
           return;
         }
 
+        console.error('[ESA] Неожиданный ответ сервера при обмене кода:', result);
         setPhase('error');
         setErrorMessage('Неожиданный ответ сервера. Попробуйте войти ещё раз.');
       } catch (err: any) {

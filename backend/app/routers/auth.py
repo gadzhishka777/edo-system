@@ -4,6 +4,7 @@
 login/refresh/me работают через Employee, а не Organization.
 """
 import json
+import os
 import uuid as uuid_lib
 import secrets
 import logging
@@ -57,6 +58,16 @@ from app.services.esa_oauth import (
 )
 
 logger = logging.getLogger("edo.auth")
+
+# Детальное логирование ESA-flow. Включается переменной окружения ESA_DEBUG=true.
+# После отладки выключается (ESA_DEBUG=false), чтобы не засорять логи.
+ESA_DEBUG = os.getenv("ESA_DEBUG", "false").lower() in ("1", "true", "yes")
+
+
+def _esa_log(msg: str, *args) -> None:
+    """Лог ESA: на INFO, если ESA_DEBUG включён (иначе молчим, чтобы не засорять)."""
+    if ESA_DEBUG:
+        logger.info("[ESA] " + msg, *args)
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -146,6 +157,7 @@ async def eis_callback(
         logger.exception("ESA userinfo failed")
         return _redirect_to_spa_error("userinfo_failed", str(e)[:200])
     userinfo = userinfo_payload.get("data") or {}
+    _esa_log("callback: userinfo получен, esa_user_id=%s", userinfo.get("esa_user_id"))
 
     # 5) Маппинг ESA → Employee.
     candidates, fast_match = await find_or_match_employee(db, userinfo)
@@ -170,6 +182,7 @@ async def eis_callback(
         await db.commit()
         login_resp = build_employee_login_response(employee)
         code_token = exchange_store.put({"kind": "tokens", "tokens": login_resp})
+        _esa_log("callback: employee_id=%s сопоставлен (fast_match), kind=tokens", employee.id)
         return _redirect_to_spa({"code": code_token})
 
     # Несколько кандидатов — отдаём список, выбор делает пользователь на SPA.
@@ -187,6 +200,7 @@ async def eis_callback(
     code_token = exchange_store.put(
         {"kind": "choose", "userinfo": userinfo, "tokens": tokens, "candidates": candidates_payload}
     )
+    _esa_log("callback: найдено кандидатов=%d, kind=choose", len(candidates_payload))
     return _redirect_to_spa({"code": code_token})
 
 
@@ -202,18 +216,26 @@ async def eis_exchange(data: EisExchangeRequest, db: AsyncSession = Depends(get_
     Если kind=='choose' и в data передан employee_id — привязывает ESA-учётку к этому
     сотруднику, выдаёт JWT и возвращает kind='tokens'.
     """
+    _esa_log("exchange: запрос обмена code=%s..., employee_id=%s", (data.code or "")[:8], data.employee_id)
     stored = exchange_store.peek(data.code)
     if not stored:
+        logger.warning(
+            "[ESA] exchange: код не найден — возможно истёк (60с), уже использован, "
+            "бэкенд перезапущен, либо запрос попал на другой воркер uvicorn "
+            "(in-memory store специфичен для процесса)."
+        )
         raise HTTPException(
             status_code=status.HTTP_410_GONE,
             detail="Код обмена истёк или уже использован. Попробуйте войти через ЕИС ещё раз.",
         )
 
     kind = stored.get("kind")
+    _esa_log("exchange: найден stored kind=%s", kind)
     if kind == "tokens":
         # Финальная выдача токенов — код одноразовый, удаляем.
         exchange_store.pop(data.code)
-        return stored["tokens"]
+        _esa_log("exchange: выдача токенов (kind=tokens)")
+        return {"kind": "tokens", **stored["tokens"]}
 
     if kind == "choose":
         userinfo = stored.get("userinfo") or {}
@@ -250,8 +272,10 @@ async def eis_exchange(data: EisExchangeRequest, db: AsyncSession = Depends(get_
         await db.refresh(employee, attribute_names=["organization"])
         # Финальная выдача токенов — код одноразовый, удаляем.
         exchange_store.pop(data.code)
+        _esa_log("exchange: выдача токенов после выбора профиля employee_id=%s", data.employee_id)
         return {"kind": "tokens", **build_employee_login_response(employee)}
 
+    logger.error("[ESA] exchange: неизвестный kind=%r stored=%r", kind, stored)
     raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Неизвестный формат кода обмена.")
 
 
