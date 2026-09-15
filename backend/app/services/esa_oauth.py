@@ -166,12 +166,14 @@ async def exchange_code_for_token(code: str) -> Dict[str, Any]:
         raise RuntimeError(f"ESA token endpoint returned non-JSON: {resp.text[:300]}") from e
     if resp.status_code != 200 or not data.get("access_token"):
         err = data.get("error") or data.get("error_description") or "unknown_error"
-        raise RuntimeError(f"ESA token exchange failed: {err}")
+        raise RuntimeError(
+            f"ESA token exchange failed: {err} (HTTP {resp.status_code}, body={resp.text[:300]})"
+        )
     return data
 
 
 async def fetch_userinfo(access_token: str) -> Dict[str, Any]:
-    """GET /auth/userinfo.php c Bearer-токеном. Возвращает {'data': {...}, 'client': {...}}."""
+    """GET /auth/userinfo c Bearer-токеном. Возвращает {'data': {...}, 'client': {...}}."""
     headers = {"Authorization": f"Bearer {access_token}"}
     async with httpx.AsyncClient(timeout=settings.ESA_HTTP_TIMEOUT) as client:
         resp = await client.get(settings.ESA_USERINFO_URL, headers=headers)

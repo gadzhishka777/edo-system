@@ -90,10 +90,10 @@ class Settings(BaseSettings):
         "ESA_AUTHORIZE_URL", "https://esa.mroo-snpm.ru/oauth/authorize"
     )
     ESA_TOKEN_URL: str = os.getenv(
-        "ESA_TOKEN_URL", "https://api.mroo-snpm.ru/oauth/token.php"
+        "ESA_TOKEN_URL", "https://api.mroo-snpm.ru/oauth/token"
     )
     ESA_USERINFO_URL: str = os.getenv(
-        "ESA_USERINFO_URL", "https://api.mroo-snpm.ru/auth/userinfo.php"
+        "ESA_USERINFO_URL", "https://api.mroo-snpm.ru/auth/userinfo"
     )
     # Redirect URI должен ТОЧНО совпадать с зарегистрированным в ESA (включая https/host/path).
     ESA_REDIRECT_URI: str = os.getenv(
