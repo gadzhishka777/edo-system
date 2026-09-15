@@ -19,6 +19,7 @@ import hashlib
 import hmac
 import json
 import logging
+import os
 import secrets
 import time
 from typing import Any, Dict, List, Optional, Tuple
@@ -38,6 +39,11 @@ from app.core.security import (
 from app.models.employee import Employee
 
 logger = logging.getLogger("edo.esa")
+
+# Детальное логирование сопоставления ESA → Employee. Включается ESA_DEBUG=true
+# (тот же флаг, что и в routers/auth.py). Помогает понять, почему при входе
+# показан/не показан выбор профиля.
+_ESA_DEBUG = os.getenv("ESA_DEBUG", "false").lower() in ("1", "true", "yes")
 
 # ===================== STATE (подписанный, stateless) =====================
 
@@ -254,51 +260,59 @@ async def find_or_match_employee(
     middle = _norm_name(userinfo_data.get("patronymic"))
     email = _norm_email(userinfo_data.get("email"))
 
-    # 1) Все сотрудники, уже привязанные к этому ESA-аккаунту (может быть несколько).
-    linked: List[Employee] = []
+    # Собираем пул кандидатов из ТРЁХ источников и объединяем без дублей.
+    # Важно: источники объединяются ВСЕГДА, а не «только пока пул пуст» — иначе
+    # второй профиль пользователя теряется, и вход «залипает» на первом выбранном.
+    seen: set = set()
+    merged: List[Employee] = []
+
+    def _add(emp: Employee) -> None:
+        if emp.id in seen:
+            return
+        seen.add(emp.id)
+        merged.append(emp)
+
+    # 1) Профили, уже привязанные к этому ESA-аккаунту (может быть несколько).
+    linked_count = 0
     if esa_user_id is not None:
         result = await db.execute(
             select(Employee)
             .options(joinedload(Employee.organization))
             .where(Employee.esa_user_id == esa_user_id, Employee.is_active == True)  # noqa: E712
         )
-        linked = list(result.unique().scalars().all())
+        for emp in result.unique().scalars().all():
+            _add(emp)
+        linked_count = len(merged)
 
-    # 2) Маппинг по ФИО (+ email, если есть).
-    stmt = (
-        select(Employee)
-        .options(joinedload(Employee.organization))
-        .where(Employee.is_active == True)  # noqa: E712
-    )
-    if last:
-        stmt = stmt.where(Employee.last_name.ilike(last))
-    if first:
-        stmt = stmt.where(Employee.first_name.ilike(first))
-    result = await db.execute(stmt)
-    by_fio = result.unique().scalars().all()
+    # 2) Профили, совпадающие по ФИО (+ email, если он есть в ESA).
+    fio_count = 0
+    if last or first:
+        stmt = (
+            select(Employee)
+            .options(joinedload(Employee.organization))
+            .where(Employee.is_active == True)  # noqa: E712
+        )
+        if last:
+            stmt = stmt.where(Employee.last_name.ilike(last))
+        if first:
+            stmt = stmt.where(Employee.first_name.ilike(first))
+        result = await db.execute(stmt)
+        for emp in result.unique().scalars().all():
+            if not _names_match(emp, last, first, middle):
+                continue
+            if email and emp.email and _norm_email(emp.email) != email:
+                # email расходится — не считаем кандидатом.
+                continue
+            before = len(merged)
+            _add(emp)
+            if len(merged) > before:
+                fio_count += 1
 
-    # Отсеиваем по точному ФИО+отчество и фильтруем email-матч, если есть.
-    fio_candidates: List[Employee] = []
-    for emp in by_fio:
-        if not _names_match(emp, last, first, middle):
-            continue
-        if email and emp.email and _norm_email(emp.email) != email:
-            # email расходится — не считаем кандидатом.
-            continue
-        fio_candidates.append(emp)
-
-    # 3) Объединяем linked + по-ФИО без дублей. Один ESA-аккаунт может быть
-    #    привязан к нескольким профилям, и те же профили могут совпасть по ФИО.
-    seen: set = set()
-    merged: List[Employee] = []
-    for emp in linked + fio_candidates:
-        if emp.id in seen:
-            continue
-        seen.add(emp.id)
-        merged.append(emp)
-
-    # 4) Если пул пуст — fallback: ищем только по email.
-    if not merged and email:
+    # 3) Профили, совпадающие по email (в т.ч. с незаполненным ФИО — частый случай,
+    #    когда профиль заведён администратором, а ФИО ещё не дозаполнено).
+    #    Выполняется ВСЕГДА, даже если пул уже непустой.
+    email_count = 0
+    if email:
         result = await db.execute(
             select(Employee)
             .options(joinedload(Employee.organization))
@@ -307,21 +321,29 @@ async def find_or_match_employee(
                 Employee.email.ilike(email),
             )
         )
-        by_email = result.unique().scalars().all()
-        for emp in by_email:
+        for emp in result.unique().scalars().all():
             if emp.id in seen:
                 continue
             # По email принимаем только если ФИО пустое или совпадает по имени+фамилии.
-            if not _norm_name(emp.last_name):
-                seen.add(emp.id)
-                merged.append(emp)
-                continue
-            if last and _norm_name(emp.last_name) != last:
-                continue
-            if first and _norm_name(emp.first_name) != first:
-                continue
-            seen.add(emp.id)
-            merged.append(emp)
+            if _norm_name(emp.last_name):
+                if last and _norm_name(emp.last_name) != last:
+                    continue
+                if first and _norm_name(emp.first_name) != first:
+                    continue
+            _add(emp)
+            email_count += 1
+
+    if _ESA_DEBUG:
+        logger.info(
+            "[ESA] match: esa_user_id=%s linked=%d fio=+%d email=+%d → всего=%d "
+            "(employee_id/org_id: %s)",
+            esa_user_id,
+            linked_count,
+            fio_count,
+            email_count,
+            len(merged),
+            [(c.id, c.org_id) for c in merged],
+        )
 
     if not merged:
         return [], None

@@ -182,7 +182,11 @@ async def eis_callback(
         await db.commit()
         login_resp = build_employee_login_response(employee)
         code_token = exchange_store.put({"kind": "tokens", "tokens": login_resp})
-        _esa_log("callback: employee_id=%s сопоставлен (fast_match), kind=tokens", employee.id)
+        _esa_log(
+            "callback: employee_id=%s (org_id=%s) сопоставлен (fast_match, единственный кандидат), kind=tokens",
+            employee.id,
+            employee.org_id,
+        )
         return _redirect_to_spa({"code": code_token})
 
     # Несколько кандидатов — отдаём список, выбор делает пользователь на SPA.
@@ -200,7 +204,11 @@ async def eis_callback(
     code_token = exchange_store.put(
         {"kind": "choose", "userinfo": userinfo, "tokens": tokens, "candidates": candidates_payload}
     )
-    _esa_log("callback: найдено кандидатов=%d, kind=choose", len(candidates_payload))
+    _esa_log(
+        "callback: найдено кандидатов=%d, kind=choose → %s",
+        len(candidates_payload),
+        [(c["employee_id"], c["org_name"]) for c in candidates_payload],
+    )
     return _redirect_to_spa({"code": code_token})
 
 
