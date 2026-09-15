@@ -108,7 +108,7 @@ const ERROR_MESSAGES: Record<string, string> = {
   invalid_request: 'ЕИС прислал некорректный ответ. Попробуйте войти ещё раз.',
   token_exchange_failed: 'ЕИС не выдал токен доступа. Возможно, код уже использован. Попробуйте войти ещё раз.',
   userinfo_failed: 'Не удалось получить ваши данные из ЕИС. Попробуйте войти ещё раз.',
-  no_profile: 'Для вашей учётной записи ЕИС не найдено ни одной организации в ТОР ЭДО. Обратитесь к администратору.',
+  no_profile: 'Для вашей учётной записи ЕИС не найдено ни одного профиля в ТОР ЭДО. Обратитесь к администратору.',
 };
 
 function describeError(code: string, description?: string | null): string {
@@ -117,7 +117,7 @@ function describeError(code: string, description?: string | null): string {
   return `Не удалось войти через ЕИС (код: ${code}). Попробуйте войти по логину и паролю.`;
 }
 
-const EisCallbackPage: React.FC = () => {
+const EisCallbackPage: React.FC<{ onLogin?: () => void }> = ({ onLogin }) => {
   const [searchParams, setSearchParams] = useSearchParams();
   const navigate = useNavigate();
 
@@ -185,6 +185,8 @@ const EisCallbackPage: React.FC = () => {
         if (result.kind === 'tokens') {
           const tokens = result as EmployeeLoginResponse & { kind: 'tokens' };
           persistLogin(tokens);
+          // Сообщаем App, что авторизация прошла (иначе guard сразу скиинет на /login).
+          onLogin?.();
           // Если профиль сотрудника не заполнен — отправляем дозаполнить.
           if (!tokens.profile_completed && !tokens.employee_name) {
             navigate('/profile-complete', { replace: true });
@@ -236,6 +238,8 @@ const EisCallbackPage: React.FC = () => {
       const result = await authApi.exchangeEis(code, selectedId);
       if (result.kind === 'tokens') {
         persistLogin(result);
+        // Сообщаем App, что авторизация прошла (иначе guard сразу скиинет на /login).
+        onLogin?.();
         if (!result.profile_completed && !result.employee_name) {
           navigate('/profile-complete', { replace: true });
         } else {

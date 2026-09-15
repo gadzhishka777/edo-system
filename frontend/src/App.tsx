@@ -65,7 +65,7 @@ function App() {
               <Route path="/admin/login" element={<AdminLoginPage />} />
               <Route path="/admin" element={<AdminPage />} />
               <Route path="/appeal" element={<PublicAppealPage />} />
-              <Route path="/auth/eis/success" element={<EisCallbackPage />} />
+              <Route path="/auth/eis/success" element={<EisCallbackPage onLogin={handleLogin} />} />
               <Route
                 path="/*"
                 element={
