@@ -230,14 +230,23 @@ async def find_or_match_employee(
     db: AsyncSession,
     userinfo_data: Dict[str, Any],
 ) -> Tuple[List[Employee], Optional[Employee]]:
-    """Ищет сотрудника по ESA-данным.
+    """Ищет сотрудника(ов) по ESA-данным.
 
     Возвращает (candidates, fast_match):
-      - candidates: все сотрудники с подходящим ФИО (для UI выбора, если их > 1).
-      - fast_match: сотрудник, к которому ESA-учётка привязана ранее (esa_user_id),
-                    или единственный кандидат, или None.
+      - candidates: все подходящие сотрудники (для UI выбора, если их > 1).
+      - fast_match: сотрудник, если подходит ровно один; иначе None.
 
-    Если кандидатов нет — пустой список. fast_match=None означает «нужен UI-выбор».
+    ВАЖНО (поведение выбора профиля):
+      Выбор профиля при входе НЕ запоминается «навсегда». ESA-аккаунт может быть
+      привязан к нескольким профилям (Employee с одним esa_user_id) — например,
+      один человек числится сотрудником в нескольких организациях. Поэтому
+      esa_user_id используется только для РАСШИРЕНИЯ пула кандидатов, а не для
+      «закрепления» пользователя за одним профилем. При каждом входе пул кандидатов
+      собирается заново:
+        - 0 кандидатов → ошибка «нет профиля»;
+        - 1 кандидат   → быстрый вход без окна выбора;
+        - >1 кандидата → окно выбора показывается ВСЕГДА, пользователь может
+          выбрать любой профиль (в т.ч. переключиться на другой в следующий раз).
     """
     esa_user_id = userinfo_data.get("esa_user_id")
     last = _norm_name(userinfo_data.get("surname"))
@@ -245,17 +254,15 @@ async def find_or_match_employee(
     middle = _norm_name(userinfo_data.get("patronymic"))
     email = _norm_email(userinfo_data.get("email"))
 
-    # 1) Быстрый путь: ESA-user уже логинился и привязан к конкретному Employee.
-    fast_match: Optional[Employee] = None
+    # 1) Все сотрудники, уже привязанные к этому ESA-аккаунту (может быть несколько).
+    linked: List[Employee] = []
     if esa_user_id is not None:
         result = await db.execute(
             select(Employee)
             .options(joinedload(Employee.organization))
             .where(Employee.esa_user_id == esa_user_id, Employee.is_active == True)  # noqa: E712
         )
-        fast_match = result.scalar_one_or_none()
-        if fast_match is not None:
-            return [fast_match], fast_match
+        linked = list(result.unique().scalars().all())
 
     # 2) Маппинг по ФИО (+ email, если есть).
     stmt = (
@@ -268,23 +275,30 @@ async def find_or_match_employee(
     if first:
         stmt = stmt.where(Employee.first_name.ilike(first))
     result = await db.execute(stmt)
-    by_fio = result.scalars().all()
+    by_fio = result.unique().scalars().all()
 
     # Отсеиваем по точному ФИО+отчество и фильтруем email-матч, если есть.
-    candidates: List[Employee] = []
+    fio_candidates: List[Employee] = []
     for emp in by_fio:
         if not _names_match(emp, last, first, middle):
             continue
         if email and emp.email and _norm_email(emp.email) != email:
             # email расходится — не считаем кандидатом.
             continue
-        candidates.append(emp)
+        fio_candidates.append(emp)
 
-    if len(candidates) == 1:
-        return candidates, candidates[0]
+    # 3) Объединяем linked + по-ФИО без дублей. Один ESA-аккаунт может быть
+    #    привязан к нескольким профилям, и те же профили могут совпасть по ФИО.
+    seen: set = set()
+    merged: List[Employee] = []
+    for emp in linked + fio_candidates:
+        if emp.id in seen:
+            continue
+        seen.add(emp.id)
+        merged.append(emp)
 
-    # Если по строгому ФИО не нашли — fallback: ищем только по email.
-    if not candidates and email:
+    # 4) Если пул пуст — fallback: ищем только по email.
+    if not merged and email:
         result = await db.execute(
             select(Employee)
             .options(joinedload(Employee.organization))
@@ -293,19 +307,27 @@ async def find_or_match_employee(
                 Employee.email.ilike(email),
             )
         )
-        by_email = result.scalars().all()
+        by_email = result.unique().scalars().all()
         for emp in by_email:
+            if emp.id in seen:
+                continue
             # По email принимаем только если ФИО пустое или совпадает по имени+фамилии.
             if not _norm_name(emp.last_name):
-                candidates.append(emp)
+                seen.add(emp.id)
+                merged.append(emp)
                 continue
             if last and _norm_name(emp.last_name) != last:
                 continue
             if first and _norm_name(emp.first_name) != first:
                 continue
-            candidates.append(emp)
+            seen.add(emp.id)
+            merged.append(emp)
 
-    return candidates, (candidates[0] if len(candidates) == 1 else None)
+    if not merged:
+        return [], None
+    if len(merged) == 1:
+        return merged, merged[0]
+    return merged, None
 
 
 async def create_employee_from_esa(
