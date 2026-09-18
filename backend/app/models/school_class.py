@@ -82,6 +82,18 @@ MAX_LETTER_LENGTH = 2
 MAX_NAME_LENGTH = 255
 
 
+def parallels_in_range(bounds: tuple[int, int]) -> list[int]:
+    """Разворачивает пару границ в полный список параллелей.
+
+    PREPROFILE_PARALLELS / PROFILE_PARALLELS — это ГРАНИЦЫ диапазона
+    (например (5, 9)), а не перечисление. API же отдаёт фронтенду список
+    параллелей (List[int]), потому что фронт проверяет принадлежность
+    через `.includes(parallel)`. Без разворачивания в [5, 6, 7, 8, 9]
+    предпрофиль пропадал для 6, 7 и 8 — оставались только 5 и 9.
+    """
+    return list(range(bounds[0], bounds[1] + 1))
+
+
 def profile_kind(parallel: int | None) -> str | None:
     """Какой профиль применим к параллели.
 

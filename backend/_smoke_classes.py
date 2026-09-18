@@ -117,7 +117,7 @@ check("4 предпрофиля", len(opts.get("preprofiles", [])) == 4, str(opt
 check("6 профилей", len(opts.get("profiles", [])) == 6, str(opts.get("profiles")))
 check("сменность: first/second", [s["value"] for s in opts.get("shifts", [])] == ["first", "second"])
 check("учебный год 2026/2027", opts.get("current_academic_year") == "2026/2027", str(opts.get("current_academic_year")))
-check("предпрофиль для 5–9", opts.get("preprofile_parallels") == [5, 9], str(opts.get("preprofile_parallels")))
+check("предпрофиль для 5–9", opts.get("preprofile_parallels") == [5, 6, 7, 8, 9], str(opts.get("preprofile_parallels")))
 check("профиль для 10–11", opts.get("profile_parallels") == [10, 11], str(opts.get("profile_parallels")))
 check("выпускные параллели 9 и 11", opts.get("graduating_parallels") == [9, 11], str(opts.get("graduating_parallels")))
 
@@ -135,6 +135,14 @@ check("5 без предпрофиля → 422", r.status_code == 422, f"{r.stat
 
 r = client.post("/api/classes/", json={"parallel": 10, "letter": "А", "shift": "first"})
 check("10 без профиля → 422", r.status_code == 422, f"{r.status_code} {r.text[:110]}")
+
+# Регресс: предпрофиль обязателен для ВСЕХ параллелей 5–9, а не только для
+# границ 5 и 9. Раньше /options отдавал preprofile_parallels = [5, 9] (пару
+# границ вместо списка), из-за чего в форме пропадало поле предпрофиля для
+# 6, 7 и 8, а сохранение класса падало на бэкенде.
+for parallel in (6, 7, 8, 9):
+    r = client.post("/api/classes/", json={"parallel": parallel, "letter": "А", "shift": "first"})
+    check(f"{parallel} без предпрофиля → 422", r.status_code == 422, f"{r.status_code} {r.text[:110]}")
 
 r = client.post("/api/classes/", json={
     "parallel": 10, "letter": "А", "shift": "first",

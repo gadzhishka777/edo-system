@@ -36,6 +36,7 @@ from app.models.school_class import (
     SHIFT_VALUES,
     SchoolClass,
     is_graduating_parallel,
+    parallels_in_range,
     resolve_profile_fields,
 )
 from app.models.pydantic import (
@@ -175,8 +176,10 @@ async def get_class_options(
         shifts=[SchoolClassOption(value=v, label=l) for v, l in SHIFT_OPTIONS],
         academic_years=ACADEMIC_YEAR_OPTIONS,
         current_academic_year=CURRENT_ACADEMIC_YEAR,
-        preprofile_parallels=list(PREPROFILE_PARALLELS),
-        profile_parallels=list(PROFILE_PARALLELS),
+        # Фронт проверяет принадлежность параллели через .includes(), поэтому
+        # отдаём полный список ([5, 6, 7, 8, 9]), а не пару границ.
+        preprofile_parallels=parallels_in_range(PREPROFILE_PARALLELS),
+        profile_parallels=parallels_in_range(PROFILE_PARALLELS),
         graduating_parallels=list(GRADUATING_PARALLELS),
     )
 

@@ -402,8 +402,8 @@ const ClassesPage: React.FC = () => {
   const parallelNumber = formData.parallel ? Number(formData.parallel) : null;
 
   // Какие профильные поля показывать: 1–4 — никаких, 5–9 — предпрофиль,
-  // 10–11 — профиль. Границы приходят с бэкенда (options), чтобы фронт и
-  // бэкенд не разъезжались.
+  // 10–11 — профиль. Бэкенд отдаёт ПОЛНЫЙ список параллелей
+  // (preprofile_parallels = [5,6,7,8,9]), поэтому проверяем через includes.
   const showPreprofile = !!options && parallelNumber !== null &&
     options.preprofile_parallels.includes(parallelNumber);
   const showProfile = !!options && parallelNumber !== null &&
