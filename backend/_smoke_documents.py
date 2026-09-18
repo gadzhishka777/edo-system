@@ -305,6 +305,45 @@ check("загруженные документы встроились по но�
       str(got))
 check("отклонённый 81-ОД в списке отсутствует", got is not None and "81-ОД" not in got, str(got))
 
+# --- 8. составные номера: 01-10/48-2026 выше 01-10/47-2026 ---------------
+# Регресс: _reg_number брал только ВЕДУЩИЕ цифры, поэтому весь ряд
+# «01-10/NN-2026» получал один и тот же ключ 1 (от «01»), номер не участвовал
+# в сортировке вообще и порядок решался датой создания — 47 всплывал выше 48.
+# Здесь время создания намеренно ПРОТИВОРЕЧИТ номеру: 47 создан позже 48,
+# и по дате он был бы первым. Правильный ответ — по номеру.
+print("\n== Составные номера (01-10/NN-2026) ==")
+COMPOSITE = [
+    ("01-10/44-2026", "2026-01-05 10:00:00.000000"),
+    ("01-10/45-2026", "2026-01-05 09:00:00.000000"),
+    ("01-10/46-2026", "2026-01-05 12:00:00.000000"),
+    ("01-10/48-2026", "2026-01-05 09:00:00.000000"),  # создан раньше 47…
+    ("01-10/47-2026", "2026-01-05 18:00:00.000000"),  # …но номер меньше
+]
+con = sqlite3.connect("_smoke_documents.db")
+cur = con.cursor()
+for reg, created in COMPOSITE:
+    cur.execute(
+        "INSERT INTO documents (uuid, name, type, folder, registration_number, signer, "
+        "original_file_name, original_file_size, original_file_path, owner_org_id, "
+        "created_at, created_at_str, signature_type, status, "
+        "transferred_to_ped_id, has_sig_file, metadata_outdated) "
+        "VALUES (?, ?, 'order', 'INCOMING', ?, 'Директор', 'doc.pdf', 100, '/tmp/doc.pdf', ?, ?, ?, "
+        "'PEP', 'SIGNED', 0, 0, 0)",
+        (str(uuid_lib.uuid4()), f"Письмо {reg}", reg, org_id, created,
+         created[8:10] + "." + created[5:7] + "." + created[0:4]),
+    )
+con.commit()
+con.close()
+
+composite_got = numbers(folder="incoming")
+check("составные номера — по убыванию номера, а не по дате создания",
+      composite_got == ["01-10/48-2026", "01-10/47-2026", "01-10/46-2026",
+                        "01-10/45-2026", "01-10/44-2026"], str(composite_got))
+check("47 не поднимается выше 48",
+      composite_got is not None
+      and composite_got.index("01-10/48-2026") < composite_got.index("01-10/47-2026"),
+      str(composite_got))
+
 # --- итог -----------------------------------------------------------------
 shutil.rmtree(_TMP, ignore_errors=True)
 for leftover in ("_smoke_documents.db", "_smoke_documents.db-wal", "_smoke_documents.db-shm"):
