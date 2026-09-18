@@ -34,6 +34,8 @@ from app.models.pydantic import (
     EmployeeResponse,
     EisEmployeeCandidate,
     EisExchangeRequest,
+    EisProfilesResponse,
+    EisProfileSwitchRequest,
 )
 from app.core.security import (
     verify_password,
@@ -52,7 +54,9 @@ from app.services.esa_oauth import (
     exchange_store,
     fetch_userinfo,
     find_or_match_employee,
+    find_profile_for_switch,
     link_employee_to_esa,
+    list_esa_profiles,
     make_signed_state,
     verify_signed_state,
 )
@@ -285,6 +289,80 @@ async def eis_exchange(data: EisExchangeRequest, db: AsyncSession = Depends(get_
 
     logger.error("[ESA] exchange: неизвестный kind=%r stored=%r", kind, stored)
     raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Неизвестный формат кода обмена.")
+
+
+@router.get("/eis/profiles", response_model=EisProfilesResponse)
+async def eis_profiles(
+    employee: Employee = Depends(get_current_employee),
+    db: AsyncSession = Depends(get_async_db),
+):
+    """Профили текущей учётки ЕИС — для переключателя в верхней панели.
+
+    Список собирается тем же резолвером, что и окно выбора при входе
+    (`find_or_match_employee`), поэтому совпадает с ним. Пустой список означает,
+    что переключать нечего: вход был по паролю либо учётка ЕИС не привязана.
+    """
+    profiles = await list_esa_profiles(db, employee)
+    _esa_log(
+        "profiles: employee_id=%s esa_user_id=%s → найдено %d профилей",
+        employee.id,
+        employee.esa_user_id,
+        len(profiles),
+    )
+    return {
+        "profiles": [employee_to_candidate_dict(p) for p in profiles],
+        "current_employee_id": employee.id,
+    }
+
+
+@router.post("/eis/switch-profile", response_model=EmployeeLoginResponse)
+async def eis_switch_profile(
+    data: EisProfileSwitchRequest,
+    employee: Employee = Depends(get_current_employee),
+    db: AsyncSession = Depends(get_async_db),
+):
+    """Смена профиля без повторного входа через ЕИС: выдаёт новую пару JWT.
+
+    Доступно только для входа через ЕИС. Цель обязана входить в пул профилей
+    текущей учётки ЕИС — иначе любой вошедший мог бы запросить чужой employee_id
+    и получить его токен (эскалация привилегий).
+    """
+    if (employee.auth_provider or "local") != "esa":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Смена профиля доступна только при входе через ЕИС.",
+        )
+
+    if employee.id == data.employee_id:
+        # Уже активный профиль — просто возвращаем актуальные токены.
+        return build_employee_login_response(employee)
+
+    try:
+        target = await find_profile_for_switch(db, employee, data.employee_id)
+    except ValueError as e:
+        if str(e) == "inactive":
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Профиль деактивирован. Обратитесь к администратору.",
+            )
+        _esa_log(
+            "switch-profile: отказ — employee_id=%s не в пуле учётки esa_user_id=%s (текущий employee_id=%s)",
+            data.employee_id,
+            employee.esa_user_id,
+            employee.id,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Этот профиль не привязан к вашей учётной записи ЕИС.",
+        )
+
+    _esa_log(
+        "switch-profile: employee_id=%s → employee_id=%s (org_id=%s)",
+        employee.id,
+        target.id,
+        target.org_id,
+    )
+    return build_employee_login_response(target)
 
 
 def _generate_license_key() -> str:
@@ -719,6 +797,7 @@ async def get_current_org_info(
         name=org.name,
         inn=org.inn,
         is_active=org.is_active,
+        is_school=bool(org.is_school),
         license_status="active" if license_valid else "expired",
         license_expire=settings.LICENSE_EXPIRE_DATE,
         license_max_docs=settings.LICENSE_MAX_DOCS,

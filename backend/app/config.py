@@ -36,7 +36,7 @@ def _parse_list_env(v):
 class Settings(BaseSettings):
     # Сервер
     APP_NAME: str = "Подсистема ЭДО"
-    APP_VERSION: str = "0.0.3"
+    APP_VERSION: str = "0.6"
     API_HOST: str = "0.0.0.0"
     API_PORT: int = 8000
     API_PREFIX: str = "/api"

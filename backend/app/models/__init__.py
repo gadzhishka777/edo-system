@@ -4,6 +4,8 @@ from app.models.document import Document, DocumentStatus, SignatureType, FolderT
 from app.models.employee import Employee, EmployeeRoleEnum, DocumentReview
 from app.models.user import User, AdminUser
 from app.models.vacancy import Vacancy, POSITION_CLASSIFIER, is_teacher_position
+from app.models.school_class import SchoolClass
+from app.models.program import EducationalProgram
 from app.models.mail import MailMessage, MailDirection, MailStatus, Organization, Contact, License
 from app.models.appeal import (
     Appeal, AppealAttachment, AppealStatusHistory, AppealDocumentLink,
@@ -44,6 +46,22 @@ from app.models.pydantic import (
     VacancyPaginatedResponse,
     VacancyPositionInfo,
     VacancyPositionListResponse,
+    SchoolClassCreate,
+    SchoolClassUpdate,
+    SchoolClassResponse,
+    SchoolClassPaginatedResponse,
+    SchoolClassOption,
+    SchoolClassOptionsResponse,
+    SchoolClassTeacher,
+    SchoolClassTeacherListResponse,
+    ProgramCreate,
+    ProgramUpdate,
+    ProgramResponse,
+    ProgramPaginatedResponse,
+    ProgramOptionsResponse,
+    ProgramClassItem,
+    ProgramClassListResponse,
+    ProgramClassAssignRequest,
 )
 
 __all__ = [
@@ -112,4 +130,22 @@ __all__ = [
     "VacancyPaginatedResponse",
     "VacancyPositionInfo",
     "VacancyPositionListResponse",
+    "SchoolClass",
+    "SchoolClassCreate",
+    "SchoolClassUpdate",
+    "SchoolClassResponse",
+    "SchoolClassPaginatedResponse",
+    "SchoolClassOption",
+    "SchoolClassOptionsResponse",
+    "SchoolClassTeacher",
+    "SchoolClassTeacherListResponse",
+    "EducationalProgram",
+    "ProgramCreate",
+    "ProgramUpdate",
+    "ProgramResponse",
+    "ProgramPaginatedResponse",
+    "ProgramOptionsResponse",
+    "ProgramClassItem",
+    "ProgramClassListResponse",
+    "ProgramClassAssignRequest",
 ]

@@ -191,7 +191,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ open, onClose, mobile = false 
           <LogoText variant="caption">ТОР ЭДО</LogoText>
           <LogoSubText variant="caption">электронный документооборот</LogoSubText>
         </LogoBox>
-        <VersionText variant="caption">v0.5</VersionText>
+        <VersionText variant="caption">v0.6</VersionText>
       </LogoContainer>
 
       <List sx={{ flex: 1, px: 1 }}>

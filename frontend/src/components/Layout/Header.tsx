@@ -49,9 +49,15 @@ import {
   Verified as VerifiedIcon,
   Folder as FolderIcon,
   Email as EmailIcon,
+  ArrowDropDown as ArrowDropDownIcon,
+  SwapHoriz as SwapHorizIcon,
 } from '@mui/icons-material';
 import { useLocation } from 'react-router-dom';
-import { authApi } from '../../api/edoApi';
+import {
+  authApi,
+  getApiErrorMessage,
+  type EisEmployeeCandidate,
+} from '../../api/edoApi';
 import { useEvents, Event } from '../../context/EventContext';
 
 interface HeaderProps {
@@ -113,7 +119,56 @@ export const Header: React.FC<HeaderProps> = ({ onMenuToggle, onLogout }) => {
 
   const pageTitle = getPageTitle(location.pathname);
   const orgName = authApi.getOrgName();
-  
+
+  // ===== Смена профиля (только для входа через ЕИС) =====
+  // Профили подтягиваем один раз при отрисовке шапки: сервер отдаёт пустой список
+  // при входе по паролю, поэтому никаких лишних условий на клиенте не нужно.
+  const [profiles, setProfiles] = useState<EisEmployeeCandidate[]>([]);
+  const [currentProfileId, setCurrentProfileId] = useState<number | null>(null);
+  const [profilesAnchorEl, setProfilesAnchorEl] = useState<null | HTMLElement>(null);
+  const [switchingId, setSwitchingId] = useState<number | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    authApi
+      .getEisProfiles()
+      .then((data) => {
+        if (cancelled) return;
+        setProfiles(data.profiles || []);
+        setCurrentProfileId(data.current_employee_id ?? null);
+      })
+      .catch(() => {
+        // Не критично: переключатель просто не показываем.
+        if (!cancelled) setProfiles([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // Переключатель имеет смысл только когда профилей действительно несколько.
+  const canSwitchProfile = profiles.length > 1;
+
+  const handleSwitchProfile = async (profile: EisEmployeeCandidate) => {
+    setProfilesAnchorEl(null);
+    if (currentProfileId !== null && profile.employee_id === currentProfileId) return;
+
+    setSwitchingId(profile.employee_id);
+    try {
+      const resp = await authApi.switchEisProfile(profile.employee_id);
+      // Организация, роли и права могли смениться, а контексты (события, лицензия,
+      // счётчики) держат данные в памяти — поэтому перезагружаем приложение целиком.
+      window.location.href = resp.profile_completed ? '/' : '/profile-complete';
+    } catch (err) {
+      setSwitchingId(null);
+      setSnackbar({
+        open: true,
+        message: getApiErrorMessage(err, 'Не удалось сменить профиль'),
+        severity: 'error',
+      });
+    }
+  };
+
   const { events, unreadCount, markAsRead, markAllAsRead, deleteEvent, deleteAllEvents } = useEvents();
 
   // Показываем уведомления при добавлении новых событий
@@ -210,20 +265,60 @@ export const Header: React.FC<HeaderProps> = ({ onMenuToggle, onLogout }) => {
 
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
             {orgName && (
-              <Chip
-                icon={<BusinessIcon sx={{ fontSize: '16px !important' }} />}
-                label={orgName}
-                size="small"
-                sx={{
-                  fontFamily: 'Lato, sans-serif',
-                  fontSize: '13px',
-                  fontWeight: 500,
-                  backgroundColor: '#f4f4f8',
-                  color: '#101025',
-                  height: '32px',
-                  '& .MuiChip-icon': { color: '#4c6ef5' },
-                }}
-              />
+              canSwitchProfile ? (
+                <Tooltip title="Сменить профиль">
+                  <Button
+                    onClick={(e) => setProfilesAnchorEl(e.currentTarget)}
+                    startIcon={<BusinessIcon sx={{ fontSize: '16px !important' }} />}
+                    endIcon={<ArrowDropDownIcon />}
+                    aria-haspopup="menu"
+                    aria-expanded={Boolean(profilesAnchorEl)}
+                    aria-label={`Организация: ${orgName}. Сменить профиль`}
+                    sx={{
+                      fontFamily: 'Lato, sans-serif',
+                      fontSize: '13px',
+                      fontWeight: 500,
+                      textTransform: 'none',
+                      color: '#101025',
+                      backgroundColor: '#f4f4f8',
+                      height: '32px',
+                      minWidth: 0,
+                      borderRadius: '16px',
+                      padding: '0 8px 0 10px',
+                      maxWidth: { xs: 170, md: 340 },
+                      '& .MuiButton-startIcon': { color: '#4c6ef5', mr: '6px', ml: 0 },
+                      '& .MuiButton-endIcon': {
+                        ml: '2px',
+                        mr: 0,
+                        '& svg': { fontSize: '18px', color: '#87879b' },
+                      },
+                      '&:hover': { backgroundColor: '#ecedf4' },
+                    }}
+                  >
+                    <Box
+                      component="span"
+                      sx={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+                    >
+                      {orgName}
+                    </Box>
+                  </Button>
+                </Tooltip>
+              ) : (
+                <Chip
+                  icon={<BusinessIcon sx={{ fontSize: '16px !important' }} />}
+                  label={orgName}
+                  size="small"
+                  sx={{
+                    fontFamily: 'Lato, sans-serif',
+                    fontSize: '13px',
+                    fontWeight: 500,
+                    backgroundColor: '#f4f4f8',
+                    color: '#101025',
+                    height: '32px',
+                    '& .MuiChip-icon': { color: '#4c6ef5' },
+                  }}
+                />
+              )
             )}
 
             <Tooltip title="События">
@@ -301,6 +396,115 @@ export const Header: React.FC<HeaderProps> = ({ onMenuToggle, onLogout }) => {
                 <ListItemIcon><LogoutIcon fontSize="small" /></ListItemIcon>
                 <ListItemText primary="Выйти" />
               </MenuItem>
+            </Menu>
+
+            {/* Смена профиля учётки ЕИС */}
+            <Menu
+              anchorEl={profilesAnchorEl}
+              open={Boolean(profilesAnchorEl)}
+              onClose={() => setProfilesAnchorEl(null)}
+              slotProps={{
+                paper: {
+                  sx: {
+                    minWidth: 320,
+                    maxWidth: 420,
+                    borderRadius: '12px',
+                    mt: 1,
+                  },
+                },
+              }}
+            >
+              <MenuItem disabled sx={{ opacity: '1 !important', py: 0.75 }}>
+                <Box>
+                  <Typography sx={{ fontFamily: 'Lato, sans-serif', fontSize: '13px', fontWeight: 600, color: '#101025' }}>
+                    Сменить профиль
+                  </Typography>
+                  <Typography sx={{ fontFamily: 'Lato, sans-serif', fontSize: '11px', color: '#87879b' }}>
+                    Профили вашей учётной записи ЕИС
+                  </Typography>
+                </Box>
+              </MenuItem>
+              <Divider />
+
+              {profiles.map((profile) => {
+                const isCurrent = currentProfileId !== null && profile.employee_id === currentProfileId;
+                const isSwitching = switchingId === profile.employee_id;
+
+                return (
+                  <MenuItem
+                    key={profile.employee_id}
+                    onClick={() => handleSwitchProfile(profile)}
+                    selected={isCurrent}
+                    sx={{
+                      alignItems: 'flex-start',
+                      gap: 1.25,
+                      py: 1,
+                      opacity: isSwitching ? 0.7 : 1,
+                    }}
+                  >
+                    <Box sx={{ display: 'flex', alignItems: 'center', height: 20, minWidth: 20 }}>
+                      {isCurrent ? (
+                        <DoneIcon sx={{ fontSize: '18px', color: '#2e7d32' }} />
+                      ) : isSwitching ? (
+                        <CircularProgress size={16} />
+                      ) : (
+                        <SwapHorizIcon sx={{ fontSize: '18px', color: '#87879b' }} />
+                      )}
+                    </Box>
+                    <Box sx={{ minWidth: 0, flex: 1 }}>
+                      <Typography
+                        sx={{
+                          fontFamily: 'Lato, sans-serif',
+                          fontSize: '14px',
+                          fontWeight: isCurrent ? 600 : 500,
+                          color: '#101025',
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis',
+                          whiteSpace: 'nowrap',
+                        }}
+                      >
+                        {profile.employee_name || `Сотрудник #${profile.employee_id}`}
+                      </Typography>
+                      {/* Организацию и должность держим на разных строках: названия
+                          организаций длинные, в одну строку должность обрезалась. */}
+                      {profile.org_name && (
+                        <Typography
+                          title={profile.org_name}
+                          sx={{
+                            fontFamily: 'Lato, sans-serif',
+                            fontSize: '12px',
+                            color: '#5b5b74',
+                            overflow: 'hidden',
+                            textOverflow: 'ellipsis',
+                            whiteSpace: 'nowrap',
+                          }}
+                        >
+                          {profile.org_name}
+                        </Typography>
+                      )}
+                      {profile.position && (
+                        <Typography
+                          sx={{
+                            fontFamily: 'Lato, sans-serif',
+                            fontSize: '11px',
+                            color: '#87879b',
+                            overflow: 'hidden',
+                            textOverflow: 'ellipsis',
+                            whiteSpace: 'nowrap',
+                          }}
+                        >
+                          {profile.position}
+                        </Typography>
+                      )}
+                      {isCurrent && (
+                        <Typography sx={{ fontFamily: 'Lato, sans-serif', fontSize: '11px', color: '#2e7d32', fontWeight: 600 }}>
+                          Текущий профиль
+                        </Typography>
+                      )}
+                    </Box>
+                  </MenuItem>
+                );
+              })}
             </Menu>
           </Box>
         </Toolbar>

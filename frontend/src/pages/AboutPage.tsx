@@ -29,7 +29,7 @@ import {
   Close as CloseIcon,
   Error as ErrorIcon,
 } from '@mui/icons-material';
-import { authApi } from '../api/edoApi';
+import { authApi, type OrgInfo } from '../api/edoApi';
 import { getApiErrorMessage } from '../api/edoApi';
 
 const PageContainer = styled(Box)({
@@ -216,19 +216,8 @@ const StyledTextField = styled(TextField)({
   },
 });
 
-// Интерфейсы для данных из API
-interface OrgInfo {
-  id: number;
-  uuid: string;
-  name: string;
-  inn?: string;
-  is_active: boolean;
-  license_status: string;
-  license_expire: string;
-  license_max_docs: number;
-  license_max_orgs: number;
-}
-
+// Интерфейсы для данных из API.
+// OrgInfo общий — приходит из api/edoApi (там же, где эндпоинт /auth/me-org).
 interface LicenseInfo {
   license_key: string;
   product: string;
@@ -496,7 +485,7 @@ const AboutPage: React.FC = () => {
             </InfoRow>
             <InfoRow>
               <InfoLabel>Версия</InfoLabel>
-              <InfoValue>0.5</InfoValue>
+              <InfoValue>0.6</InfoValue>
             </InfoRow>
             <InfoRow>
               <InfoLabel>Статус лицензии</InfoLabel>

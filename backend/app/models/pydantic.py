@@ -243,6 +243,9 @@ class OrgInfoResponse(BaseModel):
     name: str
     inn: Optional[str] = None
     is_active: bool
+    # Признак «Является школой» — от него зависит доступность раздела
+    # «Реестры → Классы» на фронтенде.
+    is_school: bool = False
     license_status: str
     license_expire: str
     license_max_docs: int
@@ -590,6 +593,396 @@ class VacancyPositionListResponse(BaseModel):
     positions: List[VacancyPositionInfo]
 
 
+# ===== Классы школ (раздел «Реестры → Классы») =====
+
+def _normalize_letter(value):
+    """Литера: обрезаем пробелы и приводим к верхнему регистру."""
+    if isinstance(value, str):
+        return value.strip().upper()
+    return value
+
+
+def _empty_to_none(value):
+    """Пустая строка от фронтенда -> None."""
+    if isinstance(value, str) and not value.strip():
+        return None
+    return value.strip() if isinstance(value, str) else value
+
+
+class SchoolClassBase(BaseModel):
+    """Общие поля класса и правила их согласования между собой."""
+
+    parallel: int = Field(..., ge=1, le=11, description="Параллель, 1–11")
+    letter: str = Field(..., min_length=1, max_length=2, description="Литера класса")
+    name: Optional[str] = Field(None, max_length=255, description="Название класса")
+    preprofile: Optional[str] = None
+    profile: Optional[str] = None
+    teacher_employee_id: Optional[int] = None
+    shift: str = "first"
+    academic_year: str = "2026/2027"
+
+    @field_validator("letter", mode="before")
+    @classmethod
+    def _check_letter(cls, v):
+        import re
+
+        v = _normalize_letter(v)
+        if not isinstance(v, str) or not re.fullmatch(r"[А-ЯЁA-Z]{1,2}", v):
+            raise ValueError("Литера — одна-две буквы, например «А» или «Б»")
+        return v
+
+    @field_validator("name", "preprofile", "profile", mode="before")
+    @classmethod
+    def _strip_optional(cls, v):
+        return _empty_to_none(v)
+
+    @field_validator("teacher_employee_id", mode="before")
+    @classmethod
+    def _empty_teacher_to_none(cls, v):
+        if v in ("", None):
+            return None
+        if isinstance(v, str):
+            v = v.strip()
+            if not v:
+                return None
+            try:
+                return int(v)
+            except ValueError:
+                raise ValueError("Классный руководитель выбран неверно")
+        return v
+
+    @field_validator("shift")
+    @classmethod
+    def _check_shift(cls, v):
+        from app.models.school_class import SHIFT_VALUES
+
+        if v not in SHIFT_VALUES:
+            raise ValueError("Сменность обучения: первая или вторая")
+        return v
+
+    @field_validator("academic_year")
+    @classmethod
+    def _check_academic_year(cls, v):
+        from app.models.school_class import ACADEMIC_YEAR_OPTIONS
+
+        if v not in ACADEMIC_YEAR_OPTIONS:
+            raise ValueError(
+                f"Доступен только учебный год {ACADEMIC_YEAR_OPTIONS[0]}"
+            )
+        return v
+
+    @model_validator(mode="after")
+    def _profile_rules(self):
+        """Профиль/предпрофиль зависят от параллели (правило на бэкенде)."""
+        from app.models.school_class import resolve_profile_fields
+
+        self.preprofile, self.profile = resolve_profile_fields(
+            self.parallel, self.preprofile, self.profile
+        )
+        return self
+
+
+class SchoolClassCreate(SchoolClassBase):
+    pass
+
+
+class SchoolClassUpdate(BaseModel):
+    """Частичное обновление: приходит только то, что меняют.
+
+    Согласование профиля с параллелью делает роутер — ему известны
+    текущие значения записи, которых нет в частичном запросе.
+    """
+
+    parallel: Optional[int] = Field(None, ge=1, le=11)
+    letter: Optional[str] = Field(None, min_length=1, max_length=2)
+    name: Optional[str] = Field(None, max_length=255)
+    preprofile: Optional[str] = None
+    profile: Optional[str] = None
+    teacher_employee_id: Optional[int] = None
+    shift: Optional[str] = None
+    academic_year: Optional[str] = None
+
+    @field_validator("letter", mode="before")
+    @classmethod
+    def _check_letter(cls, v):
+        import re
+
+        if v is None:
+            return None
+        v = _normalize_letter(v)
+        if not re.fullmatch(r"[А-ЯЁA-Z]{1,2}", v or ""):
+            raise ValueError("Литера — одна-две буквы, например «А» или «Б»")
+        return v
+
+    @field_validator("name", "preprofile", "profile", mode="before")
+    @classmethod
+    def _strip_optional(cls, v):
+        return _empty_to_none(v)
+
+    @field_validator("teacher_employee_id", mode="before")
+    @classmethod
+    def _empty_teacher_to_none(cls, v):
+        if v in ("", None):
+            return None
+        if isinstance(v, str):
+            v = v.strip()
+            if not v:
+                return None
+            try:
+                return int(v)
+            except ValueError:
+                raise ValueError("Классный руководитель выбран неверно")
+        return v
+
+    @field_validator("shift")
+    @classmethod
+    def _check_shift(cls, v):
+        from app.models.school_class import SHIFT_VALUES
+
+        if v is not None and v not in SHIFT_VALUES:
+            raise ValueError("Сменность обучения: первая или вторая")
+        return v
+
+    @field_validator("academic_year")
+    @classmethod
+    def _check_academic_year(cls, v):
+        from app.models.school_class import ACADEMIC_YEAR_OPTIONS
+
+        if v is not None and v not in ACADEMIC_YEAR_OPTIONS:
+            raise ValueError(
+                f"Доступен только учебный год {ACADEMIC_YEAR_OPTIONS[0]}"
+            )
+        return v
+
+
+class SchoolClassResponse(BaseModel):
+    id: int
+    uuid: str
+    org_id: int
+    parallel: int
+    letter: str
+    name: Optional[str] = None
+    preprofile: Optional[str] = None
+    profile: Optional[str] = None
+    teacher_employee_id: Optional[int] = None
+    # ФИО и должность классного руководителя — отдаём готовыми, чтобы
+    # фронтенду не нужно было отдельно подтягивать сотрудника.
+    teacher_fio: Optional[str] = None
+    teacher_position: Optional[str] = None
+    shift: str
+    academic_year: str
+    # Образовательная программа класса (одна) — назначается из реестра «Программы»
+    program_id: Optional[int] = None
+    program_short_name: Optional[str] = None
+    program_kind: Optional[str] = None
+    # Выпускной класс (9 или 11) — считает бэкенд, чтобы таблица не зависела
+    # от того, успел ли фронтенд загрузить справочники.
+    is_graduating: bool = False
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+
+    class Config:
+        from_attributes = True
+
+
+class SchoolClassPaginatedResponse(BaseModel):
+    items: List[SchoolClassResponse]
+    total: int
+    page: int
+    size: int
+    pages: int
+
+
+class SchoolClassOption(BaseModel):
+    """Элемент справочника: значение + подпись."""
+    value: str
+    label: str
+
+
+class SchoolClassOptionsResponse(BaseModel):
+    """Все справочники формы класса одним запросом."""
+    parallels: List[int]
+    preprofiles: List[str]
+    profiles: List[str]
+    shifts: List[SchoolClassOption]
+    academic_years: List[str]
+    current_academic_year: str
+    preprofile_parallels: List[int]
+    profile_parallels: List[int]
+    # Выпускные параллели (9, 11) — для фильтра «только выпускные»
+    graduating_parallels: List[int]
+
+
+class SchoolClassTeacher(BaseModel):
+    """Сотрудник для выпадающего списка «Классный руководитель»."""
+    id: int
+    uuid: str
+    fio: str
+    position: Optional[str] = None
+
+
+class SchoolClassTeacherListResponse(BaseModel):
+    teachers: List[SchoolClassTeacher]
+
+
+# ===== Образовательные программы школ (раздел «Реестры → Программы») =====
+
+def _empty_int_to_none(value):
+    """Пустая строка / None от фронтенда -> None, иначе int."""
+    if value in ("", None):
+        return None
+    if isinstance(value, str):
+        value = value.strip()
+        if not value:
+            return None
+        try:
+            return int(value)
+        except ValueError:
+            raise ValueError("Значение выбрано неверно")
+    return value
+
+
+class ProgramBase(BaseModel):
+    """Общие поля программы и правила их согласования."""
+
+    kind: str = Field(..., min_length=1, max_length=500, description="Вид программы")
+    clarification: Optional[str] = None
+    clarification_other: Optional[str] = Field(None, max_length=500)
+    short_name: Optional[str] = Field(None, max_length=255)
+    order_document_id: Optional[int] = None
+
+    @field_validator("kind")
+    @classmethod
+    def _kind_from_list(cls, v):
+        from app.models.program import PROGRAM_KINDS
+
+        if v not in PROGRAM_KINDS:
+            raise ValueError("Вид программы должен быть выбран из списка")
+        return v
+
+    @field_validator("clarification", "clarification_other", "short_name", mode="before")
+    @classmethod
+    def _strip_optional(cls, v):
+        return _empty_to_none(v)
+
+    @field_validator("order_document_id", mode="before")
+    @classmethod
+    def _empty_order_to_none(cls, v):
+        return _empty_int_to_none(v)
+
+    @model_validator(mode="after")
+    def _clarification_rules(self):
+        """Текст «иное…» обязателен только при соответствующем пункте."""
+        from app.models.program import resolve_clarification
+
+        self.clarification, self.clarification_other = resolve_clarification(
+            self.clarification, self.clarification_other
+        )
+        return self
+
+
+class ProgramCreate(ProgramBase):
+    pass
+
+
+class ProgramUpdate(BaseModel):
+    """Частичное обновление: приходит только то, что меняют.
+
+    Согласование «уточнение ↔ произвольный текст» делает роутер — ему
+    известны текущие значения записи, которых нет в частичном запросе.
+    """
+
+    kind: Optional[str] = Field(None, min_length=1, max_length=500)
+    clarification: Optional[str] = None
+    clarification_other: Optional[str] = Field(None, max_length=500)
+    short_name: Optional[str] = Field(None, max_length=255)
+    order_document_id: Optional[int] = None
+
+    @field_validator("kind")
+    @classmethod
+    def _kind_from_list(cls, v):
+        from app.models.program import PROGRAM_KINDS
+
+        if v is not None and v not in PROGRAM_KINDS:
+            raise ValueError("Вид программы должен быть выбран из списка")
+        return v
+
+    @field_validator("clarification", "clarification_other", "short_name", mode="before")
+    @classmethod
+    def _strip_optional(cls, v):
+        return _empty_to_none(v)
+
+    @field_validator("order_document_id", mode="before")
+    @classmethod
+    def _empty_order_to_none(cls, v):
+        return _empty_int_to_none(v)
+
+
+class ProgramResponse(BaseModel):
+    id: int
+    uuid: str
+    org_id: int
+    kind: str
+    # Официальное наименование — проставляет сервер из kind, не редактируется
+    official_name: str
+    clarification: Optional[str] = None
+    clarification_other: Optional[str] = None
+    short_name: Optional[str] = None
+    order_document_id: Optional[int] = None
+    # Готовая подпись приказа, чтобы фронт не ходил за документом отдельно
+    order_label: Optional[str] = None
+    # UUID приказа — нужен, чтобы скачать файл прямо из реестра программ
+    order_document_uuid: Optional[str] = None
+    # Что скачивать: «signed» — копия со штампом ЭП, «original» — сам файл,
+    # None — файла нет. Считает сервер, см. `_order_download_kind`.
+    order_download_kind: Optional[str] = None
+    # Сколько классов уже используют программу
+    classes_count: int = 0
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+
+    class Config:
+        from_attributes = True
+
+
+class ProgramPaginatedResponse(BaseModel):
+    items: List[ProgramResponse]
+    total: int
+    page: int
+    size: int
+    pages: int
+
+
+class ProgramOptionsResponse(BaseModel):
+    """Справочники формы программы."""
+    kinds: List[str]
+    clarifications: List[str]
+    # Значение пункта, при котором показывается поле произвольного текста
+    clarification_other: str
+
+
+class ProgramClassItem(BaseModel):
+    """Класс в окне назначения программы."""
+    uuid: str
+    parallel: int
+    letter: str
+    label: str                                  # «5А»
+    name: Optional[str] = None
+    assigned: bool = False                      # эта программа назначена классу
+    current_program_id: Optional[int] = None    # какая программа у класса сейчас
+    current_program_short_name: Optional[str] = None
+
+
+class ProgramClassListResponse(BaseModel):
+    items: List[ProgramClassItem]
+    assigned_count: int
+
+
+class ProgramClassAssignRequest(BaseModel):
+    """Назначить программу перечисленным классам (остальным — снять)."""
+    class_uuids: List[str] = []
+
+
 # ===== Завершение профиля =====
 
 class ProfileCompleteRequest(LenientBirthdayMixin):
@@ -625,3 +1018,15 @@ class EisExchangeRequest(BaseModel):
     code: str
     # Если ESA-юзеру соответствует несколько профилей — обязательно указать выбранный.
     employee_id: Optional[int] = None
+
+
+class EisProfilesResponse(BaseModel):
+    """Список профилей учётки ЕИС — для переключателя в верхней панели."""
+    profiles: List[EisEmployeeCandidate] = []
+    # Текущий профиль, чтобы UI отметил его галочкой.
+    current_employee_id: int
+
+
+class EisProfileSwitchRequest(BaseModel):
+    """Запрос на смену профиля во время работы (без повторного входа через ЕИС)."""
+    employee_id: int

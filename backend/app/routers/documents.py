@@ -1,7 +1,7 @@
 import uuid
 import json
 import logging
-from datetime import datetime
+from datetime import datetime, date, time
 from pathlib import Path
 from typing import Optional
 import shutil
@@ -136,14 +136,33 @@ def _parse_gost_date(value: str) -> Optional[datetime]:
 
     return parsed
 
-    # ISO-подобные форматы: 2026-08-15T19:15:33Z / +00:00 / с пробелом
-    candidate = raw.replace(" UTC", "").replace("Z", "+00:00")
-    for variant in (candidate, candidate.replace(" ", "T")):
-        try:
-            return datetime.fromisoformat(variant)
-        except ValueError:
-            continue
-    return None
+
+def _parse_document_date(value: Optional[str]) -> Optional[datetime]:
+    """Дата документа, введённая в форме загрузки.
+
+    Принимаем ISO ('2026-09-01', '2026-09-01T00:00:00') и 'ДД.ММ.ГГГГ'.
+    Пустое значение → None, тогда берётся текущий момент.
+
+    Некорректную дату не проглатываем: иначе делопроизводство молча получит
+    «сегодня» вместо введённой даты — ровно тот баг, который здесь и чинится.
+    """
+    if value is None:
+        return None
+    raw = value.strip()
+    if not raw:
+        return None
+
+    try:
+        return datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError:
+        pass
+
+    try:
+        return datetime.strptime(raw, "%d.%m.%Y")
+    except ValueError:
+        pass
+
+    raise HTTPException(400, f"Некорректная дата документа: {value!r}")
 
 
 # ===================== МАППИНГ ШТАМПОВ =====================
@@ -258,6 +277,13 @@ async def upload_document(
     custom_folder_id: Optional[int] = Form(None),
     signer_employee_id: Optional[int] = Form(None),
     executor_employee_id: Optional[int] = Form(None),
+    created_at: Optional[str] = Form(
+        None,
+        description=(
+            "Дата документа (ISO 'YYYY-MM-DD' / 'YYYY-MM-DDTHH:MM:SS' или 'ДД.ММ.ГГГГ'). "
+            "Не указана — берётся текущий момент."
+        ),
+    ),
     db: AsyncSession = Depends(get_async_db),
     org: Organization = Depends(get_current_org),
     employee: Employee = Depends(get_current_employee),
@@ -286,6 +312,9 @@ async def upload_document(
         status = DocumentStatus.DRAFT
     
     now = datetime.now()
+    # Дата документа: из формы, если её задали вручную, иначе текущий момент.
+    # Раньше здесь всегда стояло now — введённая дата терялась при сохранении.
+    doc_date = _parse_document_date(created_at) or now
     doc = Document(
         uuid=doc_uuid,
         name=name,
@@ -301,8 +330,8 @@ async def upload_document(
         original_file_path=file_path,
         signature_type=signature_type,
         status=status,
-        created_at=now,
-        created_at_str=now.strftime("%d.%m.%Y"),
+        created_at=doc_date,
+        created_at_str=doc_date.strftime("%d.%m.%Y"),
         created_by_employee_id=employee.id,
         signed_by_employee_id=signer_employee_id,
         executor_employee_id=executor_employee_id,
@@ -564,6 +593,12 @@ async def get_documents(
     search: Optional[str] = None,
     status: Optional[DocumentStatus] = None,
     signature_type: Optional[SignatureType] = None,
+    date_from: Optional[date] = Query(
+        None, description="Документы не раньше этой даты (включительно)"
+    ),
+    date_to: Optional[date] = Query(
+        None, description="Документы не позже этой даты (включительно)"
+    ),
     custom_folder_id: Optional[int] = Query(None),
     db: AsyncSession = Depends(get_async_db),
     org: Organization = Depends(get_current_org),
@@ -584,6 +619,17 @@ async def get_documents(
         filters.append(Document.status == status)
     if signature_type:
         filters.append(Document.signature_type == signature_type)
+
+    # Период по дате документа. Границы включаются целиком: «с 01.09 по 01.09»
+    # должен находить документы, созданные 01.09 в любое время суток.
+    if date_from and date_to and date_from > date_to:
+        raise HTTPException(
+            400, "Начало периода не может быть позже его окончания"
+        )
+    if date_from:
+        filters.append(Document.created_at >= datetime.combine(date_from, time.min))
+    if date_to:
+        filters.append(Document.created_at <= datetime.combine(date_to, time.max))
     if search:
         condition = build_smart_search(
             [
@@ -601,7 +647,16 @@ async def get_documents(
     if filters:
         query = query.where(and_(*filters))
         count_query = count_query.where(and_(*filters))
-    
+
+    # Делопроизводство: внутри папки документы идут по убыванию номера —
+    # 99-ОД, 98-ОД, 97-ОД… Номера без цифр оказываются в конце списка.
+    # Сортировать нужно до пагинации, иначе страницы нарезаются вразнобой.
+    query = query.order_by(
+        func.reg_number(Document.registration_number).desc(),
+        Document.created_at.desc(),
+        Document.id.desc(),
+    )
+
     query = query.offset((page - 1) * size).limit(size)
     
     result = await db.execute(query)

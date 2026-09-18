@@ -1,3 +1,5 @@
+import re
+
 from sqlalchemy import create_engine, event
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, Session
@@ -10,10 +12,26 @@ def _uni_lower(value):
     return value.lower() if isinstance(value, str) else value
 
 
+def _reg_number(value):
+    """Числовая часть регистрационного номера: «99-ОД» → 99, «12343» → 12343.
+
+    Нужна для сортировки документов по номеру внутри папки (99-ОД, 98-ОД, …).
+    Номера без цифр получают -1 и уезжают в конец списка.
+    """
+    if value is None:
+        return -1
+    match = re.match(r"\s*(\d+)", str(value))
+    if not match:
+        return -1
+    # Ограничиваем разрядностью SQLite (знаковое 64-битное целое)
+    return min(int(match.group(1)), 2 ** 62)
+
+
 def _register_sqlite_functions(dbapi_connection, connection_record):
     target = getattr(dbapi_connection, "_conn", dbapi_connection)
     try:
         target.create_function("unilower", 1, _uni_lower)
+        target.create_function("reg_number", 1, _reg_number)
         # Продакшен-настройки: WAL снижает блокировки на запись,
         # busy_timeout ждёт освобождения блокировки вместо мгновенной ошибки
         target.execute("PRAGMA journal_mode=WAL")

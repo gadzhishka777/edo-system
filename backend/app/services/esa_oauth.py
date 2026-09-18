@@ -37,6 +37,7 @@ from app.core.security import (
     get_password_hash,
 )
 from app.models.employee import Employee
+from app.models.mail import Organization
 
 logger = logging.getLogger("edo.esa")
 
@@ -528,3 +529,72 @@ def employee_to_candidate_dict(employee: Employee) -> Dict[str, Any]:
         "is_active": employee.is_active,
         "profile_completed": employee.profile_completed,
     }
+
+
+# ===================== СМЕНА ПРОФИЛЯ ВО ВРЕМЯ РАБОТЫ =====================
+
+
+def build_esa_identity_from_employee(employee: Employee) -> Dict[str, Any]:
+    """Синтезирует userinfo-подобный словарь из уже привязанного Employee.
+
+    Нужно для переключения профиля во время работы: при входе пул кандидатов
+    собирается из свежего ответа userinfo ESA, а в рантайме его под рукой нет.
+    Дёргать ESA заново нельзя — access_token живёт час и автопродление не сделано.
+    Но ФИО/email профиля были дозаполнены ИЗ ESA при привязке
+    (link_employee_to_esa заполняет только пустые поля), поэтому для
+    find_or_match_employee их достаточно — пул получается тот же, что при входе.
+    """
+    return {
+        "esa_user_id": employee.esa_user_id,
+        "surname": employee.last_name,
+        "name": employee.first_name,
+        "patronymic": employee.middle_name,
+        "email": employee.email,
+    }
+
+
+async def list_esa_profiles(db: AsyncSession, employee: Employee) -> List[Employee]:
+    """Профили, доступные текущей учётке ЕИС (включая сам текущий).
+
+    Тот же резолвер, что и при входе, поэтому список совпадает с окном выбора.
+    Возвращает пустой список, если вход был по паролю — переключать нечего.
+    """
+    if (employee.auth_provider or "local") != "esa":
+        return []
+    if employee.esa_user_id is None:
+        # Учётка ЕИС не привязана (например, админ завёл локально) — нечего предлагать.
+        return []
+
+    candidates, _ = await find_or_match_employee(db, build_esa_identity_from_employee(employee))
+
+    # Страховка: текущий профиль обязан быть в списке, иначе UI покажет «переключиться»
+    # на чужой набор без отметки текущего.
+    if all(c.id != employee.id for c in candidates):
+        candidates.insert(0, employee)
+    return candidates
+
+
+async def find_profile_for_switch(
+    db: AsyncSession,
+    employee: Employee,
+    target_employee_id: int,
+) -> Employee:
+    """Ищет цель переключения строго внутри пула текущей учётки ЕИС.
+
+    ВАЖНО: проверка «цель в пуле» — это защита от эскалации привилегий. Без неё
+    любой вошедший мог бы запросить чужой employee_id и получить его JWT.
+    """
+    profiles = await list_esa_profiles(db, employee)
+    target = next((p for p in profiles if p.id == target_employee_id), None)
+    if target is None:
+        raise ValueError("not_in_pool")
+
+    if not target.is_active:
+        raise ValueError("inactive")
+
+    # Подгружаем organization для ответа (в пуле она уже есть, но у страховочного
+    # варианта и у части источников может быть не подгружена).
+    if target.org_id and not getattr(target, "organization", None):
+        org_result = await db.execute(select(Organization).where(Organization.id == target.org_id))
+        target.organization = org_result.scalar_one_or_none()
+    return target

@@ -148,6 +148,12 @@ export type EisExchangeResult =
   | (EmployeeLoginResponse & { kind: 'tokens'; auth_provider?: string })
   | { kind: 'choose'; candidates: EisEmployeeCandidate[] };
 
+/** Ответ /api/auth/eis/profiles: профили учётки ЕИС для переключателя в шапке. */
+export interface EisProfilesResponse {
+  profiles: EisEmployeeCandidate[];
+  current_employee_id: number;
+}
+
 export interface EmployeeInfo {
   id: number;
   uuid: string;
@@ -216,6 +222,21 @@ export function getApiErrorMessage(err: any, fallback = 'Ошибка запро
   if (detail?.message) return String(detail.message);
   try { return JSON.stringify(data); } catch { return fallback; }
 }
+/** Данные текущей организации (GET /api/auth/me-org). */
+export interface OrgInfo {
+  id: number;
+  uuid: string;
+  name: string;
+  inn?: string | null;
+  is_active: boolean;
+  /** Признак «Является школой» — открывает раздел «Реестры → Классы». */
+  is_school: boolean;
+  license_status: string;
+  license_expire: string;
+  license_max_docs: number;
+  license_max_orgs: number;
+}
+
 export const authApi = {
   login: async (login: string, password: string): Promise<EmployeeLoginResponse> => {
     const response = await apiClient.post('/api/auth/login', { login, password });
@@ -237,7 +258,7 @@ export const authApi = {
     return response.data;
   },
 
-  getCurrentOrg: async (): Promise<any> => {
+  getCurrentOrg: async (): Promise<OrgInfo> => {
     const response = await apiClient.get('/api/auth/me-org');
     return response.data;
   },
@@ -267,6 +288,20 @@ export const authApi = {
     const body: { code: string; employee_id?: number } = { code };
     if (employeeId !== undefined) body.employee_id = employeeId;
     const response = await apiClient.post('/api/auth/eis/exchange', body);
+    return response.data;
+  },
+
+  /** Профили текущей учётки ЕИС. Пусто — вход по паролю или профиль единственный. */
+  getEisProfiles: async (): Promise<EisProfilesResponse> => {
+    const response = await apiClient.get('/api/auth/eis/profiles');
+    return response.data;
+  },
+
+  /** Смена профиля без повторного входа: сервер выдаёт новую пару токенов,
+   *  сразу сохраняем её — дальше нужна полная перезагрузка страницы. */
+  switchEisProfile: async (employeeId: number): Promise<EmployeeLoginResponse> => {
+    const response = await apiClient.post('/api/auth/eis/switch-profile', { employee_id: employeeId });
+    persistLogin(response.data);
     return response.data;
   },
 
@@ -337,12 +372,22 @@ export interface PaginatedResponse {
   pages: number;
 }
 
+/** Дополнительные фильтры списка документов. */
+export interface DocumentFilters {
+  signature_type?: SignatureType;
+  /** Начало периода по дате документа, включительно (YYYY-MM-DD) */
+  date_from?: string;
+  /** Конец периода по дате документа, включительно (YYYY-MM-DD) */
+  date_to?: string;
+}
+
 export const getDocuments = async (
   page: number = 1,
   size: number = 20,
   folder?: FolderType,
   search?: string,
   customFolderId?: number,
+  filters: DocumentFilters = {},
 ): Promise<PaginatedResponse> => {
   const params = new URLSearchParams();
   params.append('page', String(page));
@@ -350,6 +395,9 @@ export const getDocuments = async (
   if (folder) params.append('folder', folder);
   if (search) params.append('search', search);
   if (customFolderId) params.append('custom_folder_id', String(customFolderId));
+  if (filters.signature_type) params.append('signature_type', filters.signature_type);
+  if (filters.date_from) params.append('date_from', filters.date_from);
+  if (filters.date_to) params.append('date_to', filters.date_to);
 
   const response = await apiClient.get(`/api/documents?${params.toString()}`);
   return response.data;
@@ -375,6 +423,8 @@ export const uploadDocument = async (
     custom_folder_id?: number | null;
     signer_employee_id?: number | null;
     executor_employee_id?: number | null;
+    /** Дата документа (ISO). Не задана — сервер поставит текущий момент. */
+    created_at?: string;
   }
 ): Promise<Document> => {
   const formData = new FormData();
@@ -391,6 +441,7 @@ export const uploadDocument = async (
   if (data.custom_folder_id) formData.append('custom_folder_id', String(data.custom_folder_id));
   if (data.signer_employee_id) formData.append('signer_employee_id', String(data.signer_employee_id));
   if (data.executor_employee_id) formData.append('executor_employee_id', String(data.executor_employee_id));
+  if (data.created_at) formData.append('created_at', data.created_at);
 
   const response = await apiClient.post('/api/documents/upload', formData, {
     headers: { 'Content-Type': 'multipart/form-data' },
@@ -885,6 +936,286 @@ export const updateVacancy = async (
 export const deactivateVacancy = async (uuid: string): Promise<{ message: string }> => {
   const response = await apiClient.delete(`/api/vacancies/${uuid}`);
   return response.data;
+};
+
+// ===== Классы школы (раздел «Реестры → Классы») =====
+// Раздел доступен только организациям с признаком «Является школой».
+
+export interface SchoolClass {
+  id: number;
+  uuid: string;
+  org_id: number;
+  parallel: number;                    // Параллель, 1–11
+  letter: string;                      // Литера класса («А», «Б»…)
+  name?: string | null;                // Название класса (необязательно)
+  preprofile?: string | null;          // Предпрофиль — только для 5–9
+  profile?: string | null;             // Профиль — только для 10–11
+  teacher_employee_id?: number | null; // Классный руководитель
+  teacher_fio?: string | null;         // ФИО руководителя (отдаёт бэкенд)
+  teacher_position?: string | null;
+  shift: string;                       // 'first' | 'second'
+  academic_year: string;               // «2026/2027»
+  is_graduating: boolean;              // выпускной класс (9 или 11) — считает бэкенд
+  // Образовательная программа класса (одна) — назначается из реестра «Программы»
+  program_id?: number | null;
+  program_short_name?: string | null;
+  program_kind?: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+}
+
+export interface SchoolClassPaginatedResponse {
+  items: SchoolClass[];
+  total: number;
+  page: number;
+  size: number;
+  pages: number;
+}
+
+export interface SchoolClassOption {
+  value: string;
+  label: string;
+}
+
+/** Все справочники формы класса — одним запросом с бэкенда. */
+export interface SchoolClassOptions {
+  parallels: number[];
+  preprofiles: string[];
+  profiles: string[];
+  shifts: SchoolClassOption[];
+  academic_years: string[];
+  current_academic_year: string;
+  preprofile_parallels: number[];
+  profile_parallels: number[];
+  graduating_parallels: number[];      // выпускные параллели (9, 11)
+}
+
+/** Фильтры списка классов (уходят query-параметрами). */
+export interface SchoolClassFilters {
+  search?: string;
+  academic_year?: string;
+  parallel?: number;
+  /** true — только выпускные (9, 11); не задано — все */
+  graduating?: boolean;
+  /** Сменность обучения: 'first' | 'second'; не задано — все */
+  shift?: string;
+}
+
+export interface SchoolClassTeacher {
+  id: number;
+  uuid: string;
+  fio: string;
+  position?: string | null;
+}
+
+export interface SchoolClassPayload {
+  parallel: number;
+  letter: string;
+  name?: string | null;
+  preprofile?: string | null;
+  profile?: string | null;
+  teacher_employee_id?: number | null;
+  shift: string;
+  academic_year?: string;
+}
+
+export const getClasses = async (
+  page: number = 1,
+  size: number = 50,
+  filters: SchoolClassFilters = {}
+): Promise<SchoolClassPaginatedResponse> => {
+  const params = new URLSearchParams();
+  params.append('page', String(page));
+  params.append('size', String(size));
+  if (filters.search) params.append('search', filters.search);
+  if (filters.academic_year) params.append('academic_year', filters.academic_year);
+  if (filters.parallel != null) params.append('parallel', String(filters.parallel));
+  // graduating шлём только когда фильтр включён — иначе показываем все классы
+  if (filters.graduating != null) params.append('graduating', String(filters.graduating));
+  if (filters.shift) params.append('shift', filters.shift);
+  const response = await apiClient.get(`/api/classes/?${params.toString()}`);
+  return response.data;
+};
+
+export const getClass = async (uuid: string): Promise<SchoolClass> => {
+  const response = await apiClient.get(`/api/classes/${uuid}`);
+  return response.data;
+};
+
+export const getClassOptions = async (): Promise<SchoolClassOptions> => {
+  const response = await apiClient.get('/api/classes/options');
+  return response.data;
+};
+
+export const getClassTeachers = async (): Promise<SchoolClassTeacher[]> => {
+  const response = await apiClient.get('/api/classes/teachers');
+  return response.data.teachers;
+};
+
+export const createClass = async (data: SchoolClassPayload): Promise<SchoolClass> => {
+  const response = await apiClient.post('/api/classes/', data);
+  return response.data;
+};
+
+export const updateClass = async (
+  uuid: string,
+  data: Partial<SchoolClassPayload>
+): Promise<SchoolClass> => {
+  const response = await apiClient.put(`/api/classes/${uuid}`, data);
+  return response.data;
+};
+
+export const deleteClass = async (uuid: string): Promise<{ message: string }> => {
+  const response = await apiClient.delete(`/api/classes/${uuid}`);
+  return response.data;
+};
+
+// ===== Образовательные программы школы (раздел «Реестры → Программы») =====
+
+export interface Program {
+  id: number;
+  uuid: string;
+  org_id: number;
+  kind: string;                        // Вид программы (полное наименование)
+  official_name: string;               // «Официальное наименование» — заполняет сервер, не редактируется
+  clarification?: string | null;       // «Уточняющая информация» — пункт справочника
+  clarification_other?: string | null; // произвольный текст для пункта «иное…»
+  short_name?: string | null;          // «Краткое название» / аббревиатура
+  order_document_id?: number | null;   // «Приказ, утверждающий»
+  order_label?: string | null;         // готовая подпись приказа
+  order_document_uuid?: string | null; // UUID приказа — для скачивания файла
+  /** Что скачает фронт: 'signed' — копия со штампом ЭП, 'original' — сам файл, null — файла нет */
+  order_download_kind?: 'signed' | 'original' | null;
+  classes_count: number;               // сколько классов используют программу
+  created_at?: string | null;
+  updated_at?: string | null;
+}
+
+export interface ProgramPaginatedResponse {
+  items: Program[];
+  total: number;
+  page: number;
+  size: number;
+  pages: number;
+}
+
+export interface ProgramOptions {
+  kinds: string[];
+  clarifications: string[];
+  /** Значение пункта, при котором показывается поле произвольного текста */
+  clarification_other: string;
+}
+
+/** Класс в окне назначения программы. */
+export interface ProgramClassItem {
+  uuid: string;
+  parallel: number;
+  letter: string;
+  label: string;                              // «5А»
+  name?: string | null;
+  assigned: boolean;                          // эта программа назначена классу
+  current_program_id?: number | null;
+  current_program_short_name?: string | null;
+}
+
+export interface ProgramClassListResponse {
+  items: ProgramClassItem[];
+  assigned_count: number;
+}
+
+export interface ProgramPayload {
+  kind: string;
+  clarification?: string | null;
+  clarification_other?: string | null;
+  short_name?: string | null;
+  order_document_id?: number | null;
+}
+
+export const getPrograms = async (
+  page: number = 1,
+  size: number = 50,
+  search?: string
+): Promise<ProgramPaginatedResponse> => {
+  const params = new URLSearchParams();
+  params.append('page', String(page));
+  params.append('size', String(size));
+  if (search) params.append('search', search);
+  const response = await apiClient.get(`/api/programs/?${params.toString()}`);
+  return response.data;
+};
+
+export const getProgram = async (uuid: string): Promise<Program> => {
+  const response = await apiClient.get(`/api/programs/${uuid}`);
+  return response.data;
+};
+
+export const getProgramOptions = async (): Promise<ProgramOptions> => {
+  const response = await apiClient.get('/api/programs/options');
+  return response.data;
+};
+
+export const createProgram = async (data: ProgramPayload): Promise<Program> => {
+  const response = await apiClient.post('/api/programs/', data);
+  return response.data;
+};
+
+export const updateProgram = async (
+  uuid: string,
+  data: Partial<ProgramPayload>
+): Promise<Program> => {
+  const response = await apiClient.put(`/api/programs/${uuid}`, data);
+  return response.data;
+};
+
+export const deleteProgram = async (
+  uuid: string
+): Promise<{ message: string; detached_classes: number }> => {
+  const response = await apiClient.delete(`/api/programs/${uuid}`);
+  return response.data;
+};
+
+/** Классы организации + признак, назначена ли им эта программа. */
+export const getProgramClasses = async (uuid: string): Promise<ProgramClassListResponse> => {
+  const response = await apiClient.get(`/api/programs/${uuid}/classes`);
+  return response.data;
+};
+
+/** Назначить программу перечисленным классам (у остальных она снимается). */
+export const assignProgramClasses = async (
+  uuid: string,
+  classUuids: string[]
+): Promise<ProgramClassListResponse> => {
+  const response = await apiClient.put(`/api/programs/${uuid}/classes`, {
+    class_uuids: classUuids,
+  });
+  return response.data;
+};
+
+/**
+ * Приказы организации — для поля «Приказ, утверждающий».
+ * Поиск выполняется на сервере (по номеру, названию, подписанту), поэтому
+ * список не ограничен первой сотней документов.
+ */
+export const getOrderDocuments = async (
+  search?: string,
+  limit: number = 20
+): Promise<Document[]> => {
+  const res = await getDocuments(1, limit, 'orders', search);
+  return res.items;
+};
+
+/**
+ * Подпись приказа в том же виде, что сервер отдаёт в поле order_label.
+ * Нужна, чтобы выбранное в автокомплите значение выглядело одинаково
+ * и в списке программ, и в выпадающем списке.
+ */
+export const orderDocumentLabel = (
+  doc: Pick<Document, 'registration_number' | 'name'>
+): string => {
+  const number = (doc.registration_number || '').trim();
+  const name = (doc.name || '').trim();
+  if (number && name) return `№ ${number} — ${name}`;
+  return number || name || 'Без названия';
 };
 
 export default apiClient;

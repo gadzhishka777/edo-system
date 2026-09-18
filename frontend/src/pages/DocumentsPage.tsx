@@ -146,6 +146,28 @@ const ToolbarLeft = styled(Box)({
   flexWrap: 'wrap',
 });
 
+/** Панель фильтров под тулбаром — как в реестрах «Классы» и «Программы» */
+const FilterBar = styled(Paper)({
+  padding: '10px 20px',
+  borderRadius: '12px',
+  border: '1px solid #eaebf0',
+  boxShadow: 'none',
+  display: 'flex',
+  alignItems: 'center',
+  gap: '16px',
+  flexWrap: 'wrap',
+  marginBottom: '16px',
+});
+
+const FilterLabel = styled(Typography)({
+  fontFamily: 'Lato, sans-serif',
+  fontSize: '13px',
+  fontWeight: 500,
+  color: '#87879b',
+});
+
+const SelectLabelSx = { fontFamily: 'Lato, sans-serif' } as const;
+
 const ToolbarRight = styled(Box)({
   display: 'flex',
   alignItems: 'center',
@@ -474,6 +496,16 @@ const signatureTypes: { value: SignatureType; label: string; description: string
 const DEFAULT_STAMP_URL = '/stamps/premium-stamp.png';
 const FIXED_STAMP_SIZE = 40;
 
+/** Варианты фильтра «Тип подписи». Пустое значение — фильтр выключен. */
+const SIGNATURE_FILTER_OPTIONS: { value: string; label: string }[] = [
+  { value: '', label: 'Все типы' },
+  { value: 'HAND', label: 'Собственноручная' },
+  { value: 'PEP', label: 'ПЭП' },
+  { value: 'UNEP', label: 'УНЭП' },
+  { value: 'UKEP', label: 'УКЭП' },
+  { value: 'none', label: 'Без подписи' },
+];
+
 const FOLDER_TO_TYPE: Record<string, string> = {
   orders: 'Приказ по ОО',
   regulations: 'Распоряжение',
@@ -490,6 +522,11 @@ const DocumentsPage: React.FC = () => {
   const [activeFolder, setActiveFolder] = useState<string>('all');
   const [searchQuery, setSearchQuery] = useState('');
   const [debouncedSearch, setDebouncedSearch] = useState('');
+  // Фильтры списка: тип подписи и период по дате документа.
+  // Пустая строка / null = «не фильтруем».
+  const [filterSignature, setFilterSignature] = useState('');
+  const [filterDateFrom, setFilterDateFrom] = useState<Dayjs | null>(null);
+  const [filterDateTo, setFilterDateTo] = useState<Dayjs | null>(null);
   const [selectedDocuments, setSelectedDocuments] = useState<string[]>([]);
   const [documents, setDocuments] = useState<Document[]>([]);
   const [loading, setLoading] = useState(true);
@@ -672,7 +709,18 @@ const DocumentsPage: React.FC = () => {
         customFolderId = undefined;
       }
       
-      const response = await getDocuments(page, pageSize, folder, debouncedSearch || undefined, customFolderId);
+      const response = await getDocuments(
+        page,
+        pageSize,
+        folder,
+        debouncedSearch || undefined,
+        customFolderId,
+        {
+          signature_type: (filterSignature || undefined) as SignatureType | undefined,
+          date_from: filterDateFrom ? filterDateFrom.format('YYYY-MM-DD') : undefined,
+          date_to: filterDateTo ? filterDateTo.format('YYYY-MM-DD') : undefined,
+        },
+      );
 
       startTransition(() => {
         setDocuments(response.items);
@@ -685,13 +733,27 @@ const DocumentsPage: React.FC = () => {
     } finally {
       setLoading(false);
     }
-  }, [activeFolder, page, pageSize, debouncedSearch, addError, licenseValid]);
+  }, [activeFolder, page, pageSize, debouncedSearch, addError, licenseValid,
+      filterSignature, filterDateFrom, filterDateTo]);
 
   // Дебаунс поиска: запрос уходит через 400 мс после окончания ввода
   useEffect(() => {
     const t = setTimeout(() => setDebouncedSearch(searchQuery), 400);
     return () => clearTimeout(t);
   }, [searchQuery]);
+
+  // Любое изменение фильтров — с первой страницы
+  useEffect(() => {
+    setPage(1);
+  }, [filterSignature, filterDateFrom, filterDateTo]);
+
+  const filtersActive = !!filterSignature || !!filterDateFrom || !!filterDateTo;
+
+  const resetFilters = () => {
+    setFilterSignature('');
+    setFilterDateFrom(null);
+    setFilterDateTo(null);
+  };
 
   // При изменении поискового запроса возвращаемся на первую страницу
   useEffect(() => {
@@ -1093,6 +1155,7 @@ const DocumentsPage: React.FC = () => {
           executor: uploadData.executor || '',
           signature_type: uploadData.signatureType,
           custom_folder_id: uploadData.customFolderId,
+          created_at: uploadData.date ? `${uploadData.date}T00:00:00` : undefined,
         });
         docUuid = doc.uuid;
         setUploadData(prev => ({ ...prev, _doc_uuid: docUuid }));
@@ -1320,6 +1383,7 @@ const DocumentsPage: React.FC = () => {
           executor: uploadData.executor || '',
           signature_type: uploadData.signatureType,
           custom_folder_id: uploadData.customFolderId,
+          created_at: uploadData.date ? `${uploadData.date}T00:00:00` : undefined,
           signer_employee_id: selectedUploadSigner,
           executor_employee_id: selectedUploadExecutor,
         });
@@ -2480,20 +2544,90 @@ const DocumentsPage: React.FC = () => {
           </ToolbarRight>
         </ToolbarContainer>
 
+        {/* Фильтры: тип подписи и период по дате документа */}
+        <FilterBar>
+          <FilterLabel>Фильтры:</FilterLabel>
+
+          <FormControl size="small" sx={{ minWidth: 190 }}>
+            <InputLabel sx={SelectLabelSx}>Тип подписи</InputLabel>
+            <Select
+              value={filterSignature}
+              onChange={(e) => setFilterSignature(e.target.value)}
+              label="Тип подписи"
+              sx={{ borderRadius: '8px', fontFamily: 'Lato, sans-serif', fontSize: '14px' }}
+            >
+              {SIGNATURE_FILTER_OPTIONS.map((o) => (
+                <MenuItem key={o.value || 'all'} value={o.value}>{o.label}</MenuItem>
+              ))}
+            </Select>
+          </FormControl>
+
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+            <FilterLabel>Дата документа:</FilterLabel>
+            <DatePicker
+              label="С"
+              value={filterDateFrom}
+              onChange={setFilterDateFrom}
+              format="DD.MM.YYYY"
+              // Границы не даём развести: конец раньше начала — заведомая пустота
+              maxDate={filterDateTo ?? undefined}
+              slotProps={{ textField: { size: 'small', sx: { width: 178 } } }}
+            />
+            <FilterLabel>—</FilterLabel>
+            <DatePicker
+              label="По"
+              value={filterDateTo}
+              onChange={setFilterDateTo}
+              format="DD.MM.YYYY"
+              minDate={filterDateFrom ?? undefined}
+              slotProps={{ textField: { size: 'small', sx: { width: 178 } } }}
+            />
+          </Box>
+
+          {filtersActive && (
+            <Button
+              onClick={resetFilters}
+              sx={{
+                textTransform: 'none',
+                fontFamily: 'Lato, sans-serif',
+                fontWeight: 500,
+                fontSize: '13px',
+                color: '#4c6ef5',
+                padding: '4px 10px',
+                borderRadius: '8px',
+                '&:hover': { backgroundColor: 'rgba(76, 110, 245, 0.08)' },
+              }}
+            >
+              Сбросить
+            </Button>
+          )}
+        </FilterBar>
+
         <Fade in={!isPending} timeout={300}>
           <Box>
             {documents.length === 0 ? (
               <EmptyStateContainer>
                 <EmptyStateIcon><FileIcon /></EmptyStateIcon>
                 <Typography variant="h6" sx={{ fontFamily: 'Lato, sans-serif', fontWeight: 600, fontSize: '18px', color: '#101025' }}>
-                  Нет данных
+                  {filtersActive || debouncedSearch ? 'Ничего не найдено' : 'Нет данных'}
                 </Typography>
                 <Typography variant="body2" sx={{ fontFamily: 'Lato, sans-serif', color: '#87879b', fontSize: '14px', mt: 1 }}>
-                  Загрузите первый документ
+                  {filtersActive || debouncedSearch
+                    ? 'Попробуйте изменить условия поиска или фильтры'
+                    : 'Загрузите первый документ'}
                 </Typography>
-                <UploadButton startIcon={<CloudUploadIcon />} onClick={handleOpenUploadModal}>
-                  Загрузить документ
-                </UploadButton>
+                {filtersActive || debouncedSearch ? (
+                  <UploadButton
+                    startIcon={<CloseIcon />}
+                    onClick={() => { setSearchQuery(''); resetFilters(); }}
+                  >
+                    Сбросить фильтры
+                  </UploadButton>
+                ) : (
+                  <UploadButton startIcon={<CloudUploadIcon />} onClick={handleOpenUploadModal}>
+                    Загрузить документ
+                  </UploadButton>
+                )}
               </EmptyStateContainer>
             ) : (
               <TableContainer component={Paper} sx={{ borderRadius: '12px', border: '1px solid #eaebf0', boxShadow: 'none', overflowX: 'auto', width: '100%' }}>

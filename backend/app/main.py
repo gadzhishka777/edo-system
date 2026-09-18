@@ -27,7 +27,11 @@ from app.models.mail import Organization, License
 from app.models.user import AdminUser
 from app.models.employee import Employee
 from app.models.vacancy import Vacancy
-from app.routers import documents, mail, auth, contacts, admin, employees, vacancies
+from app.models.school_class import SchoolClass
+from app.models.program import EducationalProgram
+from app.routers import (
+    documents, mail, auth, contacts, admin, employees, vacancies, classes, programs,
+)
 from app.routers import public_appeals, appeals
 from app.core.security import get_password_hash
 
@@ -343,6 +347,36 @@ async def migrate_esa_columns():
         await conn.run_sync(_add_esa_columns)
 
 
+async def migrate_program_columns():
+    """Идемпотентная миграция: колонка program_id у классов.
+
+    Таблицу educational_programs создаёт create_all (модель импортирована
+    в main.py), а колонку в уже существующую school_classes он не добавит —
+    поэтому ALTER делаем руками.
+    """
+    async with async_engine.begin() as conn:
+        def _add_program_column(connection):
+            inspector = sqla_inspect(connection)
+            if "school_classes" not in inspector.get_table_names():
+                return
+
+            columns = {c["name"] for c in inspector.get_columns("school_classes")}
+            if "program_id" not in columns:
+                connection.execute(text(
+                    "ALTER TABLE school_classes ADD COLUMN program_id INTEGER "
+                    "REFERENCES educational_programs(id)"
+                ))
+
+            indexes = {ix["name"] for ix in inspector.get_indexes("school_classes")}
+            if "ix_school_classes_program_id" not in indexes:
+                connection.execute(text(
+                    "CREATE INDEX ix_school_classes_program_id "
+                    "ON school_classes(program_id)"
+                ))
+
+        await conn.run_sync(_add_program_column)
+
+
 async def migrate_orgs_to_employees():
     """
     Идемпотентная миграция: для каждой организации без сотрудников создаёт
@@ -469,6 +503,7 @@ async def lifespan(app: FastAPI):
     await create_default_admin()
     await create_employees_table()
     await migrate_esa_columns()
+    await migrate_program_columns()
     await migrate_orgs_to_employees()
     await seed_response_templates()
     yield
@@ -500,6 +535,8 @@ app.include_router(contacts.router, prefix=settings.API_PREFIX)
 app.include_router(admin.router, prefix=settings.API_PREFIX)
 app.include_router(employees.router, prefix=settings.API_PREFIX)
 app.include_router(vacancies.router, prefix=settings.API_PREFIX)
+app.include_router(classes.router, prefix=settings.API_PREFIX)
+app.include_router(programs.router, prefix=settings.API_PREFIX)
 app.include_router(public_appeals.router, prefix=settings.API_PREFIX)
 app.include_router(appeals.router, prefix=settings.API_PREFIX)
 
@@ -514,15 +551,36 @@ async def health_check():
     return {"status": "ok", "service": settings.APP_NAME}
 
 
+def _jsonable_validation_errors(errors: list) -> list:
+    """Приводит ошибки Pydantic к JSON-совместимому виду.
+
+    Когда валидатор бросает ValueError, Pydantic v2 кладёт сам объект
+    исключения в ctx['error'] — json.dumps на нём падает, и обработчик 422
+    отдаёт 500 вместо понятного сообщения. Заменяем объект на его текст.
+    """
+    cleaned = []
+    for error in errors:
+        error = dict(error)
+        ctx = error.get("ctx")
+        if isinstance(ctx, dict):
+            error["ctx"] = {
+                key: (str(value) if isinstance(value, BaseException) else value)
+                for key, value in ctx.items()
+            }
+        cleaned.append(error)
+    return cleaned
+
+
 # Логируем все ошибки валидации (422): какое поле и у какого запроса не прошло
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    errors = _jsonable_validation_errors(exc.errors())
     summary = "; ".join(
         f"{'.'.join(str(x) for x in e.get('loc', []))}: {e.get('msg')}"
-        for e in exc.errors()
+        for e in errors
     )
     logger.warning("422 %s %s — %s", request.method, request.url.path, summary)
-    return JSONResponse(status_code=422, content={"detail": exc.errors()})
+    return JSONResponse(status_code=422, content={"detail": errors})
 
 
 logger.info("Приложение %s v%s инициализировано (docs=%s)", settings.APP_NAME, settings.APP_VERSION, settings.DOCS_ENABLED)
