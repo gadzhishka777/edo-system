@@ -13,10 +13,13 @@ import AdminLoginPage from './pages/AdminLoginPage';
 import AppealsPage from './pages/AppealsPage';
 import PublicAppealPage from './pages/PublicAppealPage';
 import EisCallbackPage from './pages/EisCallbackPage';
+import KndLoginPage from './pages/KndLoginPage';
+import KndPage from './pages/KndPage';
 import { Header } from './components/Layout/Header';
 import { Sidebar } from './components/Layout/Sidebar';
 import Footer from './components/Layout/Footer';
 import { authApi } from './api/edoApi';
+import { KND_HOME_PATH, KND_LOGIN_PATH } from './theme/knd';
 import { EventProvider } from './context/EventContext';
 import { useLicenseCheck } from './hooks/useLicenseCheck';
 import ErrorBoundary from './components/ErrorBoundary';
@@ -66,6 +69,18 @@ function App() {
               <Route path="/admin" element={<AdminPage />} />
               <Route path="/appeal" element={<PublicAppealPage />} />
               <Route path="/auth/eis/success" element={<EisCallbackPage onLogin={handleLogin} />} />
+
+              {/* ===== Модуль «ТОР Контроль» (КНД) =====
+                  Отдельный контур со своим входом и своей визуальной темой.
+                  Маршруты объявлены до "/*", чтобы не улетать в ТОР ЭДО. */}
+              <Route path={KND_LOGIN_PATH} element={<KndLoginPage />} />
+              <Route
+                path={`${KND_HOME_PATH}/*`}
+                element={
+                  isAuthenticated ? <KndPage /> : <Navigate to={KND_LOGIN_PATH} replace />
+                }
+              />
+
               <Route
                 path="/*"
                 element={

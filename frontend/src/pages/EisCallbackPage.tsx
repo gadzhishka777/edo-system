@@ -15,7 +15,7 @@ import { styled } from '@mui/material/styles';
 
 import Footer from '../components/Layout/Footer';
 import CertBanner from '../components/Layout/CertBanner';
-import { authApi, EisEmployeeCandidate, EmployeeLoginResponse, persistLogin } from '../api/edoApi';
+import { authApi, consumeAuthReturn, EisEmployeeCandidate, EmployeeLoginResponse, persistLogin } from '../api/edoApi';
 
 // ===== СТИЛИ =====
 
@@ -102,19 +102,21 @@ const SubmitButton = styled(Button)({
 });
 
 // Маппинг известных ESA-ошибок на человеческое сообщение.
+// Формулировки намеренно не упоминают конкретный модуль: страница обслуживает
+// и ТОР ЭДО, и «ТОР Контроль».
 const ERROR_MESSAGES: Record<string, string> = {
-  access_denied: 'Вы отказались от входа через ЕИС на стороне портала. Попробуйте снова или войдите по логину и паролю.',
+  access_denied: 'Вы отказались от входа через ЕИС на стороне портала. Попробуйте снова или войдите другим способом.',
   invalid_state: 'Сессия входа истекла или была подменена. Попробуйте войти через ЕИС ещё раз.',
   invalid_request: 'ЕИС прислал некорректный ответ. Попробуйте войти ещё раз.',
   token_exchange_failed: 'ЕИС не выдал токен доступа. Возможно, код уже использован. Попробуйте войти ещё раз.',
   userinfo_failed: 'Не удалось получить ваши данные из ЕИС. Попробуйте войти ещё раз.',
-  no_profile: 'Для вашей учётной записи ЕИС не найдено ни одного профиля в ТОР ЭДО. Обратитесь к администратору.',
+  no_profile: 'Для вашей учётной записи ЕИС не найдено ни одного профиля в системе. Обратитесь к администратору.',
 };
 
 function describeError(code: string, description?: string | null): string {
   if (ERROR_MESSAGES[code]) return ERROR_MESSAGES[code];
   if (description) return description;
-  return `Не удалось войти через ЕИС (код: ${code}). Попробуйте войти по логину и паролю.`;
+  return `Не удалось войти через ЕИС (код: ${code}). Попробуйте войти ещё раз.`;
 }
 
 const EisCallbackPage: React.FC<{ onLogin?: () => void }> = ({ onLogin }) => {
@@ -133,16 +135,20 @@ const EisCallbackPage: React.FC<{ onLogin?: () => void }> = ({ onLogin }) => {
   // Захватываем параметры один раз — ДО того, как эффект очистки удалит ?code из
   // адресной строки. Иначе повторный рендер после очистки передаст code=null,
   // эффект обмена перезапустится и выдаст «Не задан код обмена» (хотя код был).
+  // Здесь же забираем точку возврата: страница входа могла запомнить, что вход
+  // начат из другого модуля (например, «ТОР Контроль» → /knd).
   const initialRef = useRef<{
     code: string | null;
     error: string | null;
     desc: string | null;
+    returnTo: { login: string; success: string };
   } | null>(null);
   if (initialRef.current === null) {
     initialRef.current = {
       code: searchParams.get('code'),
       error: searchParams.get('error'),
       desc: searchParams.get('error_description'),
+      returnTo: consumeAuthReturn(),
     };
   }
 
@@ -191,7 +197,7 @@ const EisCallbackPage: React.FC<{ onLogin?: () => void }> = ({ onLogin }) => {
           if (!tokens.profile_completed && !tokens.employee_name) {
             navigate('/profile-complete', { replace: true });
           } else {
-            navigate('/', { replace: true });
+            navigate(initialRef.current?.returnTo.success ?? '/', { replace: true });
           }
           return;
         }
@@ -243,7 +249,7 @@ const EisCallbackPage: React.FC<{ onLogin?: () => void }> = ({ onLogin }) => {
         if (!result.profile_completed && !result.employee_name) {
           navigate('/profile-complete', { replace: true });
         } else {
-          navigate('/', { replace: true });
+          navigate(initialRef.current?.returnTo.success ?? '/', { replace: true });
         }
         return;
       }
@@ -268,7 +274,7 @@ const EisCallbackPage: React.FC<{ onLogin?: () => void }> = ({ onLogin }) => {
             <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2, py: 4 }}>
               <CircularProgress sx={{ color: '#7950f2' }} />
               <Title>Завершаем вход через ЕИС…</Title>
-              <Subtitle>Обмениваем код авторизации на токен ТОР ЭДО.</Subtitle>
+              <Subtitle>Обмениваем код авторизации на токен доступа.</Subtitle>
             </Box>
           )}
 
@@ -283,7 +289,7 @@ const EisCallbackPage: React.FC<{ onLogin?: () => void }> = ({ onLogin }) => {
             <Box>
               <Title>Выберите организацию для входа</Title>
               <Subtitle>
-                С вашей учётной записью ЕИС найдено несколько профилей в ТОР ЭДО.
+                С вашей учётной записью ЕИС найдено несколько профилей в системе.
                 Выберите тот, от имени которого хотите продолжить работу.
               </Subtitle>
 
@@ -338,7 +344,7 @@ const EisCallbackPage: React.FC<{ onLogin?: () => void }> = ({ onLogin }) => {
               <SubmitButton
                 variant="contained"
                 disableElevation
-                onClick={() => navigate('/login', { replace: true })}
+                onClick={() => navigate(initialRef.current?.returnTo.login ?? '/login', { replace: true })}
               >
                 Назад к странице входа
               </SubmitButton>

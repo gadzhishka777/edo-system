@@ -45,6 +45,35 @@ function clearTokens() {
   localStorage.removeItem('employee_roles');
 }
 
+// ===== Возврат в модуль после внешнего входа (ЕИС) =====
+// Вход через ЕИС — это полностраничный уход на портал и возврат на
+// /auth/eis/success, состояние SPA при этом теряется. Поэтому точку возврата
+// запоминаем в sessionStorage: он переживает уход и возврат в той же вкладке.
+const AUTH_RETURN_KEY = 'auth_return_to';
+const AUTH_LOGIN_KEY = 'auth_login_path';
+
+/** Запомнить, куда вернуться после успешного входа и какую страницу входа
+ *  показать при ошибке. Вызывать перед уходом на ЕИС. */
+export function rememberAuthReturn(loginPath: string, successPath: string): void {
+  sessionStorage.setItem(AUTH_LOGIN_KEY, loginPath);
+  sessionStorage.setItem(AUTH_RETURN_KEY, successPath);
+}
+
+/** Прочитать и очистить точку возврата.
+ *  Пускаем только внутренние пути — защита от open redirect. */
+export function consumeAuthReturn(): { login: string; success: string } {
+  const safePath = (value: string | null, fallback: string): string =>
+    value && value.startsWith('/') && !value.startsWith('//') ? value : fallback;
+
+  const result = {
+    login: safePath(sessionStorage.getItem(AUTH_LOGIN_KEY), '/login'),
+    success: safePath(sessionStorage.getItem(AUTH_RETURN_KEY), '/'),
+  };
+  sessionStorage.removeItem(AUTH_LOGIN_KEY);
+  sessionStorage.removeItem(AUTH_RETURN_KEY);
+  return result;
+}
+
 // Добавляем access token к каждому запросу
 apiClient.interceptors.request.use((config) => {
   const token = getAccessToken();
@@ -281,6 +310,14 @@ export const authApi = {
 
   isAuthenticated: () => {
     return !!getAccessToken();
+  },
+
+  /** Публичный статус интеграции с ЕИС: включён ли вход через ЕИС на бэкенде.
+   *  Нужен страницам входа, чтобы не отправлять пользователя на редирект,
+   *  который вернёт JSON с 503. */
+  getEisStatus: async (): Promise<{ enabled: boolean }> => {
+    const response = await apiClient.get('/api/auth/eis/status');
+    return response.data;
   },
 
   /** Завершение ESA-входа: обмен одноразового кода из /auth/eis/success на JWT или список кандидатов. */
