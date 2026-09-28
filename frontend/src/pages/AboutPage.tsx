@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { parseApiDate, serverNow } from '../utils/datetime';
+import { parseApiDate, formatApiDate, serverNow } from '../utils/datetime';
 import {
   Box,
   Paper,
@@ -315,29 +315,20 @@ const AboutPage: React.FC = () => {
     setToastOpen(true);
   };
 
-  // Форматирование даты
-  const formatDate = (dateStr: string): string => {
-    if (!dateStr) return '—';
-    try {
-      const [year, month, day] = dateStr.split('-');
-      return `${day}.${month}.${year}`;
-    } catch {
-      return dateStr;
-    }
-  };
+  // Форматирование даты — единая утилита проекта (MSK, не зависит от локали)
+  const formatDate = (dateStr: string): string => (dateStr ? formatApiDate(dateStr) : '—');
 
   // Вычисление оставшихся дней
   const getDaysRemaining = (expireDate: string): number => {
     if (!expireDate) return 0;
-    try {
-      // Дата лицензии из API — MSK; сравниваем с серверными часами
-      const expire = parseApiDate(expireDate);
-      const now = serverNow();
-      const diffTime = expire.getTime() - now.getTime();
-      return Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-    } catch {
-      return 0;
-    }
+    // Дата лицензии из API — MSK; сравниваем с серверными часами.
+    // parseApiDate может вернуть Invalid Date — тогда getTime() даст NaN
+    // и без проверки в UI уходило бы «Осталось NaN дн.».
+    const expire = parseApiDate(expireDate);
+    const now = serverNow();
+    const diffTime = expire.getTime() - now.getTime();
+    if (!Number.isFinite(diffTime)) return 0;
+    return Math.ceil(diffTime / (1000 * 60 * 60 * 24));
   };
 
   // Маскировка ключа для отображения

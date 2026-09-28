@@ -42,7 +42,9 @@ export const useLicenseCheck = () => {
       if (info.valid && info.expire_date) {
         // Сравнение от серверных часов; дата из API парсится как MSK
         const daysUntilExpire = dayjs(parseApiDate(info.expire_date)).diff(serverNow(), 'day');
-        const daysLeft = Math.max(0, daysUntilExpire);
+        // parseApiDate может вернуть Invalid Date (битая строка) — тогда diff = NaN,
+        // и все проверки ниже молча ломаются (NaN <= 7 === false).
+        const daysLeft = Number.isFinite(daysUntilExpire) ? Math.max(0, daysUntilExpire) : 0;
         info.days_until_expire = daysLeft;
         
         // Проверяем разные сценарии только если еще не уведомляли

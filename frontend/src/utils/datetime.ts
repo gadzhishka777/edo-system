@@ -43,6 +43,14 @@ export function parseApiDate(value: string | number | Date): Date {
 
   // "2026-08-21 14:03:00" → ISO с "T"
   const normalized = raw.includes(' ') && !raw.includes('T') ? raw.replace(' ', 'T') : raw;
+
+  // "2026-02-07" — только дата, без времени (именно так API отдаёт expire_date).
+  // Смещение можно дописывать только ПОСЛЕ времени: строка "2026-02-07+03:00"
+  // невалидна, new Date() вернёт Invalid Date, а в UI появится «Осталось NaN дн.».
+  if (/^\d{4}-\d{2}-\d{2}$/.test(normalized)) {
+    return new Date(`${normalized}T00:00:00${MSK_SUFFIX}`);
+  }
+
   if (!hasExplicitZone(normalized)) {
     return new Date(`${normalized}${MSK_SUFFIX}`);
   }
