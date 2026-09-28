@@ -79,9 +79,21 @@ if [ ! -e "$PY" ]; then
     exit 1
 fi
 
+# Права: venv на проде обычно принадлежит root, поэтому без sudo sed не сможет
+# заменить файлы и упадёт с невнятным «couldn't open temporary file ...:
+# Permission denied». Лучше сказать это прямо.
+if [ "$DRY_RUN" = "0" ] && [ ! -w "$VENV/bin" ]; then
+    err "нет прав на запись в $VENV/bin"
+    echo "  Каталог принадлежит другому пользователю. Запустите с sudo:" >&2
+    echo "      sudo bash $0 $VENV" >&2
+    echo "  (или сначала посмотрите, что будет сделано: $0 --dry-run $VENV)" >&2
+    exit 1
+fi
+
 changed=0
 checked=0
 broken=0
+denied=0
 for f in "$VENV"/bin/*; do
     [ -f "$f" ] || continue
     # Симлинки пропускаем: bin/python — это ссылка, её трогать нельзя
@@ -113,15 +125,30 @@ for f in "$VENV"/bin/*; do
     broken=$((broken + 1))
     if [ "$DRY_RUN" = "1" ]; then
         warn "$(basename "$f"): СЛОМАН «$cur» -> станет «$want»"
-    else
-        sed -i "1s|^#!.*|#!$PY|" "$f"
-        ok "$(basename "$f"): исправлено («$cur» -> «$want»)"
+        changed=$((changed + 1))
+        continue
     fi
-    changed=$((changed + 1))
+    if [ ! -w "$f" ]; then
+        err "$(basename "$f"): нет прав на запись — нужен sudo"
+        denied=$((denied + 1))
+        continue
+    fi
+    if sed -i "1s|^#!.*|#!$PY|" "$f"; then
+        ok "$(basename "$f"): исправлено («$cur» -> «$want»)"
+        changed=$((changed + 1))
+    else
+        err "$(basename "$f"): не удалось исправить (sed вернул ошибку)"
+        denied=$((denied + 1))
+    fi
 done
 
 if [ "$checked" = "0" ]; then
     warn "лаунчеров с shebang в $VENV/bin не нашлось — странно, проверьте путь"
+fi
+if [ "$denied" -gt 0 ]; then
+    err "не исправлено файлов: $denied (нет прав)"
+    echo "  Запустите этот же скрипт с sudo:" >&2
+    echo "      sudo bash $0 $VENV" >&2
 fi
 
 if [ "$DRY_RUN" = "0" ] && [ "$changed" -gt 0 ]; then
@@ -141,7 +168,14 @@ fi
 hdr "Готово"
 echo "  исправлено лаунчеров: $changed из $checked (сломано было: $broken)"
 if [ "$DRY_RUN" = "1" ]; then
-    echo "  Это был предпросмотр. Запустите без --dry-run, чтобы применить."
+    echo "  Это был предпросмотр. Запустите без --dry-run, чтобы применить:"
+    echo "      sudo bash $0 $VENV"
+elif [ "$denied" -gt 0 ]; then
+    echo "  Часть файлов НЕ исправлена — запустите с sudo (см. сообщение выше)."
+    exit 1
+elif [ "$broken" = "0" ]; then
+    echo "  Сломанных shebang не найдено — чинить нечего."
+    echo "  Если бэкенд всё равно не поднимается, смотрите: journalctl -u edo-backend -n 50"
 else
     echo "  Дальше: sudo systemctl restart edo-backend"
 fi
