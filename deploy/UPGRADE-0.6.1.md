@@ -233,23 +233,42 @@ cd /opt/edo/backend
 
 ## 6. nginx
 
+Конфиг в репозитории собран из фактического прод-конфига, поэтому ваши пути,
+порт **8005**, домен с `www` и IP-ограничение админки сохранены.
+
 ```bash
 sudo cp /etc/nginx/sites-available/edo /etc/nginx/sites-available/edo.bak
+
+# Фрагмент с заголовками безопасности — НОВЫЙ файл, без него nginx -t упадёт
+sudo mkdir -p /etc/nginx/snippets
+sudo cp /opt/edo/deploy/nginx-snippets/edo-security-headers.conf /etc/nginx/snippets/
+
 sudo cp /opt/edo/deploy/nginx.conf /etc/nginx/sites-available/edo
 ```
 
 **Обязательно проверьте в скопированном файле:**
 
-1. **Домен.** Должен быть `toredo.mroo-snpm.ru` (в старом репозиторном конфиге
-   оставался устаревший `edo.ped-id.ru`). Если домен не тот, nginx будет искать
-   несуществующий сертификат.
+1. **Домен.** Должен быть `toredo.mroo-snpm.ru` + `www.toredo.mroo-snpm.ru`.
+   Сертификат берётся из `/etc/letsencrypt/live/toredo.mroo-snpm.ru/`: если `www`
+   в него не входит, браузер покажет ошибку имени. Проверьте
+   `sudo certbot certificates` и при необходимости перевыпустите с `--expand`
+   либо уберите `www.` из обоих `server_name`.
 2. **Пути к сертификату.** `/etc/letsencrypt/live/<ваш-домен>/…` — сверьте с
    фактическим: `sudo certbot certificates`.
-3. **`http2 on;`** требует nginx **≥ 1.25.1**. Если у вас старее (например, 1.18 в
-   Ubuntu 22.04) — закомментируйте эту строку и верните старый синтаксис:
-   `listen 443 ssl http2;` (эта строка в конфиге уже есть выше).
+3. **`include /etc/letsencrypt/options-ssl-nginx.conf;`** оставлен как был — он
+   задаёт `ssl_protocols`/`ssl_ciphers`/`ssl_session_*`. **Не дублируйте эти
+   директивы** рядом, иначе nginx упадёт с «duplicate directive».
 4. **`root`** — путь к сборке фронтенда (`/var/www/edo/frontend/build`).
-5. **`alias` для `/stamps/`** — фактический каталог штампов в вашем чекауте.
+5. **`alias` для `/stamps/`** — фактический каталог штампов, должен совпадать со
+   `settings.STAMPS_DIR`. **Этого блока не было в исходном прод-конфиге**, поэтому
+   штампы, загруженные через админку, отдавали 404 (в FastAPI маршрута `/stamps`
+   нет — раздавать обязан nginx). Проверить значение:
+   ```bash
+   cd /opt/edo/backend && ./venv/bin/python -c \
+     "from app.config import settings; print(settings.STAMPS_DIR)"
+   ```
+6. **`proxy_pass http://127.0.0.1:8005;`** — ваш порт. Должен совпадать с
+   фактически запущенным uvicorn (раздел 7).
 
 Проверить и применить (перезагрузка без простоя, nginx подхватит новый воркер):
 
@@ -260,10 +279,16 @@ sudo nginx -t && sudo systemctl reload nginx
 Если `nginx -t` упал — **сайт продолжает работать на старой конфигурации**,
 ничего не сломано. Чините и повторяйте.
 
-> Нюанс: HSTS отдаётся с `includeSubDomains`. Если какой-то поддомен
+> Нюанс: HSTS отдаётся с `includeSubDomains` и теперь лежит **в одном месте** —
+> в `/etc/nginx/snippets/edo-security-headers.conf`. Если какой-то поддомен
 > `mroo-snpm.ru` живёт только по http — он станет недоступен для браузеров,
-> которые уже получили заголовок. Уберите `includeSubDomains` в обоих местах
-> (`server` и `location = /index.html`), если это ваш случай.
+> которые уже получили заголовок. Уберите `; includeSubDomains` там (одно место),
+> если это ваш случай.
+
+> Отдельно: `location /admin` с `allow 31.41.60.0/24` закрывает только страницу
+> админки. API (`/api/admin/*`) этим блоком не покрывается — он защищён лишь
+> логином и cookie-сессией. Строгий вариант (закрыть и API) есть в конфиге
+> закомментированным.
 
 ---
 
@@ -275,14 +300,24 @@ cd /opt/edo
 # либо: systemctl start edo && journalctl -u edo -f
 ```
 
+Порт задаётся переменной `BACKEND_PORT` (по умолчанию **8005** — как на проде).
+Значение обязано совпадать с `proxy_pass` в nginx, иначе 502:
+
+```bash
+BACKEND_PORT=8005 ./deploy/start_backend.sh   # явно
+```
+
 Ключевое: в скрипте/юните должен остаться флаг **`--no-server-header`** — он убирает
 заголовок `Server: uvicorn`. Без него бэкенд выдаёт себя.
 
 Проверка живости:
 
 ```bash
-curl -s http://127.0.0.1:8000/api/health
+curl -s http://127.0.0.1:8005/api/health
 # {"status":"ok","service":"Подсистема ЭДО","server_time":"…+03:00","timezone":"Europe/Moscow"}
+
+# Порт бэкенда обязан совпадать с proxy_pass в nginx — иначе 502
+ss -ltnp | grep ':8005'
 ```
 
 ---

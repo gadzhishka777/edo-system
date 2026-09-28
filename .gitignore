@@ -5,10 +5,17 @@ __pycache__/
 *.pyd
 .Python
 venv/
+# Окружения при обновлении: venv-061 (новое), venv-old (старое после переключения)
+venv-*/
 env/
 *.egg-info/
 dist/
 build/
+
+# Бэкапы, которые делают deploy/backup.sh и deploy/upgrade.sh
+backups/
+# Копии, которые deploy/upgrade.sh --rollback оставляет перед перезаписью
+*.before-rollback
 
 # Базы данных
 *.db

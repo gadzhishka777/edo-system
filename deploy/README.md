@@ -11,8 +11,25 @@
 | **docker compose** | Локальный/тестовый стенд | контейнер `backend` | `frontend/nginx.conf` в контейнере |
 
 Пошаговая выкладка на прод — **[PRODUCTION_CHECKLIST.md](PRODUCTION_CHECKLIST.md)**.
-Обновление уже работающего стенда — **[UPGRADE-0.6.1.md](UPGRADE-0.6.1.md)**.
+Обновление уже работающего стенда — **[UPGRADE-0.6.1.md](UPGRADE-0.6.1.md)**,
+рунбук с командами — **[UPGRADE-0.6.1-COMMANDS.md](UPGRADE-0.6.1-COMMANDS.md)**.
 Этот файл — про архитектуру и docker-вариант.
+
+## Обновление стенда одной командой
+
+```bash
+cd /opt/edo
+sudo ./deploy/upgrade.sh --check        # только посмотреть состояние, ничего не менять
+sudo ./deploy/upgrade.sh --backup-only  # только бэкап (без простоя)
+sudo ./deploy/upgrade.sh                # обновление: бэкап → стоп → git pull → новое venv
+sudo ./deploy/upgrade.sh --rollback     # откат базы, .env и окружения из последнего бэкапа
+```
+
+Скрипт делает автоматическую часть (шаги 1–6 рунбука) и **останавливается перед
+рискованными шагами**: `.env`, время в базе, пароль админа, nginx, сборка фронта,
+переключение `venv`, запуск сервиса. Остаток он печатает на экран готовыми
+командами. Бэкап кладётся в `backups/upgrade-<дата>/` (база, файлы, `.env`,
+конфиги nginx, собранный фронт) — папка в `.gitignore`.
 
 ## Архитектура (bare metal, прод)
 
@@ -21,11 +38,15 @@
                               |
               +---------------+---------------+
               |                               |
-      Статика SPA                    /api/ → 127.0.0.1:8000
+      Статика SPA                    /api/ → 127.0.0.1:8005
       /var/www/edo/frontend/build           (uvicorn, 2 воркера)
                                                       |
                                               GOST 127.0.0.1:8080
 ```
+
+> **Порт 8005 — это прод.** В docker-варианте (см. раздел ниже) используется
+> 8000. Порт бэкенда задаётся `BACKEND_PORT` в `deploy/start_backend.sh`
+> (по умолчанию 8005) и должен совпадать с `proxy_pass` в nginx.
 
 Фронтенд и API живут на одном origin — поэтому HttpOnly-cookie с `SameSite=Lax`
 работают без костылей, а CORS в норме не задействован.
@@ -86,7 +107,40 @@ curl -s http://127.0.0.1:8000/api/health
 Обратите внимание: `version` в ответе отсутствует намеренно — версия не
 раскрывается наружу.
 
-## Управление
+## Управление бэкендом (bare metal)
+
+В репозитории есть готовый systemd-юнит — `deploy/edo.service`. Он вызывает
+`deploy/start_backend.sh` (то есть логика запуска не дублируется: скрипт сам
+находит venv и порт), добавляет автозапуск после перезагрузки, автоподъём после
+падения, логи в journald и проверку готовности по `/api/health`.
+
+```bash
+# Установка (один раз)
+chmod +x deploy/start_backend.sh deploy/wait_for_backend.sh
+sudo cp deploy/edo.service /etc/systemd/system/edo.service
+sudo systemctl daemon-reload
+sudo systemctl enable --now edo
+
+# Эксплуатация
+systemctl status edo --no-pager
+journalctl -u edo -f                  # логи
+sudo systemctl restart edo            # ПОСЛЕ git pull — иначе код не подхватится
+sudo systemctl stop edo
+```
+
+- **Порт**: `BACKEND_PORT`, по умолчанию **8005**. Обязан совпадать с
+  `proxy_pass` в nginx. Переопределение — в юните через `Environment=BACKEND_PORT=…`.
+- **venv**: скрипт сам находит `backend/venv` или `<корень проекта>/venv`.
+  Переопределение — `Environment=VENV_DIR=/opt/edo/venv`.
+- **Готовность**: `ExecStartPost` → `wait_for_backend.sh` ждёт `/api/health`
+  до 30 с; если не дождался — юнит в состоянии `failed`.
+- **Сначала погасите ручной запуск** (`pkill -f "uvicorn app.main:app"`), иначе
+  конфликт за порт. И останавливайте через `systemctl stop`, а не `pkill` —
+  `Restart=always` воспримет убийство как падение и поднимет сервис снова.
+
+Запуск `./deploy/start_backend.sh` в терминале — только для отладки.
+
+## Управление (docker compose)
 
 ```bash
 docker compose logs -f backend

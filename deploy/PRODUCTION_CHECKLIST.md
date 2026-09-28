@@ -3,8 +3,10 @@
 > **Обновляете уже работающий стенд?** Не начинайте с этого файла — сначала
 > **[UPGRADE-0.6.1.md](UPGRADE-0.6.1.md)**: там порядок действий, откат и нюансы
 > именно перехода на текущую версию (cookie-сессии, время, зависимости).
-> Если нужны готовые команды для копипаста — **[UPGRADE-0.6.1-COMMANDS.md](UPGRADE-0.6.1-COMMANDS.md)**
-> (15 шагов, точные пути, смена дефолтного пароля админа).
+> Самый быстрый путь — один скрипт: `cd /opt/edo && sudo ./deploy/upgrade.sh`
+> (сначала `--check`, чтобы посмотреть состояние). Он делает бэкап, `git pull`
+> и новое окружение, затем печатает остаток шагов. Ручной вариант с готовыми
+> командами — **[UPGRADE-0.6.1-COMMANDS.md](UPGRADE-0.6.1-COMMANDS.md)**.
 > Этот чеклист — для первичной установки и финальной сверки.
 
 ## 1. Сервер (Linux)
@@ -17,10 +19,17 @@
 ## 2. Бэкенд
 ```bash
 cd backend
-python3 -m venv venv
+python3 -m venv venv          # если venv уже есть — пропустить (см. примечание)
 ./venv/bin/pip install -r requirements.txt
 cp .env .env.local   # резервная копия текущего
 ```
+
+> **Про venv:** раскладка бывает двух видов — `backend/venv` (конвенция) и
+> `<корень проекта>/venv`. Обе рабочие: `deploy/start_backend.sh` сам находит
+> нужную. Ничего переносить не надо. Ставить зависимости **только**
+> `pip install -r requirements.txt` — если перечислить пакеты в командной строке,
+> pip разрешит их без пинов (`starlette 1.7.0` вместо `1.3.1`).
+
 Проверить `backend/.env`:
 - [ ] `SECRET_KEY` — сгенерирован, **сохраните в менеджер паролей**
 - [ ] `ADMIN_DEFAULT_PASSWORD` — сгенерирован, **сохраните в менеджер паролей**
@@ -32,9 +41,23 @@ cp .env .env.local   # резервная копия текущего
 - [ ] `SMTP_*` — заполнены (smtp.mroo-snpm.ru:465)
 - [ ] `ESA_*` — заполнены, `ESA_REDIRECT_URI` совпадает с кабинетом ЕИС **посимвольно**
 
-Старт: `deploy/start_backend.sh` (или systemd-unit на его основе).
-Флаг `--no-server-header` в скрипте обязателен — он убирает заголовок `Server: uvicorn`.
-Логи: `backend/logs/edo.log` (ротация 5 МБ × 5).
+### 2.1 Запуск через systemd (рекомендуется)
+```bash
+chmod +x deploy/start_backend.sh deploy/wait_for_backend.sh
+sudo cp deploy/edo.service /etc/systemd/system/edo.service
+sudo systemctl daemon-reload
+sudo systemctl enable --now edo
+systemctl status edo --no-pager
+journalctl -u edo -f
+```
+- [ ] Порт задаётся `BACKEND_PORT` (прод — **8005**), совпадает с `proxy_pass` в nginx
+- [ ] `ExecStartPost` = `wait_for_backend.sh` → `systemctl start` падает, если API не отвечает
+- [ ] Флаг `--no-server-header` в `start_backend.sh` на месте — убирает `Server: uvicorn`
+- [ ] После `git pull` сервис перезапускается вручную: `sudo systemctl restart edo`
+
+Запуск вручную (`./deploy/start_backend.sh`) — только для отладки: процесс умрёт
+при обрыве SSH и не поднимется после перезагрузки.
+Логи: `journalctl -u edo`, а также `backend/logs/edo.log` (ротация 5 МБ × 5).
 
 ## 3. Фронтенд
 ```bash
@@ -46,6 +69,12 @@ npm run build       # используется .env.production (REACT_APP_API_UR
 Пересборка при переходе https↔http **не требуется**: API относительный (`/api`).
 
 ## 4. nginx
+- [ ] **Положить фрагмент с заголовками безопасности** (нужен обоим режимам HTTPS):
+      ```bash
+      sudo mkdir -p /etc/nginx/snippets
+      sudo cp deploy/nginx-snippets/edo-security-headers.conf /etc/nginx/snippets/
+      ```
+      Без него `nginx -t` упадёт с «open() … failed» — прод при этом не пострадает.
 - [ ] Выбрать режим и скопировать конфиг в `/etc/nginx/sites-available/edo`:
       - HTTPS (основной): `deploy/nginx.conf`
       - HTTP (без TLS):    `deploy/nginx-http.conf`
@@ -53,9 +82,19 @@ npm run build       # используется .env.production (REACT_APP_API_UR
 - [ ] `sudo nginx -t && sudo systemctl reload nginx`
 - [ ] Домен в `server_name` — `toredo.mroo-snpm.ru` (не `edo.ped-id.ru`, он устарел)
 - [ ] Для HTTPS: `sudo certbot --nginx -d toredo.mroo-snpm.ru`
+- [ ] **`proxy_pass` указывает на фактический порт бэкенда.** Прод-стенд — **8005**,
+      docker-вариант — 8000. Проверить: `ss -ltnp | grep ':800'` и
+      `grep proxy_pass /etc/nginx/sites-available/edo`. Рассинхрон = 502.
+- [ ] **`alias` для `/stamps/` совпадает со `settings.STAMPS_DIR`.** Без этого
+      блока штампы, загруженные через админку, отдают 404 (в FastAPI маршрута
+      `/stamps` нет — раздавать обязан nginx). Проверить:
+      `cd backend && ./venv/bin/python -c "from app.config import settings; print(settings.STAMPS_DIR)"`
+- [ ] **IP-ограничение админки на месте**: `location /admin { allow 31.41.60.0/24; deny all; }`.
+      Помните, что `/api/admin/*` этим блоком НЕ покрывается (только страница).
 - [ ] Проверить версию nginx: `nginx -v`.
-      `http2 on;` работает с 1.25.1; на 1.18 (Ubuntu 22.04) закомментируйте
-      эту строку и используйте `listen 443 ssl http2;` — иначе `nginx -t` упадёт.
+      `deploy/nginx.conf` использует `listen 443 ssl http2;` — работает на любой
+      версии. На nginx ≥ 1.25.1 можно перейти на `listen 443 ssl;` + `http2 on;`
+      (в конфиге есть комментарий).
 
 ## 5. Go GOST
 - [ ] Сервис запущен на порту 8080 (`go-gost-main`, systemd)
@@ -101,11 +140,40 @@ curl -s -D - -o /dev/null https://toredo.mroo-snpm.ru/api/health
 - [ ] `Server: uvicorn` / версия nginx:
       `curl -s -D - -o /dev/null https://toredo.mroo-snpm.ru/ | grep -i '^server'`
       Допустимо только `Server: nginx` без номера версии (`server_tokens off`).
-      Для этого бэкенд обязан стартовать с `--no-server-header` (см. start_backend.sh).
+      Для этого бэкенд обязан стартовать с `--no-server-header` (см. start_backend.sh),
+      а nginx — скрывать апстрим (`proxy_hide_header Server`).
 - [ ] `X-Powered-By`
 - [ ] `?token=` в ссылках скачивания файлов (JWT больше не ходит в URL)
 
-### 7.3 Сессионные cookie и CSRF
+> Заголовки отдают **и бэкенд** (middleware, на `/api/*`), **и nginx** (фрагмент
+> `edo-security-headers.conf`, на всё остальное). На `/api/*` они придут
+> дважды с одинаковыми значениями — это нормально и работает как «защита в
+> глубину»: nginx гарантирует их наличие даже на собственных 404/403.
+> Не пытайтесь «убрать дубли» через `proxy_hide_header` для `Cache-Control` —
+> именно бэкенд ставит `no-store` на API, и его потеря нежелательна.
+
+### 7.3 Проверки, которые делает только nginx
+
+```bash
+# Штампы: файл должен отдаваться с нашего домена, а не 404
+curl -s -o /dev/null -w "stamps: %{http_code}\n" \
+  https://toredo.mroo-snpm.ru/stamps/premium-stamp.png
+
+# Health check для мониторинга (nginx -> /api/health)
+curl -s https://toredo.mroo-snpm.ru/health
+
+# index.html не кэшируется (иначе ChunkLoadError после деплоя)
+curl -s -D - -o /dev/null https://toredo.mroo-snpm.ru/ | grep -i cache-control
+
+# Админка закрыта по IP: с чужого адреса должен быть 403
+curl -s -o /dev/null -w "admin: %{http_code}\n" https://toredo.mroo-snpm.ru/admin
+```
+- [ ] `/stamps/<файл>` → `200`, а не `404`
+- [ ] `/health` → `200` и тот же JSON, что `/api/health`
+- [ ] `index.html` отдаёт `Cache-Control: no-store, must-revalidate`
+- [ ] `/admin` с недоверенного IP → `403`
+
+### 7.4 Сессионные cookie и CSRF
 - [ ] В DevTools → Application → Cookies после входа видны:
       `edo_access` / `edo_refresh` — **HttpOnly**, Path `/api`, SameSite Lax
       `edo_session` — **не** HttpOnly, Path `/` (нужен SPA для проверки сессии)
@@ -117,7 +185,8 @@ curl -s -D - -o /dev/null https://toredo.mroo-snpm.ru/api/health
 - [ ] Пароли/секреты не лежат в git (`.env` в `.gitignore` — проверить!)
 - [ ] Реальные IP видны бэкенду (`--proxy-headers` включён)
 
-### 7.4 CSP — что она ломает, если не проверить
+### 7.5 CSP — что она ломает, если не проверить
+
 CSP (`Content-Security-Policy`) режет внешние ресурсы. Проверьте в браузере, что
 в консоли **нет** ошибок CSP, и обязательно:
 - [ ] **Предпросмотр PDF в «Документах»** открывается. Воркер pdf.js обязан
@@ -140,7 +209,9 @@ CSP (`Content-Security-Policy`) режет внешние ресурсы. Про
       *Delete domain security policies* (у каждого пользователя!).
 - [ ] `ESA_REDIRECT_URI` в `.env` и адрес в кабинете ЕИС → `http://…/api/auth/eis/callback`
       (значения обязаны совпадать посимвольно, иначе `redirect_uri_mismatch`)
-- [ ] Поставить `deploy/nginx-http.conf`, перезагрузить nginx
+- [ ] Поставить `deploy/nginx-http.conf`, перезагрузить nginx.
+      Фрагмент `edo-security-headers.conf` в HTTP-режиме **не нужен** — он
+      содержит HSTS, а в `nginx-http.conf` заголовки выписаны явно без него.
 - [ ] Проверить: `curl -s -D - -o /dev/null http://toredo.mroo-snpm.ru/api/health` → **нет** HSTS
 - [ ] Проверить вход, скачивание файлов и вход через ЕИС
 - [ ] Откат: вернуть `deploy/nginx.conf` и `ESA_REDIRECT_URI`
