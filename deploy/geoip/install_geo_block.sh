@@ -104,7 +104,8 @@ if ! grep -qE '^[[:space:]]*worker_processes' "$MAIN_CONF"; then
 Восстановите главный конфиг:
     sudo mv $MAIN_CONF $MAIN_CONF.wrong-copy
     # затем взять оригинал из пакета:
-    cd /tmp && apt-get download nginx && dpkg-deb -x nginx_*.deb nginx-pkg
+    cd /tmp && rm -rf nginx-pkg nginx_*.deb
+    apt-get download nginx && dpkg-deb -x nginx_*.deb nginx-pkg
     sudo cp /tmp/nginx-pkg/etc/nginx/nginx.conf $MAIN_CONF
     sudo nginx -t
 

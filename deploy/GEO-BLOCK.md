@@ -288,7 +288,8 @@ sudo cp -a /etc/nginx/nginx.conf /root/nginx-recovery/nginx.conf.wrong-copy
 sudo mv /etc/nginx/nginx.conf /etc/nginx/nginx.conf.wrong-copy
 
 # 3. вернуть оригинал из пакета nginx
-cd /tmp && apt-get download nginx && dpkg-deb -x nginx_*.deb nginx-pkg
+cd /tmp && rm -rf nginx-pkg nginx_*.deb
+apt-get download nginx && dpkg-deb -x nginx_*.deb nginx-pkg
 sudo cp /tmp/nginx-pkg/etc/nginx/nginx.conf /etc/nginx/nginx.conf
 
 # 4. проверить, что вернулись все три include
