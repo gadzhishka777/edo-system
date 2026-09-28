@@ -519,7 +519,44 @@ app = FastAPI(
     **_docs_kwargs,
 )
 
-# CORS
+# Безопасность: заголовки, CORS, гео-ограничение, CSRF.
+#
+# ВСЕ middleware регистрируются ЗДЕСЬ и в явном порядке — не разносите их
+# по файлу. В Starlette `add_middleware` вставляет в НАЧАЛО списка, поэтому
+# САМЫЙ ВНЕШНИЙ — тот, что добавлен ПОСЛЕДНИМ. Вызовы ниже идут в обратном
+# порядке относительно итоговой цепочки:
+#
+#     порядок вызовов:  CSRF -> GeoBlock -> CORS -> SecurityHeaders
+#     цепочка (внешний -> внутренний):
+#
+#         SecurityHeaders -> CORS -> GeoBlock -> CSRF -> роутер
+#
+# Почему именно так:
+#   - SecurityHeaders снаружи всех: ответ 403 от CSRF или от гео-блокировки
+#     тоже должен получить nosniff/X-Frame-Options/Content-Language. Если он
+#     окажется внутри них, отказ уйдёт «голым» — без заголовков безопасности.
+#   - CORS снаружи GeoBlock и CSRF: тогда отклонённый запрос всё равно получит
+#     Access-Control-Allow-Origin, и в браузере видно настоящую причину (403),
+#     а не замаскированную под CORS-ошибку.
+#   - GeoBlock снаружи CSRF: запрещённому клиенту незачем проходить
+#     CSRF-валидацию — иначе в лог уйдёт ложное «CSRF: отсутствует
+#     X-CSRF-Token» вместо честного «страна не разрешена».
+#   - CSRF снаружи роутера: проверка выполняется до бизнес-логики, ничего не
+#     создаётся и не меняется при подделке.
+#
+# ИСТОРИЯ: раньше CORS добавлялся выше по файлу (сразу после app = FastAPI).
+# Из-за вставки в начало списка фактическая цепочка получалась
+# SecurityHeaders -> CSRF -> CORS, то есть CORS оказывался ВНУТРИ CSRF, и
+# ответ 403 от CSRF уходил без CORS-заголовков — вопреки тому, что было
+# написано в комментарии. Порядок исправлен 2026-09-28.
+from app.core.middleware import (  # noqa: E402
+    CSRFMiddleware,
+    GeoBlockMiddleware,
+    SecurityHeadersMiddleware,
+)
+
+app.add_middleware(CSRFMiddleware)
+app.add_middleware(GeoBlockMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins,
@@ -527,26 +564,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-# Безопасность: заголовки + CSRF (двойной submit для cookie-сессий).
-#
-# ПОРЯДОК ВАЖЕН. В Starlette последний добавленный middleware оказывается
-# САМЫМ ВНЕШНИМ. Итоговая цепочка должна быть такой:
-#
-#     SecurityHeaders -> CORS -> CSRF -> роутер
-#
-# Почему именно так:
-#   - SecurityHeaders снаружи всех: его ответ 403 от CSRF тоже должен получить
-#     nosniff/X-Frame-Options/Content-Language. Если он окажется внутри CSRF,
-#     отказ уйдёт «голым» — без заголовков безопасности.
-#   - CORS снаружи CSRF: тогда отклонённый запрос всё равно получит
-#     Access-Control-Allow-Origin, и в браузере видно настоящую причину (403),
-#     а не замаскированную под CORS-ошибку.
-#   - CSRF снаружи роутера: проверка выполняется до бизнес-логики, ничего не
-#     создаётся и не меняется при подделке.
-from app.core.middleware import CSRFMiddleware, SecurityHeadersMiddleware  # noqa: E402
-
-app.add_middleware(CSRFMiddleware)
 app.add_middleware(SecurityHeadersMiddleware)
 
 # Роутеры

@@ -13,6 +13,7 @@
 Пошаговая выкладка на прод — **[PRODUCTION_CHECKLIST.md](PRODUCTION_CHECKLIST.md)**.
 Обновление уже работающего стенда — **[UPGRADE-0.6.1.md](UPGRADE-0.6.1.md)**,
 рунбук с командами — **[UPGRADE-0.6.1-COMMANDS.md](UPGRADE-0.6.1-COMMANDS.md)**.
+Гео-ограничение (только РФ / Беларусь / Казахстан) — **[GEO-BLOCK.md](GEO-BLOCK.md)**.
 Этот файл — про архитектуру и docker-вариант.
 
 ## Обновление стенда одной командой

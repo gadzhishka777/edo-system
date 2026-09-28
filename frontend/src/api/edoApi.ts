@@ -104,6 +104,21 @@ apiClient.interceptors.request.use((config) => {
   return config;
 });
 
+/**
+ * Ответ гео-ограничения (сервис доступен только в РФ / Беларуси / Казахстане).
+ *
+ * Признак приходит в двух видах, и оба нужно распознать:
+ *  - HTML-страница от nginx (deploy/geoip/geo-blocked.html) — когда блокировка
+ *    стоит на уровне сервера. В разметке есть маркер <meta name="edo-geo-block">.
+ *  - JSON от бэкенда (GeoBlockMiddleware) — когда запрос всё-таки дошёл до API.
+ */
+function isGeoBlockResponse(data: unknown): boolean {
+  if (typeof data === 'string') {
+    return data.includes('edo-geo-block');
+  }
+  return !!data && typeof data === 'object' && (data as { code?: string }).code === 'geo_blocked';
+}
+
 // Автоматическое обновление токена при 401
 let isRefreshing = false;
 let failedQueue: Array<{ resolve: (v: any) => void; reject: (e: any) => void; config: any }> = [];
@@ -116,6 +131,14 @@ apiClient.interceptors.response.use(
   },
   async (error) => {
     const originalRequest = error.config;
+
+    // Гео-ограничение. Проверяем ДО обработки 401: это тоже 403/401-подобный
+    // отказ, но повторный вход не поможет — клиент просто не в разрешённой
+    // стране. Поэтому сразу уводим на страницу-заглушку.
+    if (error.response?.status === 403 && isGeoBlockResponse(error.response.data)) {
+      window.location.replace('/geo-blocked.html');
+      return Promise.reject(error);
+    }
 
     // Если 401 и это не повторный запрос и не запрос на login/refresh
     if (

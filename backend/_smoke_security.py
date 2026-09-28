@@ -10,7 +10,9 @@
     с верным → проходит; чужой Origin → 403; Bearer без cookie — не блокируется;
   - X-Server-Time отдаётся и парсится как МСК (+03:00), /api/health не раскрывает версию;
   - /docs, /redoc, /openapi.json закрыты при DOCS_ENABLED=false;
-  - SSRF-защита загрузки штампа: приватные/loopback/нестандартные схемы отклоняются.
+  - SSRF-защита загрузки штампа: приватные/loopback/нестандартные схемы отклоняются;
+  - гео-ограничение (GeoBlockMiddleware): страна вне списка → 403 + code=geo_blocked,
+    разрешённые страны и /api/health проходят, порядок middleware (CORS снаружи).
 
 Работает на КОПИИ БД (_smoke_security.db), основную базу не трогает.
 Запуск из каталога backend/:
@@ -33,6 +35,11 @@ os.environ["DATABASE_URL"] = "sqlite+aiosqlite:///./_smoke_security.db"
 os.environ["DOCS_ENABLED"] = "false"
 # Смоук-логин идёт по http (TestClient) — Secure-cookie ставиться не должен.
 os.environ.pop("STAMP_URL_ALLOWED_HOSTS", None)
+# Гео-ограничение включаем: на проде оно работает, а без него раздел 9 ничего
+# не проверит. Остальным проверкам это не мешает — они не шлют X-Geo-Country,
+# а GEO_ALLOW_MISSING_HEADER=true пропускает запросы без заголовка.
+os.environ["GEO_BLOCK_ENABLED"] = "true"
+os.environ["GEO_ALLOWED_COUNTRIES"] = "RU,BY,KZ"
 
 from fastapi.testclient import TestClient  # noqa: E402
 from sqlalchemy import delete, select  # noqa: E402
@@ -253,6 +260,47 @@ for bad, why in (
     check(f"отклонён: {why}", _validate_stamp_url(bad) is False, bad)
 
 check("публичный https-URL разрешён", _validate_stamp_url("https://example.com/stamp.png") is True)
+
+# ===================== 9. ГЕО-ОГРАНИЧЕНИЕ =====================
+# На проде основную блокировку делает nginx (модуль geoip2) и отдаёт
+# deploy/geoip/geo-blocked.html. Здесь проверяется ВТОРАЯ линия обороны —
+# GeoBlockMiddleware по заголовку X-Geo-Country (его nginx проставляет сам).
+print("\n== 9. Гео-ограничение: только разрешённые страны ==")
+geo = TestClient(app, raise_server_exceptions=True)
+
+r_us = geo.get("/api/auth/me", headers={"X-Geo-Country": "US"})
+check("страна вне списка (US) → 403", r_us.status_code == 403, str(r_us.status_code))
+check("тело содержит code=geo_blocked",
+      isinstance(r_us.json(), dict) and r_us.json().get("code") == "geo_blocked", r_us.text[:120])
+check("отказ гео-блока тоже получил security-заголовки",
+      r_us.headers.get("x-content-type-options") == "nosniff",
+      str(r_us.headers.get("x-content-type-options")))
+
+# Порядок middleware: CORS должен стоять СНАРУЖИ GeoBlock, иначе отклонённый
+# запрос уходит без CORS-заголовков и в браузере это выглядит как CORS-ошибка,
+# а не как честный 403. Origin берём из дефолтного CORS_ORIGINS.
+r_cors = geo.get("/api/auth/me", headers={
+    "X-Geo-Country": "US",
+    "Origin": "http://localhost:3000",
+})
+check("403 гео-блока несёт Access-Control-Allow-Origin (CORS снаружи GeoBlock)",
+      r_cors.status_code == 403 and r_cors.headers.get("access-control-allow-origin") is not None,
+      f"{r_cors.status_code} {r_cors.headers.get('access-control-allow-origin')}")
+
+r_ru = geo.get("/api/auth/me", headers={"X-Geo-Country": "RU"})
+check("разрешённая страна (RU) → не 403", r_ru.status_code != 403, str(r_ru.status_code))
+r_by = geo.get("/api/auth/me", headers={"X-Geo-Country": "by"})
+check("регистр кода страны не важен (by)", r_by.status_code != 403, str(r_by.status_code))
+r_kz = geo.get("/api/auth/me", headers={"X-Geo-Country": "KZ"})
+check("разрешённая страна (KZ) → не 403", r_kz.status_code != 403, str(r_kz.status_code))
+r_xx = geo.get("/api/auth/me", headers={"X-Geo-Country": "XX"})
+check("страна не определилась (XX) → 403", r_xx.status_code == 403, str(r_xx.status_code))
+r_none = geo.get("/api/auth/me")
+check("без заголовка → пропускаем (GEO_ALLOW_MISSING_HEADER=true)",
+      r_none.status_code != 403, str(r_none.status_code))
+r_h = geo.get("/api/health", headers={"X-Geo-Country": "US"})
+check("health не блокируется даже из US (нужен systemd и мониторингу)",
+      r_h.status_code == 200, str(r_h.status_code))
 
 # ===================== ИТОГ =====================
 print("\n" + "=" * 60)

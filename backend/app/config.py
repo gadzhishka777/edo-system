@@ -80,7 +80,28 @@ class Settings(BaseSettings):
     # (он пытается JSON-декодировать complex-поля до применения env_parse).
     # Список — через property cors_origins.
     CORS_ORIGINS: str = "http://localhost:3000,http://127.0.0.1:3000,http://localhost:8000"
-    
+
+    # ===== Гео-ограничение: доступ только из РФ / Беларуси / Казахстана =====
+    # Основную блокировку делает nginx (модуль geoip2) и отдаёт страницу
+    # deploy/geoip/geo-blocked.html — см. deploy/GEO-BLOCK.md.
+    # Здесь — ВТОРАЯ ЛИНИЯ ОБОРОНЫ: если nginx-правило не сработало (не
+    # установлен модуль, устарела база, кто-то ходит на бэкенд напрямую),
+    # запрос всё равно не пройдёт.
+    #
+    # По умолчанию ВЫКЛЮЧЕНО: локальная разработка и тесты идут без заголовка
+    # X-Geo-Country, и включённая проверка отрезала бы их.
+    GEO_BLOCK_ENABLED: bool = os.getenv("GEO_BLOCK_ENABLED", "false").lower() in ("1", "true", "yes")
+    # Разрешённые страны: ISO 3166-1 alpha-2 через запятую.
+    GEO_ALLOWED_COUNTRIES: str = os.getenv("GEO_ALLOWED_COUNTRIES", "RU,BY,KZ")
+    # Заголовок, в котором nginx передаёт страну клиента.
+    # nginx перезаписывает его своим proxy_set_header — подделать снаружи нельзя.
+    GEO_COUNTRY_HEADER: str = os.getenv("GEO_COUNTRY_HEADER", "X-Geo-Country")
+    # Что делать, если заголовка НЕТ вообще (nginx без geoip2, прямой доступ
+    # к бэкенду, тесты):
+    #   true  — пропускать. «Мягкий» режим: сломанный geoip не роняет сервис.
+    #   false — запрещать. «Жёсткий» режим: без страны в заголовке доступа нет.
+    GEO_ALLOW_MISSING_HEADER: bool = os.getenv("GEO_ALLOW_MISSING_HEADER", "true").lower() in ("1", "true", "yes")
+
     # Режим демонстрации: подпись проверяется без обращения к ГОСТ-сервису.
     # Используется legacy-модулем app/signature.py.
     DEMO_MODE: bool = os.getenv("DEMO_MODE", "false").lower() in ("1", "true", "yes")
@@ -147,6 +168,16 @@ class Settings(BaseSettings):
     def cors_origins(self) -> list:
         """Разрешённые CORS-ориджины как список (парсит CORS_ORIGINS: запятая или JSON)."""
         return _parse_list_env(self.CORS_ORIGINS)
+
+    @property
+    def geo_allowed_countries(self) -> set:
+        """Разрешённые страны в верхнем регистре: {'RU','BY','KZ'}.
+
+        Множество, а не список: проверка на каждом запросе должна быть O(1).
+        Сравнение всегда в верхнем регистре — nginx отдаёт код страны как
+        'RU', но это не стоит считать гарантией.
+        """
+        return {c.strip().upper() for c in _parse_list_env(self.GEO_ALLOWED_COUNTRIES) if c.strip()}
 
     # ===== SMTP для отправки писем по обращениям =====
     SMTP_HOST: str = os.getenv("SMTP_HOST", "")

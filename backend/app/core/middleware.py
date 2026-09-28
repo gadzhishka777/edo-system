@@ -17,6 +17,15 @@ CSRFMiddleware — защита от межсайтовой подделки з�
 
 Запросы с Bearer-заголовком (без cookie) CSRF-проверкой не затрагиваются:
 Bearer-токен недоступен браузеру межсайтовым скриптам и не пересылается автоматически.
+
+GeoBlockMiddleware — вторая линия обороны гео-ограничения: API доступно только
+из разрешённых стран (по умолчанию РФ, Беларусь, Казахстан). Основную работу
+делает nginx (модуль geoip2 + deploy/nginx-snippets/edo-geo-block.conf), который
+вообще не пускает такого клиента до бэкенда. Здесь проверяется тот же признак —
+заголовок X-Geo-Country, который nginx проставляет сам. Смысл дубля: если
+правило в nginx не сработало (модуль не установлен, база устарела, кто-то
+обращается к бэкенду напрямую), данные всё равно не уйдут за пределы
+разрешённых стран. По умолчанию выключено — см. GEO_BLOCK_ENABLED в config.py.
 """
 import logging
 
@@ -105,3 +114,62 @@ class CSRFMiddleware(BaseHTTPMiddleware):
             )
 
         return await call_next(request)
+
+
+# Текст отказа гео-ограничения. Формулировка та же, что на странице-заглушке
+# deploy/geoip/geo-blocked.html — чтобы пользователь видел одну и ту же причину,
+# попал он на HTML-страницу от nginx или на JSON от API.
+GEO_BLOCK_DETAIL = (
+    "Доступ ограничен: сервис доступен только на территории "
+    "России, Беларуси и Казахстана."
+)
+
+
+class GeoBlockMiddleware(BaseHTTPMiddleware):
+    """Отклоняет запросы из стран вне GEO_ALLOWED_COUNTRIES.
+
+    Страну определяет nginx (модуль geoip2) и передаёт в заголовке
+    X-Geo-Country — см. deploy/nginx-snippets/edo-geo-block.conf.
+    Заголовок выставляется через `proxy_set_header`, который ПЕРЕЗАПИСЫВАЕТ
+    одноимённый заголовок клиента, поэтому подделать страну снаружи нельзя.
+
+    Код ответа 403 и поле `code` в теле: фронтенд по нему отличает
+    гео-ограничение от истёкшей сессии и уводит пользователя на
+    /geo-blocked.html (см. frontend/src/api/edoApi.ts).
+    """
+
+    async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
+        # Выключено — ведём себя как обычно (локальная разработка, тесты).
+        if not settings.GEO_BLOCK_ENABLED:
+            return await call_next(request)
+
+        path = request.url.path
+        # Middleware занимается только API: статику отдаёт nginx.
+        if not path.startswith(settings.API_PREFIX):
+            return await call_next(request)
+
+        # Health-check не блокируем: от него зависят systemd
+        # (ExecStartPost в edo-backend.service) и внешний мониторинг.
+        if path == f"{settings.API_PREFIX}/health":
+            return await call_next(request)
+
+        country = (request.headers.get(settings.GEO_COUNTRY_HEADER) or "").strip().upper()
+
+        if country and country in settings.geo_allowed_countries:
+            return await call_next(request)
+
+        # Заголовка нет вовсе. По умолчанию — пропускаем: иначе отсутствие
+        # geoip-модуля в nginx превратилось бы в полный отказ сервиса.
+        # Для «жёсткого» режима выставьте GEO_ALLOW_MISSING_HEADER=false.
+        if not country and settings.GEO_ALLOW_MISSING_HEADER:
+            return await call_next(request)
+
+        client = request.client.host if request.client else "?"
+        logger.warning(
+            "GeoBlock: отказ — страна=%s ip=%s %s %s",
+            country or "<заголовок отсутствует>", client, request.method, path,
+        )
+        return JSONResponse(
+            status_code=403,
+            content={"detail": GEO_BLOCK_DETAIL, "code": "geo_blocked"},
+        )
