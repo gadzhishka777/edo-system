@@ -18,7 +18,7 @@
 ## Обновление стенда одной командой
 
 ```bash
-cd /opt/edo
+cd /var/www/edo
 sudo ./deploy/upgrade.sh --check        # только посмотреть состояние, ничего не менять
 sudo ./deploy/upgrade.sh --backup-only  # только бэкап (без простоя)
 sudo ./deploy/upgrade.sh                # обновление: бэкап → стоп → git pull → новое venv
@@ -109,7 +109,7 @@ curl -s http://127.0.0.1:8000/api/health
 
 ## Управление бэкендом (bare metal)
 
-В репозитории есть готовый systemd-юнит — `deploy/edo.service`. Он вызывает
+В репозитории есть готовый systemd-юнит — `deploy/edo-backend.service`. Он вызывает
 `deploy/start_backend.sh` (то есть логика запуска не дублируется: скрипт сам
 находит venv и порт), добавляет автозапуск после перезагрузки, автоподъём после
 падения, логи в journald и проверку готовности по `/api/health`.
@@ -117,21 +117,21 @@ curl -s http://127.0.0.1:8000/api/health
 ```bash
 # Установка (один раз)
 chmod +x deploy/start_backend.sh deploy/wait_for_backend.sh
-sudo cp deploy/edo.service /etc/systemd/system/edo.service
+sudo cp deploy/edo-backend.service /etc/systemd/system/edo-backend.service
 sudo systemctl daemon-reload
-sudo systemctl enable --now edo
+sudo systemctl enable --now edo-backend
 
 # Эксплуатация
-systemctl status edo --no-pager
-journalctl -u edo -f                  # логи
-sudo systemctl restart edo            # ПОСЛЕ git pull — иначе код не подхватится
-sudo systemctl stop edo
+systemctl status edo-backend --no-pager
+journalctl -u edo-backend -f                  # логи
+sudo systemctl restart edo-backend            # ПОСЛЕ git pull — иначе код не подхватится
+sudo systemctl stop edo-backend
 ```
 
 - **Порт**: `BACKEND_PORT`, по умолчанию **8005**. Обязан совпадать с
   `proxy_pass` в nginx. Переопределение — в юните через `Environment=BACKEND_PORT=…`.
 - **venv**: скрипт сам находит `backend/venv` или `<корень проекта>/venv`.
-  Переопределение — `Environment=VENV_DIR=/opt/edo/venv`.
+  Переопределение — `Environment=VENV_DIR=/var/www/edo/venv`.
 - **Готовность**: `ExecStartPost` → `wait_for_backend.sh` ждёт `/api/health`
   до 30 с; если не дождался — юнит в состоянии `failed`.
 - **Сначала погасите ручной запуск** (`pkill -f "uvicorn app.main:app"`), иначе

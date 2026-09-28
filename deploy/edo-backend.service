@@ -1,0 +1,94 @@
+# ============================================================
+# systemd-юнит для бэкенда ТОР ЭДО.
+# Имя сервиса: edo-backend
+# Каталог проекта: /var/www/edo  (это ФАКТИЧЕСКИЙ путь на проде;
+#   в более ранних версиях этого файла было /var/www/edo — неверно)
+#
+# ЗАЧЕМ: запускать бэкенд в терминале на проде — плохо: процесс умрёт при
+# обрыве SSH, не поднимется после перезагрузки сервера и не попадёт в журнал.
+# Юнит решает всё это и не дублирует логику — он вызывает тот же скрипт,
+# который сам находит venv, порт и выставляет переменные окружения.
+#
+# УСТАНОВКА:
+#     sudo cp /var/www/edo/deploy/edo-backend.service /etc/systemd/system/edo-backend.service
+#     sudo systemctl daemon-reload
+#     sudo systemctl enable --now edo-backend
+#     systemctl status edo-backend
+#
+# ПРИМЕЧАНИЕ ПРО ЗАПУСК: скрипты вызываются явно через /bin/bash, а не как
+# `./start_backend.sh`. Так юнит не зависит от бита исполняемости (его легко
+# потерять при копировании через scp/rsync без -p или при редактировании
+# файла чужим редактором) и от shebang. На работу это не влияет никак.
+#
+# ЕСЛИ БЭКЕНД УЖЕ ЗАПУЩЕН ВРУЧНУЮ (tmux/screen/nohup) — сначала остановите
+# его, иначе будет конфликт за порт:
+#     sudo systemctl stop edo-backend
+#     sudo pkill -f "uvicorn app.main:app"     # только если порт всё ещё занят
+#     ss -ltnp | grep ':8005'                  # должно быть пусто
+#
+# ВАЖНО: НЕ останавливать сервис через pkill, пока юнит установлен — systemd
+# воспримет это как падение и поднимет процесс обратно.
+#
+# ПРОВЕРКА И УПРАВЛЕНИЕ:
+#     journalctl -u edo-backend -f          # логи в реальном времени
+#     sudo systemctl restart edo-backend    # перезапуск (после обновления кода)
+#     sudo systemctl stop edo-backend       # остановка
+#
+# ВАЖНО: юнит НЕ перезапускается автоматически при изменении кода. После
+# `git pull` + переключения venv нужно `sudo systemctl restart edo-backend`.
+# ============================================================
+
+[Unit]
+Description=ТОР ЭДО — backend (FastAPI/uvicorn)
+Documentation=file:/var/www/edo/deploy/UPGRADE-0.6.1-COMMANDS.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Рабочий каталог = backend/: app.config читает .env ОТНОСИТЕЛЬНО ТЕКУЩЕГО
+# каталога, поэтому именно здесь, а не /var/www/edo. Иначе настройки молча
+# уедут на дефолтные.
+WorkingDirectory=/var/www/edo/backend
+
+# Скрипт сам находит venv (backend/venv или /var/www/edo/venv), ставит
+# переменные окружения (APP_TIMEZONE, DOCS_ENABLED, UTF-8) и запускает uvicorn.
+ExecStart=/bin/bash /var/www/edo/deploy/start_backend.sh
+
+# Переопределения без правки скрипта — раскомментируйте при необходимости:
+Environment=BACKEND_PORT=8005
+# Environment=VENV_DIR=/var/www/edo/venv
+# Environment=LOG_LEVEL=INFO
+Environment=PYTHONUNBUFFERED=1
+
+# Готовность: ждём ответа /api/health (отдельный скрипт, чтобы не бороться
+# с раскрытием `$` в юните). Если приложение не поднялось за 30 с, юнит
+# помечается как failed — это сразу видно в `systemctl status edo-backend`,
+# а не молчаливое «запущено, но не работает».
+# Уберите строку, если проверка не нужна.
+ExecStartPost=/bin/bash /var/www/edo/deploy/wait_for_backend.sh
+
+# Автоподъём после падения и после перезагрузки сервера.
+Restart=always
+RestartSec=3
+
+# При остановке гасим всю группу процессов (uvicorn + воркеры),
+# иначе воркеры останутся держать порт.
+KillMode=mixed
+TimeoutStopSec=30
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=edo-backend
+
+# --- Пользователь ---
+# По умолчанию сервис работает от root — как и ручной запуск через sudo.
+# Чтобы понизить права, раскомментируйте User/Group И заранее отдайте владение
+# данным (SQLite, uploads, signed_docs, штампы — бэкенд в них пишет):
+#     sudo useradd --system --no-create-home edo
+#     sudo chown -R edo:edo /var/www/edo/backend /var/www/edo/frontend/public/stamps
+# User=edo
+# Group=edo
+
+[Install]
+WantedBy=multi-user.target

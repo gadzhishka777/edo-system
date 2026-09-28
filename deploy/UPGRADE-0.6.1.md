@@ -34,7 +34,7 @@
 ## 2. Предполётные проверки (можно заранее, днём)
 
 ```bash
-cd /opt/edo
+cd /var/www/edo
 
 # 2.1 Часовой пояс сервера — определяет, нужен ли сдвиг времени (шаг 5)
 timedatectl | grep -E "Time zone|synchronized"
@@ -66,10 +66,10 @@ BK=/root/backup/edo-$(date +%F_%H%M)
 mkdir -p "$BK"
 
 # База: только через .backup — у SQLite есть WAL, обычный cp даёт битый снимок
-sqlite3 /opt/edo/backend/edo.db ".backup '$BK/edo.db'"
+sqlite3 /var/www/edo/backend/edo.db ".backup '$BK/edo.db'"
 
 # Файлы
-tar -czf "$BK/files.tar.gz" -C /opt/edo/backend uploads signed_docs
+tar -czf "$BK/files.tar.gz" -C /var/www/edo/backend uploads signed_docs
 
 # Конфиги и текущая сборка фронтенда (нужны для отката)
 cp /etc/nginx/sites-available/edo "$BK/edo-nginx.conf"
@@ -87,7 +87,7 @@ ls -la "$BK"
 ### 4.1 Код
 
 ```bash
-cd /opt/edo
+cd /var/www/edo
 git pull
 ```
 
@@ -101,7 +101,7 @@ git pull
 до переключения. Так откат зависимостей сводится к смене пути.
 
 ```bash
-cd /opt/edo/backend
+cd /var/www/edo/backend
 python3.12 -m venv venv-061
 ./venv-061/bin/pip install --upgrade pip
 ./venv-061/bin/pip install -r requirements.txt
@@ -110,7 +110,7 @@ python3.12 -m venv venv-061
 **Проверка ДО остановки сервиса** — приложение должно импортироваться и отдать версию:
 
 ```bash
-cd /opt/edo/backend
+cd /var/www/edo/backend
 DOCS_ENABLED=false ./venv-061/bin/python -c \
   "import app.main as m; print('OK', m.app.version)"
 # ожидаем: OK 0.6.1
@@ -133,7 +133,7 @@ print('пароли: OK')
 ### 4.3 Переключение venv
 
 ```bash
-cd /opt/edo/backend
+cd /var/www/edo/backend
 mv venv venv-old && mv venv-061 venv
 ```
 
@@ -149,7 +149,7 @@ mv venv venv-old && mv venv-061 venv
 в релиз добавлена утилита:
 
 ```bash
-cd /opt/edo/backend
+cd /var/www/edo/backend
 
 # Проверить, что пароль действительно дефолтный
 ./venv/bin/python tools/set_admin_password.py --verify --password 'admin123'
@@ -183,21 +183,21 @@ timedatectl | grep "Time zone"
 
 ```bash
 TZ=Europe/Moscow date '+МСК сейчас: %Y-%m-%d %H:%M:%S'
-sqlite3 /opt/edo/backend/edo.db \
+sqlite3 /var/www/edo/backend/edo.db \
   "SELECT 'последнее событие: ' || MAX(created_at) FROM appeal_status_history;"
 ```
 
 ### 5.2 Остановить бэкенд
 
 ```bash
-systemctl stop edo          # или Ctrl+C в терминале с start_backend.sh
-systemctl status edo        # убедиться, что остановлен
+systemctl stop edo-backend          # или Ctrl+C в терминале с start_backend.sh
+systemctl status edo-backend        # убедиться, что остановлен
 ```
 
 ### 5.3 Равномерный сдвиг (сервер был в UTC)
 
 ```bash
-cd /opt/edo/backend
+cd /var/www/edo/backend
 export DATABASE_URL="sqlite+aiosqlite:///./edo.db"
 
 # Сначала посмотреть план — ничего не меняет
@@ -215,7 +215,7 @@ export DATABASE_URL="sqlite+aiosqlite:///./edo.db"
 Сдвигайте по колонкам, предварительно посмотрев план:
 
 ```bash
-cd /opt/edo/backend
+cd /var/www/edo/backend
 ./venv/bin/python tools/shift_db_times_to_msk.py \
   --only appeals.created_at,appeal_status_history.created_at   # план
 ./venv/bin/python tools/shift_db_times_to_msk.py --apply \
@@ -241,9 +241,9 @@ sudo cp /etc/nginx/sites-available/edo /etc/nginx/sites-available/edo.bak
 
 # Фрагмент с заголовками безопасности — НОВЫЙ файл, без него nginx -t упадёт
 sudo mkdir -p /etc/nginx/snippets
-sudo cp /opt/edo/deploy/nginx-snippets/edo-security-headers.conf /etc/nginx/snippets/
+sudo cp /var/www/edo/deploy/nginx-snippets/edo-security-headers.conf /etc/nginx/snippets/
 
-sudo cp /opt/edo/deploy/nginx.conf /etc/nginx/sites-available/edo
+sudo cp /var/www/edo/deploy/nginx.conf /etc/nginx/sites-available/edo
 ```
 
 **Обязательно проверьте в скопированном файле:**
@@ -264,7 +264,7 @@ sudo cp /opt/edo/deploy/nginx.conf /etc/nginx/sites-available/edo
    штампы, загруженные через админку, отдавали 404 (в FastAPI маршрута `/stamps`
    нет — раздавать обязан nginx). Проверить значение:
    ```bash
-   cd /opt/edo/backend && ./venv/bin/python -c \
+   cd /var/www/edo/backend && ./venv/bin/python -c \
      "from app.config import settings; print(settings.STAMPS_DIR)"
    ```
 6. **`proxy_pass http://127.0.0.1:8005;`** — ваш порт. Должен совпадать с
@@ -295,9 +295,9 @@ sudo nginx -t && sudo systemctl reload nginx
 ## 7. Запуск бэкенда
 
 ```bash
-cd /opt/edo
+cd /var/www/edo
 ./deploy/start_backend.sh
-# либо: systemctl start edo && journalctl -u edo -f
+# либо: systemctl start edo-backend && journalctl -u edo-backend -f
 ```
 
 Порт задаётся переменной `BACKEND_PORT` (по умолчанию **8005** — как на проде).
@@ -325,7 +325,7 @@ ss -ltnp | grep ':8005'
 ## 8. Фронтенд
 
 ```bash
-cd /opt/edo/frontend
+cd /var/www/edo/frontend
 npm ci
 npm run build
 ```
@@ -340,12 +340,12 @@ ls -la build/pdf.worker.min.js      # должен быть ~1 МБ
 Выложить сборку (важно: `--delete`, иначе останутся старые хэшированные чанки):
 
 ```bash
-sudo rsync -a --delete /opt/edo/frontend/build/ /var/www/edo/frontend/build/
+sudo rsync -a --delete /var/www/edo/frontend/build/ /var/www/edo/frontend/build/
 sudo chown -R www-data:www-data /var/www/edo/frontend/build
 ```
 
 Перед выкладкой **убедитесь, что вы не затираете `stamps`**: в bare-metal-схеме
-штампы лежат в `/opt/edo/frontend/public/stamps/` и раздаются отдельным `alias` —
+штампы лежат в `/var/www/edo/frontend/public/stamps/` и раздаются отдельным `alias` —
 каталог `/var/www/edo/frontend/build` их не содержит, так что `--delete` безопасен.
 Если у вас штампы лежат внутри `build/` — сначала перенесите их.
 
@@ -355,7 +355,7 @@ sudo chown -R www-data:www-data /var/www/edo/frontend/build
 
 ```bash
 # 9.1 Автотесты слоя безопасности
-cd /opt/edo/backend && ./venv/bin/python _smoke_security.py
+cd /var/www/edo/backend && ./venv/bin/python _smoke_security.py
 # ожидаем: ВСЕ ПРОВЕРКИ ПРОЙДЕНЫ
 
 # 9.2 Заголовки вживую (именно GET: curl -I шлёт HEAD, FastAPI отвечает 405)
@@ -391,15 +391,15 @@ curl -s -D - -o /dev/null https://toredo.mroo-snpm.ru/ | grep -i '^server'
 
 ```bash
 # 10.1 Код
-cd /opt/edo && git reset --hard <прошлый-коммит>
+cd /var/www/edo && git reset --hard <прошлый-коммит>
 
 # 10.2 Зависимости
 cd backend && mv venv venv-061 && mv venv-old venv
 
 # 10.3 База (ТОЛЬКО если уже применили сдвиг времени)
-systemctl stop edo
-sqlite3 "$BK/edo.db" ".restore /opt/edo/backend/edo.db"
-systemctl start edo
+systemctl stop edo-backend
+sqlite3 "$BK/edo.db" ".restore /var/www/edo/backend/edo.db"
+systemctl start edo-backend
 
 # 10.4 nginx и фронтенд
 sudo cp "$BK/edo-nginx.conf" /etc/nginx/sites-available/edo
@@ -410,7 +410,7 @@ sudo rsync -a --delete "$BK/build/" /var/www/edo/frontend/build/
 Откат сдвига времени можно сделать и «в лоб», не разворачивая бэкап:
 
 ```bash
-cd /opt/edo/backend
+cd /var/www/edo/backend
 ./venv/bin/python tools/shift_db_times_to_msk.py --apply --hours -3
 ```
 

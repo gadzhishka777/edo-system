@@ -2,8 +2,8 @@
 # ============================================================
 # Ждёт готовности бэкенда ТОР ЭДО.
 #
-# Используется как `ExecStartPost` в deploy/edo.service: благодаря этому
-# `systemctl start edo` завершается успешно только когда API реально отвечает,
+# Используется как `ExecStartPost` в deploy/edo-backend.service: благодаря этому
+# `systemctl start edo-backend` завершается успешно только когда API реально отвечает,
 # а не просто когда процесс запустился. Иначе легко получить «сервис активен,
 # а сайт отдаёт 502».
 #
@@ -31,5 +31,5 @@ for i in $(seq 1 "$TIMEOUT"); do
 done
 
 echo "ОШИБКА: $URL не ответил за ${TIMEOUT} с" >&2
-echo "Смотрите логи: journalctl -u edo -n 50 --no-pager" >&2
+echo "Смотрите логи: journalctl -u edo-backend -n 50 --no-pager" >&2
 exit 1

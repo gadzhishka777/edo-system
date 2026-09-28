@@ -19,7 +19,7 @@
 # создаётся backend/venv. Переопределить вручную: VENV_DIR=/path/to/venv ./...
 #
 # Запуск:  ./start_backend.sh
-# Остановка: Ctrl+C или systemctl stop edo (при использовании systemd)
+# Остановка: Ctrl+C или systemctl stop edo-backend (при использовании systemd)
 # ============================================================
 set -e
 cd "$(dirname "$0")/../backend"

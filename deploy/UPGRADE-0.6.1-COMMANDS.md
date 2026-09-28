@@ -1,7 +1,7 @@
 # ТОР ЭДО 0.6.1 → прод: конкретные команды
 
 Рунбук для копипаста. Дополняет `deploy/UPGRADE-0.6.1.md` (там — «почему»,
-здесь — «что именно вводить»). Домен: **toredo.mroo-snpm.ru**, каталог: `/opt/edo`.
+здесь — «что именно вводить»). Домен: **toredo.mroo-snpm.ru**, каталог: `/var/www/edo`.
 
 **Обозначения:** 🖥️ — на рабочей машине (Windows), 🐧 — на сервере.
 Всё, что в блоке 🐧, выполняется по порядку в одной SSH-сессии.
@@ -23,7 +23,7 @@
 на экран остаток — шаги 7–13 этого файла с готовыми командами.
 
 ```bash
-cd /opt/edo
+cd /var/www/edo
 
 sudo ./deploy/upgrade.sh --check        # 1. только посмотреть состояние, ничего не менять
 sudo ./deploy/upgrade.sh --backup-only  # 2. по желанию: только бэкап, без простоя
@@ -105,7 +105,7 @@ git status -sb                       # должно быть "## main...origin/m
 рядом с текущим, чтобы переключение было обычным `mv` в том же каталоге.
 
 ```bash
-PROJ=/opt/edo
+PROJ=/var/www/edo
 BEND="$PROJ/backend"          # здесь лежат app/, edo.db, tools/, requirements.txt
 
 cd "$PROJ"
@@ -148,9 +148,9 @@ fi
 > **Если бэкенд поднимается systemd-юнитом** — проверьте, что он указывает на
 > фактический путь, и НЕ переносите venv:
 > ```bash
-> sudo systemctl cat edo 2>/dev/null | grep -E "ExecStart|WorkingDirectory"
+> sudo systemctl cat edo-backend 2>/dev/null | grep -E "ExecStart|WorkingDirectory"
 > ```
-> Если юнит ссылается на `/opt/edo/venv/bin/uvicorn`, а вы оставили venv в корне
+> Если юнит ссылается на `/var/www/edo/venv/bin/uvicorn`, а вы оставили venv в корне
 > — всё сходится, менять нечего. Если ссылается на `backend/venv`, а venv в корне
 > — либо поправьте юнит, либо перенесите каталог (и то и другое один раз).
 
@@ -227,7 +227,7 @@ sqlite3 "$BK/edo.db" "SELECT COUNT(*) FROM admin_users;"
 Время с этого момента — простой.
 
 ```bash
-sudo systemctl stop edo 2>/dev/null || pkill -f "uvicorn app.main:app"
+sudo systemctl stop edo-backend 2>/dev/null || pkill -f "uvicorn app.main:app"
 
 # Убедиться, что порт свободен (пусто = остановлен).
 # 8005 — порт прод-стенда, он же должен быть в proxy_pass nginx (шаг 9).
@@ -235,7 +235,7 @@ ss -ltnp | grep ':8005' || echo "8005 свободен"
 
 # Если сервис был включён в автозапуск — на время окна снимем автоподъём,
 # иначе systemd поднимет его обратно (Restart=always) прямо во время работ.
-sudo systemctl is-enabled edo 2>/dev/null
+sudo systemctl is-enabled edo-backend 2>/dev/null
 ```
 
 > Фронтенд пока продолжает отдаваться nginx — пользователи увидят ошибку API.
@@ -244,7 +244,7 @@ sudo systemctl is-enabled edo 2>/dev/null
 > **Про `Restart=always`:** если юнит уже стоит, `systemctl stop` его остановит
 > штатно (автоподъём не сработает — он только для аварийного завершения). Но
 > `pkill` systemd воспримет как падение и поднимет сервис заново. Поэтому при
-> установленном юните останавливайте именно через `systemctl stop edo`, а не
+> установленном юните останавливайте именно через `systemctl stop edo-backend`, а не
 > через `pkill`.
 
 ---
@@ -274,14 +274,14 @@ ls -la backend/app/core/cookies.py backend/app/core/middleware.py \
        backend/tools/set_admin_password.py \
        deploy/nginx.conf deploy/nginx-http.conf \
        deploy/nginx-snippets/edo-security-headers.conf \
-       deploy/edo.service deploy/wait_for_backend.sh \
+       deploy/edo-backend.service deploy/wait_for_backend.sh \
        frontend/scripts/copy-pdf-worker.js
 ```
 
 Все 12 файлов должны существовать — это и есть «ядро» релиза.
 Новые файлы, которые надо будет установить на шаге 9.2 и 11:
 `deploy/nginx-snippets/edo-security-headers.conf` → `/etc/nginx/snippets/`,
-`deploy/edo.service` → `/etc/systemd/system/edo.service`.
+`deploy/edo-backend.service` → `/etc/systemd/system/edo-backend.service`.
 
 ---
 
@@ -378,7 +378,7 @@ echo "VENV = $VENV"
 проверьте в нём путь к python:
 
 ```bash
-sudo systemctl cat edo 2>/dev/null | grep -E "ExecStart|WorkingDirectory|Environment"
+sudo systemctl cat edo-backend 2>/dev/null | grep -E "ExecStart|WorkingDirectory|Environment"
 ```
 
 > Убедитесь, что запущен именно новый интерпретатор: `ps aux | grep uvicorn`
@@ -588,10 +588,10 @@ sudo cp /etc/nginx/sites-available/edo /etc/nginx/sites-available/edo.pre-061
 
 # 9.2 Положить фрагмент с заголовками безопасности (новый файл!)
 sudo mkdir -p /etc/nginx/snippets
-sudo cp /opt/edo/deploy/nginx-snippets/edo-security-headers.conf /etc/nginx/snippets/
+sudo cp /var/www/edo/deploy/nginx-snippets/edo-security-headers.conf /etc/nginx/snippets/
 
 # 9.3 Положить основной конфиг
-sudo cp /opt/edo/deploy/nginx.conf /etc/nginx/sites-available/edo
+sudo cp /var/www/edo/deploy/nginx.conf /etc/nginx/sites-available/edo
 ```
 
 > Заголовки безопасности вынесены в подключаемый фрагмент, потому что nginx
@@ -620,9 +620,9 @@ sudo grep -nE "server_name|ssl_certificate |include |root |alias |listen 443|pro
    он задаёт `ssl_protocols`/`ssl_ciphers`/`ssl_session_*`. **Не добавляйте
    эти директивы рядом** — nginx упадёт с «duplicate directive».
 4. **`root`** = `/var/www/edo/frontend/build` (ваш путь, сохранён).
-5. **`alias /opt/edo/frontend/public/stamps/`** — каталог штампов. Должен
+5. **`alias /var/www/edo/frontend/public/stamps/`** — каталог штампов. Должен
    совпадать с `settings.STAMPS_DIR`; узнать фактическое значение:
-   `cd /opt/edo/backend && ./venv/bin/python -c "from app.config import settings; print(settings.STAMPS_DIR)"`
+   `cd /var/www/edo/backend && ./venv/bin/python -c "from app.config import settings; print(settings.STAMPS_DIR)"`
    ⚠️ **Этого блока не было в вашем конфиге** — см. примечание ниже.
 6. **`proxy_pass http://127.0.0.1:8005;`** — порт вашего бэкенда (сохранён).
    Должен совпадать с фактически запущенным uvicorn (шаг 11).
@@ -692,7 +692,7 @@ grep -c "pdf.worker.min.js" build/static/js/*.js | grep -v ':0' | head -3
 Выложить (важно `--delete`: иначе останутся старые хэшированные чанки):
 
 ```bash
-sudo rsync -a --delete /opt/edo/frontend/build/ /var/www/edo/frontend/build/
+sudo rsync -a --delete /var/www/edo/frontend/build/ /var/www/edo/frontend/build/
 sudo chown -R www-data:www-data /var/www/edo/frontend/build
 
 # Проверка
@@ -701,7 +701,7 @@ ls /var/www/edo/frontend/build/index.html
 ```
 
 > Перед `--delete` убедитесь, что штампы лежат **не** в `build/`, а раздаются
-> отдельным `alias` из `/opt/edo/frontend/public/stamps/`. Иначе `--delete`
+> отдельным `alias` из `/var/www/edo/frontend/public/stamps/`. Иначе `--delete`
 > их снесёт. Проверка: `ls /var/www/edo/frontend/build/stamps 2>/dev/null`.
 
 ---
@@ -710,7 +710,7 @@ ls /var/www/edo/frontend/build/index.html
 
 ### Вариант А (рекомендуется): systemd
 
-В репозитории есть готовый юнит — `deploy/edo.service`. Он вызывает тот же
+В репозитории есть готовый юнит — `deploy/edo-backend.service`. Он вызывает тот же
 `start_backend.sh` (то есть не дублирует логику: venv, порт, переменные), но
 добавляет автозапуск после перезагрузки, автоподъём после падения, логи в
 journald и проверку готовности через `/api/health`.
@@ -718,7 +718,7 @@ journald и проверку готовности через `/api/health`.
 **Сначала остановите ручной запуск**, иначе конфликт за порт 8005:
 
 ```bash
-sudo systemctl stop edo 2>/dev/null
+sudo systemctl stop edo-backend 2>/dev/null
 pkill -f "uvicorn app.main:app" 2>/dev/null
 ss -ltnp | grep ':8005' || echo "8005 свободен"
 ```
@@ -727,18 +727,18 @@ ss -ltnp | grep ':8005' || echo "8005 свободен"
 
 ```bash
 chmod +x "$PROJ/deploy/start_backend.sh" "$PROJ/deploy/wait_for_backend.sh"
-sudo cp "$PROJ/deploy/edo.service" /etc/systemd/system/edo.service
+sudo cp "$PROJ/deploy/edo-backend.service" /etc/systemd/system/edo-backend.service
 sudo systemctl daemon-reload
-sudo systemctl enable --now edo
-systemctl status edo --no-pager
+sudo systemctl enable --now edo-backend
+systemctl status edo-backend --no-pager
 ```
 
 Логи и управление:
 
 ```bash
-journalctl -u edo -f              # в реальном времени
-journalctl -u edo -n 100 --no-pager
-sudo systemctl restart edo        # после обновления кода
+journalctl -u edo-backend -f              # в реальном времени
+journalctl -u edo-backend -n 100 --no-pager
+sudo systemctl restart edo-backend        # после обновления кода
 ```
 
 > `ExecStartPost` ждёт ответа `/api/health` до 30 с. Если приложение не поднялось,
@@ -747,7 +747,62 @@ sudo systemctl restart edo        # после обновления кода
 > Проверить готовность вручную: `BACKEND_PORT=8005 "$PROJ/deploy/wait_for_backend.sh"`
 
 > **`git pull` сам по себе НЕ перезапускает сервис.** После обновления кода и
-> переключения venv обязательно `sudo systemctl restart edo`.
+> переключения venv обязательно `sudo systemctl restart edo-backend`.
+
+#### Если в логах `Failed to execute .../venv/bin/uvicorn: No such file or directory`
+
+Это самая частая ошибка после переключения окружения. Юнит запускает uvicorn
+**по жёсткому пути**, и если venv переехал (или его переключили в другом
+каталоге) — путь перестаёт существовать:
+
+```
+edo-backend.service: Failed to execute /var/www/edo/backend/venv/bin/uvicorn:
+No such file or directory
+```
+
+Тот же текст появляется и в другом случае: файл `venv/bin/uvicorn` есть, но
+**сломан shebang** внутри него (в первой строке прописан python, которого больше
+нет — типично после переноса/копирования venv).
+
+Что делать:
+
+```bash
+# 1. Где venv на самом деле и работает ли в нём uvicorn
+ls -d /var/www/edo/venv /var/www/edo/backend/venv* 2>/dev/null
+for v in /var/www/edo/backend/venv /var/www/edo/venv; do
+    [ -x "$v/bin/python" ] && echo "$v -> $("$v/bin/python" -m uvicorn --version 2>&1)"
+done
+
+# 2. Что прописано в юните
+systemctl cat edo-backend | grep -E 'ExecStart|WorkingDirectory'
+
+# 3. Найти uvicorn в найденном venv
+/var/www/edo/venv/bin/python -m uvicorn --version
+```
+
+**Правильное решение — не править путь в юните, а перейти на `start_backend.sh`**,
+который сам находит venv в обеих раскладках и не сломается при следующем
+переключении:
+
+```bash
+sudo systemctl stop edo-backend
+sudo cp /var/www/edo/deploy/edo-backend.service /etc/systemd/system/edo-backend.service
+sudo systemctl daemon-reload
+sudo systemctl start edo-backend
+sleep 3
+systemctl status edo-backend --no-pager | head -15
+```
+
+Если uvicorn вообще не найден ни в одном venv — зависимости не установлены:
+
+```bash
+cd /var/www/edo/backend
+../venv/bin/pip install -r requirements.txt    # или ./venv/bin/pip, если venv внутри backend
+```
+
+> **Почему так вышло:** venv переносили, а юнит ссылался на старое место.
+> Не переносите venv, если юнит уже установлен: `systemctl cat edo-backend |
+> grep ExecStart` покажет, на что он рассчитывает.
 
 ### Вариант Б: запуск вручную (только для отладки)
 
@@ -766,7 +821,7 @@ cd "$PROJ"
 
 ```bash
 grep -n "no-server-header\|APP_TIMEZONE\|PYTHONIOENCODING\|BACKEND_PORT" "$PROJ/deploy/start_backend.sh"
-sudo systemctl cat edo 2>/dev/null | grep -E "ExecStart|Environment"
+sudo systemctl cat edo-backend 2>/dev/null | grep -E "ExecStart|Environment"
 ```
 
 Живость (порт прод-стенда — **8005**, не 8000):
@@ -843,7 +898,7 @@ cd "$PROJ" && git reset --hard <коммит-из-шага-1.7>
 cd "$(dirname "$VENV")" && mv venv venv-061 && mv venv-old venv
 
 # 13.3 База — ТОЛЬКО если уже применили сдвиг времени
-sudo systemctl stop edo 2>/dev/null || pkill -f "uvicorn app.main:app"
+sudo systemctl stop edo-backend 2>/dev/null || pkill -f "uvicorn app.main:app"
 sqlite3 "$BK/edo.db" ".restore $BEND/edo.db"
 cp "$BK/backend.env" "$BEND/.env"
 
@@ -883,7 +938,7 @@ du -sh "$(dirname "$VENV")/venv-old"
 
 # 14.4 Настроить ежедневный бэкап, если ещё не
 crontab -l 2>/dev/null | grep edo || \
-  echo '0 3 * * * /opt/edo/deploy/backup.sh >> /var/log/edo-backup.log 2>&1' | crontab -
+  echo '0 3 * * * /var/www/edo/deploy/backup.sh >> /var/log/edo-backup.log 2>&1' | crontab -
 ```
 
 ---
@@ -903,10 +958,10 @@ crontab -l 2>/dev/null | grep edo || \
 | `/etc/nginx/sites-available/edo` | `edo.ped-id.ru` | `toredo.mroo-snpm.ru` + HTTP/2 + CSP + HSTS |
 | `/etc/nginx/snippets/edo-security-headers.conf` | *(файла не было)* | **новый**: заголовки безопасности, CSP, HSTS |
 | `proxy_pass` в nginx | `127.0.0.1:8005` | **без изменений** (порт сохранён) |
-| `location /stamps/` | *(отсутствовал — 404)* | `alias /opt/edo/frontend/public/stamps/` |
+| `location /stamps/` | *(отсутствовал — 404)* | `alias /var/www/edo/frontend/public/stamps/` |
 | `location /admin` | `allow 31.41.60.0/24` | **без изменений** |
 | venv (`backend/venv` **или** `venv/` в корне) | старые версии пакетов | новый venv по `requirements.txt` |
-| `/etc/systemd/system/edo.service` | *(файла не было — запуск вручную)* | **новый**: автозапуск, автоподъём, readiness-проверка |
+| `/etc/systemd/system/edo-backend.service` | *(файла не было — запуск вручную)* | **новый**: автозапуск, автоподъём, readiness-проверка |
 | `BACKEND_PORT` | 8000 (дефолт скрипта) | **8005** (совпадает с nginx) |
 | `admin_users.hashed_password` | хеш `admin123` | сгенерированный пароль (шаг 8) |
 | время в БД | UTC / смешанное | МСК (шаг 7) |
@@ -916,7 +971,7 @@ crontab -l 2>/dev/null | grep edo || \
 ```bash
 # на сервере, всё вместе (без шага 1.0 — переменные определяются на месте).
 # Понимает ОБЕ раскладки venv: backend/venv и <корень>/venv.
-PROJ=/opt/edo; BEND="$PROJ/backend"; cd "$PROJ"
+PROJ=/var/www/edo; BEND="$PROJ/backend"; cd "$PROJ"
 if   [ -f "$BEND/venv/bin/python" ]; then VENV="$BEND/venv"
 elif [ -f "$PROJ/venv/bin/python" ]; then VENV="$PROJ/venv"
 else echo "venv не найден"; exit 1; fi
@@ -928,7 +983,7 @@ BK=/root/backup/edo-$(date +%F_%H%M) && mkdir -p "$BK" \
  && tar -czf "$BK/files.tar.gz" -C "$BEND" uploads signed_docs \
  && cp "$BEND/.env" "$BK/backend.env" && cp /etc/nginx/sites-available/edo "$BK/edo-nginx.conf" \
  && cp -r /var/www/edo/frontend/build "$BK/build" && echo "BACKUP OK: $BK" \
- && (sudo systemctl stop edo 2>/dev/null || pkill -f "uvicorn app.main:app") \
+ && (sudo systemctl stop edo-backend 2>/dev/null || pkill -f "uvicorn app.main:app") \
  && git pull origin main \
  && cd "$BEND" && python3.12 -m venv "$VENV_NEW" \
  && "$VENV_NEW/bin/pip" install -q -r requirements.txt \

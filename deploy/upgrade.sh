@@ -17,7 +17,7 @@
 #    по шагам и с готовыми командами.
 #
 #  ЗАПУСК (одна команда):
-#      cd /opt/edo && sudo ./deploy/upgrade.sh
+#      cd /var/www/edo && sudo ./deploy/upgrade.sh
 #
 #  ДРУГИЕ РЕЖИМЫ:
 #      ./deploy/upgrade.sh --check     только посмотреть состояние, ничего не менять
@@ -73,7 +73,8 @@ PROJ="$(cd "$SCRIPT_DIR/.." && pwd)"
 BEND="$PROJ/backend"                 # код всегда здесь, независимо от venv
 BACKUP_ROOT="$PROJ/backups"
 LAST_BACKUP_FILE="$BACKUP_ROOT/last-upgrade.path"
-SERVICE_NAME="edo"
+SERVICE_NAME="${SERVICE_NAME:-edo-backend}"   # так юнит называется на проде
+SERVICE_NAME_ALT="edo"                        # прежнее/альтернативное имя
 BACKEND_PORT="${PORT_OVERRIDE:-${BACKEND_PORT:-8005}}"
 
 STAMP="$(date +%Y-%m-%d_%H-%M-%S)"
@@ -178,6 +179,32 @@ if [ -z "$PYBIN" ]; then
         if have "$c"; then PYBIN="$c"; break; fi
     done
 fi
+
+# Имя юнита на разных стендах отличается (на проде — edo-backend, в старых
+# документах — edo). Определяем по факту: приоритет у юнита, чей ExecStart
+# ссылается на НАШ каталог проекта.
+detect_service() {
+    have systemctl || return 0
+    local units
+    units="$(systemctl list-unit-files 2>/dev/null || true)"
+    local u out
+    for u in "$SERVICE_NAME" "$SERVICE_NAME_ALT"; do
+        case "$units" in
+            *"${u}.service"*)
+                out="$(systemctl cat "$u" 2>/dev/null || true)"
+                case "$out" in
+                    *"$PROJ"*) SERVICE_NAME="$u"; return 0 ;;
+                esac ;;
+        esac
+    done
+    for u in "$SERVICE_NAME" "$SERVICE_NAME_ALT"; do
+        case "$units" in
+            *"${u}.service"*) SERVICE_NAME="$u"; return 0 ;;
+        esac
+    done
+    return 0
+}
+detect_service
 
 have_systemd_unit() {
     have systemctl || return 1

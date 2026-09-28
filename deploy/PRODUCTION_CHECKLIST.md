@@ -3,7 +3,7 @@
 > **Обновляете уже работающий стенд?** Не начинайте с этого файла — сначала
 > **[UPGRADE-0.6.1.md](UPGRADE-0.6.1.md)**: там порядок действий, откат и нюансы
 > именно перехода на текущую версию (cookie-сессии, время, зависимости).
-> Самый быстрый путь — один скрипт: `cd /opt/edo && sudo ./deploy/upgrade.sh`
+> Самый быстрый путь — один скрипт: `cd /var/www/edo && sudo ./deploy/upgrade.sh`
 > (сначала `--check`, чтобы посмотреть состояние). Он делает бэкап, `git pull`
 > и новое окружение, затем печатает остаток шагов. Ручной вариант с готовыми
 > командами — **[UPGRADE-0.6.1-COMMANDS.md](UPGRADE-0.6.1-COMMANDS.md)**.
@@ -44,20 +44,20 @@ cp .env .env.local   # резервная копия текущего
 ### 2.1 Запуск через systemd (рекомендуется)
 ```bash
 chmod +x deploy/start_backend.sh deploy/wait_for_backend.sh
-sudo cp deploy/edo.service /etc/systemd/system/edo.service
+sudo cp deploy/edo-backend.service /etc/systemd/system/edo-backend.service
 sudo systemctl daemon-reload
-sudo systemctl enable --now edo
-systemctl status edo --no-pager
-journalctl -u edo -f
+sudo systemctl enable --now edo-backend
+systemctl status edo-backend --no-pager
+journalctl -u edo-backend -f
 ```
 - [ ] Порт задаётся `BACKEND_PORT` (прод — **8005**), совпадает с `proxy_pass` в nginx
 - [ ] `ExecStartPost` = `wait_for_backend.sh` → `systemctl start` падает, если API не отвечает
 - [ ] Флаг `--no-server-header` в `start_backend.sh` на месте — убирает `Server: uvicorn`
-- [ ] После `git pull` сервис перезапускается вручную: `sudo systemctl restart edo`
+- [ ] После `git pull` сервис перезапускается вручную: `sudo systemctl restart edo-backend`
 
 Запуск вручную (`./deploy/start_backend.sh`) — только для отладки: процесс умрёт
 при обрыве SSH и не поднимется после перезагрузки.
-Логи: `journalctl -u edo`, а также `backend/logs/edo.log` (ротация 5 МБ × 5).
+Логи: `journalctl -u edo-backend`, а также `backend/logs/edo.log` (ротация 5 МБ × 5).
 
 ## 3. Фронтенд
 ```bash
@@ -226,7 +226,7 @@ CSP (`Content-Security-Policy`) режет внешние ресурсы. Про
 
 ## 10. Резервное копирование
 - [ ] `chmod +x deploy/backup.sh`
-- [ ] Cron: `0 3 * * * /opt/edo/deploy/backup.sh >> /var/log/edo-backup.log 2>&1`
+- [ ] Cron: `0 3 * * * /var/www/edo/deploy/backup.sh >> /var/log/edo-backup.log 2>&1`
 - [ ] Тест восстановления: развернуть `edo_*.db` + `files_*.tar.gz` на стенде
 - [ ] Перед сдвигом времени (п. 9) — отдельная копия БД
 
