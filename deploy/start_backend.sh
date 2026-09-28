@@ -19,6 +19,8 @@ fi
 
 export DOCS_ENABLED=false
 export LOG_LEVEL=INFO
+# Все времена системы — московские (core/time.py), независимо от TZ сервера
+export APP_TIMEZONE=Europe/Moscow
 # Гарантия UTF-8 вывода при любой системной локали (иначе print кириллицы
 # роняет процесс с UnicodeEncodeError -> 502)
 export PYTHONIOENCODING=utf-8
@@ -30,4 +32,5 @@ exec ./venv/bin/uvicorn app.main:app \
     --port 8000 \
     --workers 2 \
     --proxy-headers \
+    --no-server-header \
     --forwarded-allow-ips="127.0.0.1"

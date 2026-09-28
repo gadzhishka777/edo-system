@@ -19,6 +19,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.dependencies import get_current_org, get_current_employee
+from app.core.time import now_naive
 from app.database import get_async_db
 from app.models.mail import Organization
 from app.models.employee import Employee
@@ -459,7 +460,7 @@ async def update_class(
     if "shift" in changes:
         school_class.shift = changes["shift"]
 
-    school_class.updated_at = datetime.utcnow()
+    school_class.updated_at = now_naive()
     try:
         await db.commit()
     except IntegrityError:

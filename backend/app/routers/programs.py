@@ -20,6 +20,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.dependencies import get_current_org, get_current_employee
+from app.core.time import now_naive
 from app.database import get_async_db
 from app.models.mail import Organization
 from app.models.employee import Employee
@@ -359,7 +360,7 @@ async def update_program(
     if "short_name" in changes:
         program.short_name = changes["short_name"]
 
-    program.updated_at = datetime.utcnow()
+    program.updated_at = now_naive()
     await db.commit()
     await db.refresh(program)
 
@@ -495,12 +496,12 @@ async def assign_program_classes(
     for school_class in all_classes:
         if school_class.uuid in target:
             school_class.program_id = program.id
-            school_class.updated_at = datetime.utcnow()
+            school_class.updated_at = now_naive()
             assigned += 1
         elif school_class.program_id == program.id:
             # Класс сняли с этой программы
             school_class.program_id = None
-            school_class.updated_at = datetime.utcnow()
+            school_class.updated_at = now_naive()
 
     await db.commit()
 

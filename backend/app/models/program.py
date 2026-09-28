@@ -16,9 +16,10 @@
     order_document_id    — «Приказ, утверждающий» (документ из папки «Приказы»).
 """
 from sqlalchemy import Column, DateTime, ForeignKey, Integer, String
-from sqlalchemy.sql import func
 
 from app.models.base import Base
+
+from app.core.time import now_naive
 
 
 # ===== СПРАВОЧНИКИ =====
@@ -109,5 +110,5 @@ class EducationalProgram(Base):
     )
 
     # Служебные даты
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+    created_at = Column(DateTime(timezone=True), default=now_naive)
+    updated_at = Column(DateTime(timezone=True), onupdate=now_naive)

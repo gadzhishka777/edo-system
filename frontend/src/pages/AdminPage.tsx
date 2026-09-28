@@ -63,16 +63,31 @@ import {
 
 // ===================== API =====================
 
+import { hasSessionMarker, readCsrfToken } from '../api/edoApi';
+import { formatApiDate, formatApiDateTime } from '../utils/datetime';
+
 const API_BASE = process.env.REACT_APP_API_URL || '';
+
+/**
+ * fetch с сессионными cookie.
+ * credentials: 'include' обязателен: без него браузер не отправит и не примет
+ * HttpOnly-cookie edo_admin_access/edo_admin_refresh, когда API отвечает с
+ * другого origin (локально REACT_APP_API_URL=http://localhost:8000, а SPA
+ * живёт на :3000). В прод-сборке REACT_APP_API_URL пуст — same-origin.
+ */
+const apiFetch = (input: string, init: RequestInit = {}) =>
+  fetch(input, { ...init, credentials: 'include' });
 
 const adminApi = {
   getHeaders: (): HeadersInit => {
-    const token = localStorage.getItem('admin_access_token') || '';
-    return { 'Authorization': `Bearer ${token}` };
+    // JWT в HttpOnly-cookie, из JS недоступны. Для изменяющих запросов
+    // нужен CSRF-токен (double-submit c cookie edo_csrf).
+    const csrf = readCsrfToken();
+    return csrf ? { 'X-CSRF-Token': csrf } : {};
   },
 
   getStats: async () => {
-    const r = await fetch(`${API_BASE}/api/admin/stats`, { headers: adminApi.getHeaders() });
+    const r = await apiFetch(`${API_BASE}/api/admin/stats`, { headers: adminApi.getHeaders() });
     if (!r.ok) throw new Error('Ошибка загрузки статистики');
     return r.json();
   },
@@ -80,7 +95,7 @@ const adminApi = {
   getVacancies: async (page = 1, size = 20, search = '') => {
     const params = new URLSearchParams({ page: String(page), size: String(size) });
     if (search) params.set('search', search);
-    const r = await fetch(`${API_BASE}/api/admin/vacancies?${params}`, { headers: adminApi.getHeaders() });
+    const r = await apiFetch(`${API_BASE}/api/admin/vacancies?${params}`, { headers: adminApi.getHeaders() });
     if (!r.ok) throw new Error('Ошибка загрузки вакансий');
     return r.json();
   },
@@ -88,13 +103,13 @@ const adminApi = {
   getOrganizations: async (page = 1, size = 20, search = '') => {
     const params = new URLSearchParams({ page: String(page), size: String(size) });
     if (search) params.set('search', search);
-    const r = await fetch(`${API_BASE}/api/admin/organizations?${params}`, { headers: adminApi.getHeaders() });
+    const r = await apiFetch(`${API_BASE}/api/admin/organizations?${params}`, { headers: adminApi.getHeaders() });
     if (!r.ok) throw new Error('Ошибка загрузки организаций');
     return r.json();
   },
 
   createOrganization: async (data: any) => {
-    const r = await fetch(`${API_BASE}/api/admin/organizations`, {
+    const r = await apiFetch(`${API_BASE}/api/admin/organizations`, {
       method: 'POST',
       headers: { ...adminApi.getHeaders(), 'Content-Type': 'application/json' },
       body: JSON.stringify(data),
@@ -107,7 +122,7 @@ const adminApi = {
   },
 
   updateOrganization: async (orgId: number, data: any) => {
-    const r = await fetch(`${API_BASE}/api/admin/organizations/${orgId}`, {
+    const r = await apiFetch(`${API_BASE}/api/admin/organizations/${orgId}`, {
       method: 'PUT',
       headers: { ...adminApi.getHeaders(), 'Content-Type': 'application/json' },
       body: JSON.stringify(data),
@@ -120,7 +135,7 @@ const adminApi = {
   },
 
   deactivateOrganization: async (orgId: number) => {
-    const r = await fetch(`${API_BASE}/api/admin/organizations/${orgId}`, {
+    const r = await apiFetch(`${API_BASE}/api/admin/organizations/${orgId}`, {
       method: 'DELETE',
       headers: adminApi.getHeaders(),
     });
@@ -132,7 +147,7 @@ const adminApi = {
   },
 
   updateCredentials: async (orgId: number, data: any) => {
-    const r = await fetch(`${API_BASE}/api/admin/organizations/${orgId}/credentials`, {
+    const r = await apiFetch(`${API_BASE}/api/admin/organizations/${orgId}/credentials`, {
       method: 'PUT',
       headers: { ...adminApi.getHeaders(), 'Content-Type': 'application/json' },
       body: JSON.stringify(data),
@@ -148,14 +163,14 @@ const adminApi = {
     const params = new URLSearchParams({ page: String(page), size: String(size) });
     if (search) params.set('search', search);
     if (folder) params.set('folder', folder);
-    const r = await fetch(`${API_BASE}/api/admin/organizations/${orgId}/documents?${params}`, { headers: adminApi.getHeaders() });
+    const r = await apiFetch(`${API_BASE}/api/admin/organizations/${orgId}/documents?${params}`, { headers: adminApi.getHeaders() });
     if (!r.ok) throw new Error('Ошибка загрузки документов');
     return r.json();
   },
 
   // ===== ШТАМПЫ =====
   getStamps: async () => {
-    const r = await fetch(`${API_BASE}/api/admin/stamps`, { headers: adminApi.getHeaders() });
+    const r = await apiFetch(`${API_BASE}/api/admin/stamps`, { headers: adminApi.getHeaders() });
     if (!r.ok) throw new Error('Ошибка загрузки штампов');
     return r.json();
   },
@@ -164,7 +179,7 @@ const adminApi = {
     const formData = new FormData();
     formData.append('signer_keyword', signerKeyword);
     formData.append('file', file);
-    const r = await fetch(`${API_BASE}/api/admin/stamps`, {
+    const r = await apiFetch(`${API_BASE}/api/admin/stamps`, {
       method: 'POST',
       headers: adminApi.getHeaders(),
       body: formData,
@@ -177,7 +192,7 @@ const adminApi = {
   },
 
   deleteStamp: async (stampId: number) => {
-    const r = await fetch(`${API_BASE}/api/admin/stamps/${stampId}`, {
+    const r = await apiFetch(`${API_BASE}/api/admin/stamps/${stampId}`, {
       method: 'DELETE',
       headers: adminApi.getHeaders(),
     });
@@ -197,49 +212,46 @@ const adminApi = {
     if (params.org_id) q.set('org_id', String(params.org_id));
     if (params.search) q.set('search', params.search);
     if (params.overdue) q.set('overdue', 'true');
-    const r = await fetch(`${API_BASE}/api/admin/appeals?${q}`, { headers: adminApi.getHeaders() });
+    const r = await apiFetch(`${API_BASE}/api/admin/appeals?${q}`, { headers: adminApi.getHeaders() });
     if (!r.ok) throw new Error('Ошибка загрузки обращений');
     return r.json();
   },
 
   getAppealCard: async (uuid: string) => {
-    const r = await fetch(`${API_BASE}/api/admin/appeals/${uuid}`, { headers: adminApi.getHeaders() });
+    const r = await apiFetch(`${API_BASE}/api/admin/appeals/${uuid}`, { headers: adminApi.getHeaders() });
     if (!r.ok) throw new Error('Ошибка загрузки обращения');
     return r.json();
   },
 
   downloadAppealAttachment: (attachmentId: number) => {
-    const token = localStorage.getItem('admin_access_token') || '';
-    return `${API_BASE}/api/admin/appeals/attachments/${attachmentId}/download?token=${token}`;
+    // Авторизация скачивания — сессионная cookie, токен в URL не передаём.
+    return `${API_BASE}/api/admin/appeals/attachments/${attachmentId}/download`;
   },
 
   // ===== СКАЧИВАНИЕ ДОКУМЕНТОВ (АДМИН) =====
   downloadOriginal: (docUuid: string) => {
-    const token = localStorage.getItem('admin_access_token') || '';
-    return `${API_BASE}/api/admin/documents/${docUuid}/download/original?token=${token}`;
+    return `${API_BASE}/api/admin/documents/${docUuid}/download/original`;
   },
 
   downloadSigned: (docUuid: string) => {
-    const token = localStorage.getItem('admin_access_token') || '';
-    return `${API_BASE}/api/admin/documents/${docUuid}/download/signed?token=${token}`;
+    return `${API_BASE}/api/admin/documents/${docUuid}/download/signed`;
   },
 
   downloadArchive: (docUuid: string) => {
-    const token = localStorage.getItem('admin_access_token') || '';
-    return `${API_BASE}/api/admin/documents/${docUuid}/download/archive?token=${token}`;
+    return `${API_BASE}/api/admin/documents/${docUuid}/download/archive`;
   },
 
   getLicenses: async (page = 1, size = 20, search = '') => {
     const params = new URLSearchParams({ page: String(page), size: String(size) });
     if (search) params.set('search', search);
-    const r = await fetch(`${API_BASE}/api/admin/licenses?${params}`, { headers: adminApi.getHeaders() });
+    const r = await apiFetch(`${API_BASE}/api/admin/licenses?${params}`, { headers: adminApi.getHeaders() });
     if (!r.ok) throw new Error('Ошибка загрузки лицензий');
     return r.json();
   },
 
   generateLicenses: async (count = 5, durationDays = 180) => {
     const params = new URLSearchParams({ count: String(count), duration_days: String(durationDays) });
-    const r = await fetch(`${API_BASE}/api/admin/licenses?${params}`, {
+    const r = await apiFetch(`${API_BASE}/api/admin/licenses?${params}`, {
       method: 'POST',
       headers: adminApi.getHeaders(),
     });
@@ -251,7 +263,7 @@ const adminApi = {
   },
 
   deleteLicense: async (licenseId: number) => {
-    const r = await fetch(`${API_BASE}/api/admin/licenses/${licenseId}`, {
+    const r = await apiFetch(`${API_BASE}/api/admin/licenses/${licenseId}`, {
       method: 'DELETE',
       headers: adminApi.getHeaders(),
     });
@@ -263,15 +275,11 @@ const adminApi = {
   },
 
   logout: async () => {
-    const token = localStorage.getItem('admin_access_token');
-    if (token) {
-      await fetch(`${API_BASE}/api/admin/logout`, {
-        method: 'POST',
-        headers: { 'Authorization': `Bearer ${token}` },
-      });
-    }
-    localStorage.removeItem('admin_access_token');
-    localStorage.removeItem('admin_refresh_token');
+    // Сервер сам чистит HttpOnly-cookie админа (clear_auth_cookies, admin=True).
+    await apiFetch(`${API_BASE}/api/admin/logout`, {
+      method: 'POST',
+      headers: adminApi.getHeaders(),
+    });
   },
 };
 
@@ -378,18 +386,16 @@ const AdminPage: React.FC = () => {
 
   // Проверка авторизации при загрузке
   useEffect(() => {
-    const token = localStorage.getItem('admin_access_token');
-    if (!token) {
+    // JWT в HttpOnly-cookie: наличие сессии проверяем по маркерной cookie.
+    if (!hasSessionMarker()) {
       navigate('/admin/login');
       return;
     }
-    // Проверяем токен
+    // Проверка сессии реальным запросом
     adminApi.getStats().then(() => {
       setLoading(false);
     }).catch((err) => {
-      console.error('Token validation failed:', err);
-      localStorage.removeItem('admin_access_token');
-      localStorage.removeItem('admin_refresh_token');
+      console.error('Session validation failed:', err);
       navigate('/admin/login');
     });
   }, [navigate]);
@@ -488,7 +494,7 @@ const AdminPage: React.FC = () => {
   // Статус интеграции ЕИС (для показа/блокировки тоггла принудительного входа)
   useEffect(() => {
     let cancelled = false;
-    fetch(`${API_BASE}/api/auth/eis/status`)
+    apiFetch(`${API_BASE}/api/auth/eis/status`)
       .then((r) => r.json())
       .then((d) => { if (!cancelled) setEsaEnabled(!!d.enabled); })
       .catch(() => { if (!cancelled) setEsaEnabled(false); });
@@ -766,7 +772,8 @@ const AdminPage: React.FC = () => {
 
   const formatDate = (d?: string) => {
     if (!d) return '\u2014';
-    try { return new Date(d).toLocaleDateString('ru-RU'); } catch { return '\u2014'; }
+    // Даты API приходят naive-MSK — приводим к МСК, а не к локали браузера.
+    return formatApiDate(d);
   };
 
   const folderNames: Record<string, string> = {
@@ -1383,7 +1390,7 @@ const AdminPage: React.FC = () => {
                                 ) : <span style={{ color: '#d6d6df' }}>—</span>}
                               </TableCell>
                               <TableCell sx={{ fontFamily: 'Lato', fontSize: 12, color: '#5a5a72' }}>
-                                {new Date(a.created_at).toLocaleDateString('ru-RU')}
+                                {formatApiDate(a.created_at)}
                               </TableCell>
                             </TableRow>
                           ))}
@@ -1637,7 +1644,7 @@ const AdminPage: React.FC = () => {
                     ['Системный номер', appealCard.system_number],
                     ['Регистрационный номер', appealCard.reg_number || 'Не зарегистрировано'],
                     ['Организация-адресат', appealCard.org_name],
-                    ['Дата поступления', new Date(appealCard.created_at).toLocaleDateString('ru-RU')],
+                    ['Дата поступления', formatApiDate(appealCard.created_at)],
                     ['Статус', appealCard.status === 'new' ? 'Новое' : appealCard.status === 'registered' ? 'Зарегистрировано'
                       : appealCard.status === 'on_execution' ? 'На исполнении' : appealCard.status === 'answered' ? 'Ответ направлен' : 'Перенаправлено'],
                     ['Тема', appealCard.kind === 'complaint' ? 'Жалоба' : appealCard.kind === 'suggestion' ? 'Предложение' : 'Заявление'],
@@ -1741,7 +1748,7 @@ const AdminPage: React.FC = () => {
                       <Box>
                         <Typography sx={{ fontFamily: 'Lato', fontSize: 13 }}>{h.action}</Typography>
                         <Typography sx={{ fontFamily: 'Lato', fontSize: 12, color: '#87879b' }}>
-                          {h.employee_name} · {new Date(h.created_at).toLocaleString('ru-RU')}
+                          {h.employee_name} · {formatApiDateTime(h.created_at)}
                           {h.comment ? ` · ${h.comment}` : ''}
                         </Typography>
                       </Box>

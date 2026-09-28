@@ -20,6 +20,7 @@ from reportlab.lib.enums import TA_CENTER, TA_LEFT
 from PyPDF2 import PdfReader, PdfWriter
 
 from app.config import DEFAULT_STAMP_X, DEFAULT_STAMP_Y
+from app.core.time import now_naive
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO)
@@ -239,7 +240,7 @@ def create_stamp_pdf(
     c.drawString(x_pt + 10, y_offset, f"{cert_label} {cert_serial[:20]}")
     
     # Время создания визуализации
-    created_time = datetime.now().strftime('%d.%m.%Y %H:%M')
+    created_time = now_naive().strftime('%d.%m.%Y %H:%M')
     c.drawRightString(
         x_pt + stamp_width_pt - 10,
         y_offset,

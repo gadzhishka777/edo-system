@@ -11,14 +11,31 @@ import {
 } from '@mui/material';
 import { styled } from '@mui/material/styles';
 import { Lock as LockIcon } from '@mui/icons-material';
+import { hasSessionMarker, readCsrfToken } from '../api/edoApi';
 
 // ===================== API =====================
 
 const API_BASE = process.env.REACT_APP_API_URL || '';
 
+/**
+ * fetch с сессионными cookie.
+ * credentials: 'include' обязателен: без него браузер не отправит и не примет
+ * HttpOnly-cookie edo_admin_access/edo_admin_refresh, когда API отвечает с
+ * другого origin (локально REACT_APP_API_URL=http://localhost:8000, а SPA
+ * живёт на :3000). В прод-сборке REACT_APP_API_URL пуст — same-origin.
+ */
+const apiFetch = (input: string, init: RequestInit = {}) =>
+  fetch(input, { ...init, credentials: 'include' });
+
+/** CSRF-заголовок для изменяющих запросов (double-submit c cookie edo_csrf). */
+const readCsrfHeaders = (): Record<string, string> => {
+  const csrf = readCsrfToken();
+  return csrf ? { 'X-CSRF-Token': csrf } : {};
+};
+
 const adminApi = {
   login: async (login: string, password: string) => {
-    const r = await fetch(`${API_BASE}/api/admin/login`, {
+    const r = await apiFetch(`${API_BASE}/api/admin/login`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ login, password }),
@@ -30,18 +47,18 @@ const adminApi = {
     return r.json();
   },
 
-  logout: async (token: string) => {
-    const r = await fetch(`${API_BASE}/api/admin/logout`, {
+  logout: async () => {
+    // Сервер чистит HttpOnly-cookie; Bearer не нужен. CSRF-токен нужен,
+    // т.к. запрос изменяющий и сессионная cookie уже приложена браузером.
+    const r = await apiFetch(`${API_BASE}/api/admin/logout`, {
       method: 'POST',
-      headers: { 'Authorization': `Bearer ${token}` },
+      headers: readCsrfHeaders(),
     });
     return r.json();
   },
 
-  getCurrentAdmin: async (token: string) => {
-    const r = await fetch(`${API_BASE}/api/admin/me`, {
-      headers: { 'Authorization': `Bearer ${token}` },
-    });
+  getCurrentAdmin: async () => {
+    const r = await apiFetch(`${API_BASE}/api/admin/me`);
     if (!r.ok) throw new Error('Ошибка загрузки данных');
     return r.json();
   },
@@ -97,10 +114,12 @@ const AdminLoginPage: React.FC = () => {
 
     setLoading(true);
     try {
-      const data = await adminApi.login(login.trim(), password);
-      // Сохраняем токены
-      localStorage.setItem('admin_access_token', data.access_token);
-      localStorage.setItem('admin_refresh_token', data.refresh_token);
+      // JWT теперь живут в HttpOnly-cookie, которые ставит сервер на /api/admin/login.
+      // В localStorage сохранять их нельзя (XSS-кража) — только проверяем, что сессия открыта.
+      await adminApi.login(login.trim(), password);
+      if (!hasSessionMarker()) {
+        throw new Error('Сессия не установлена, попробуйте ещё раз');
+      }
       navigate('/admin');
     } catch (err: any) {
       setError(err.message || 'Неверный логин или пароль');

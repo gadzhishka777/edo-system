@@ -30,7 +30,10 @@
     "web-vitals": "^2.1.4"
   },
   "scripts": {
+    "copy:pdf-worker": "node scripts/copy-pdf-worker.js",
+    "prestart": "npm run copy:pdf-worker",
     "start": "react-scripts start",
+    "prebuild": "npm run copy:pdf-worker",
     "build": "react-scripts build",
     "test": "react-scripts test",
     "eject": "react-scripts eject"

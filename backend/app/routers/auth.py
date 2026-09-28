@@ -12,7 +12,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional, List
 from urllib.parse import urlencode
 
-from fastapi import APIRouter, Depends, HTTPException, status, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, status, Query, Request, Response
 from fastapi.responses import RedirectResponse, JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
@@ -44,6 +44,8 @@ from app.core.security import (
     decode_token,
 )
 from app.core.dependencies import get_current_org, get_current_employee
+from app.core.cookies import REFRESH_COOKIE, set_auth_cookies, clear_auth_cookies
+from app.core.time import now_naive
 from app.config import settings
 from app.services.esa_oauth import (
     build_authorize_url,
@@ -98,6 +100,18 @@ def _redirect_to_spa_error(error: str, description: str = "") -> RedirectRespons
     if description:
         target += f"&error_description={description}"
     return RedirectResponse(url=target, status_code=302)
+
+
+def _tokens_to_cookies(response: Response, request: Request, tokens) -> None:
+    """Кладёт пару JWT из login-ответа (модель или dict) в сессионные cookie."""
+    if isinstance(tokens, dict):
+        access = tokens.get("access_token")
+        refresh = tokens.get("refresh_token")
+    else:
+        access = getattr(tokens, "access_token", None)
+        refresh = getattr(tokens, "refresh_token", None)
+    if access:
+        set_auth_cookies(response, request, access, refresh)
 
 
 @router.get("/eis/login")
@@ -217,7 +231,12 @@ async def eis_callback(
 
 
 @router.post("/eis/exchange")
-async def eis_exchange(data: EisExchangeRequest, db: AsyncSession = Depends(get_async_db)):
+async def eis_exchange(
+    data: EisExchangeRequest,
+    request: Request,
+    response: Response,
+    db: AsyncSession = Depends(get_async_db),
+):
     """Шаг 3 OAuth-flow: SPA обменивает одноразовый код на JWT или список кандидатов.
 
     Возвращает:
@@ -246,6 +265,7 @@ async def eis_exchange(data: EisExchangeRequest, db: AsyncSession = Depends(get_
     if kind == "tokens":
         # Финальная выдача токенов — код одноразовый, удаляем.
         exchange_store.pop(data.code)
+        _tokens_to_cookies(response, request, stored["tokens"])
         _esa_log("exchange: выдача токенов (kind=tokens)")
         return {"kind": "tokens", **stored["tokens"]}
 
@@ -282,10 +302,12 @@ async def eis_exchange(data: EisExchangeRequest, db: AsyncSession = Depends(get_
         await db.commit()
         # Перезагрузим с organization.
         await db.refresh(employee, attribute_names=["organization"])
+        login_resp = build_employee_login_response(employee)
         # Финальная выдача токенов — код одноразовый, удаляем.
         exchange_store.pop(data.code)
+        _tokens_to_cookies(response, request, login_resp)
         _esa_log("exchange: выдача токенов после выбора профиля employee_id=%s", data.employee_id)
-        return {"kind": "tokens", **build_employee_login_response(employee)}
+        return {"kind": "tokens", **login_resp}
 
     logger.error("[ESA] exchange: неизвестный kind=%r stored=%r", kind, stored)
     raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Неизвестный формат кода обмена.")
@@ -318,6 +340,8 @@ async def eis_profiles(
 @router.post("/eis/switch-profile", response_model=EmployeeLoginResponse)
 async def eis_switch_profile(
     data: EisProfileSwitchRequest,
+    request: Request,
+    response: Response,
     employee: Employee = Depends(get_current_employee),
     db: AsyncSession = Depends(get_async_db),
 ):
@@ -335,7 +359,9 @@ async def eis_switch_profile(
 
     if employee.id == data.employee_id:
         # Уже активный профиль — просто возвращаем актуальные токены.
-        return build_employee_login_response(employee)
+        resp = build_employee_login_response(employee)
+        _tokens_to_cookies(response, request, resp)
+        return resp
 
     try:
         target = await find_profile_for_switch(db, employee, data.employee_id)
@@ -362,7 +388,9 @@ async def eis_switch_profile(
         target.id,
         target.org_id,
     )
-    return build_employee_login_response(target)
+    resp = build_employee_login_response(target)
+    _tokens_to_cookies(response, request, resp)
+    return resp
 
 
 def _generate_license_key() -> str:
@@ -383,7 +411,7 @@ async def generate_licenses(
 ):
     """Генерация лицензионных ключей для активации."""
     licenses = []
-    now = datetime.utcnow()
+    now = now_naive()
     expires = now + timedelta(days=duration_days)
     
     for _ in range(count):
@@ -443,7 +471,7 @@ async def activate_license(
             detail="Лицензионный ключ уже активирован",
         )
 
-    now = datetime.utcnow()
+    now = now_naive()
     expires_at = now + timedelta(days=license_obj.duration_days)
 
     license_obj.activated_org_id = org.id
@@ -490,7 +518,7 @@ async def get_my_license(
         license_obj = result.scalar_one_or_none()
         if license_obj:
             license_key = license_obj.key
-            if license_obj.expires_at and license_obj.expires_at > datetime.utcnow():
+            if license_obj.expires_at and license_obj.expires_at > now_naive():
                 license_valid = True
                 expire_date = license_obj.expires_at.strftime("%Y-%m-%d")
             else:
@@ -513,10 +541,16 @@ async def get_my_license(
 
 
 @router.post("/login", response_model=EmployeeLoginResponse)
-async def login(data: LoginRequest, db: AsyncSession = Depends(get_async_db)):
+async def login(
+    data: LoginRequest,
+    request: Request,
+    response: Response,
+    db: AsyncSession = Depends(get_async_db),
+):
     """
     Аутентификация сотрудника по логину и паролю.
     Возвращает access + refresh токены + данные сотрудника.
+    Токены дополнительно кладутся в HttpOnly-cookie (SPA работает по ним).
     """
     login_value = (data.login or "").strip()
     password = data.password or ""
@@ -575,6 +609,7 @@ async def login(data: LoginRequest, db: AsyncSession = Depends(get_async_db)):
 
     access_token = create_access_token(token_data)
     refresh_token = create_refresh_token(token_data)
+    set_auth_cookies(response, request, access_token, refresh_token)
 
     # Полное ФИО
     full_name = f"{employee.last_name} {employee.first_name}{' ' + employee.middle_name if employee.middle_name else ''}".strip()
@@ -592,9 +627,21 @@ async def login(data: LoginRequest, db: AsyncSession = Depends(get_async_db)):
 
 
 @router.post("/refresh", response_model=EmployeeLoginResponse)
-async def refresh_token(data: RefreshRequest, db: AsyncSession = Depends(get_async_db)):
-    """Обновление access токена с помощью refresh токена."""
-    payload = decode_token(data.refresh_token)
+async def refresh_token(
+    data: Optional[RefreshRequest] = None,
+    request: Request = None,
+    response: Response = None,
+    db: AsyncSession = Depends(get_async_db),
+):
+    """Обновление access токена с помощью refresh токена.
+
+    Браузерный SPA присылает только cookie (edo_refresh) — тело может быть пустым.
+    API-клиенты по-прежнему могут передать refresh_token в теле JSON.
+    """
+    raw_refresh = (data.refresh_token if data and data.refresh_token else "") or request.cookies.get(
+        REFRESH_COOKIE, ""
+    )
+    payload = decode_token(raw_refresh)
     if payload is None:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -648,11 +695,15 @@ async def refresh_token(data: RefreshRequest, db: AsyncSession = Depends(get_asy
 
     new_access = create_access_token(token_data)
 
+    # Ротация refresh-токена необязательна: повторно выдаём тот же, но
+    # обновляем cookie (новый access + прежний refresh).
+    set_auth_cookies(response, request, new_access, raw_refresh)
+
     full_name = f"{employee.last_name} {employee.first_name}{' ' + employee.middle_name if employee.middle_name else ''}".strip()
 
     return EmployeeLoginResponse(
         access_token=new_access,
-        refresh_token=data.refresh_token,
+        refresh_token=raw_refresh,
         org_id=employee.org_id,
         org_name=employee.organization.name if employee.organization else "",
         employee_id=employee.id,
@@ -698,8 +749,13 @@ async def get_current_employee_info(
 
 
 @router.post("/logout")
-async def logout(employee: Employee = Depends(get_current_employee)):
-    """Выход — в stateless JWT просто возвращаем OK (клиент удаляет токены)."""
+async def logout(
+    request: Request,
+    response: Response,
+    employee: Employee = Depends(get_current_employee),
+):
+    """Выход: стираем сессионные cookie. Bearer-токены просто перестают использоваться."""
+    clear_auth_cookies(response, request)
     return {"message": "Успешный выход"}
 
 
@@ -709,6 +765,8 @@ async def logout(employee: Employee = Depends(get_current_employee)):
 @router.post("/complete-profile", response_model=EmployeeLoginResponse)
 async def complete_profile(
     data: ProfileCompleteRequest,
+    request: Request,
+    response: Response,
     db: AsyncSession = Depends(get_async_db),
     employee: Employee = Depends(get_current_employee),
     _db: AsyncSession = Depends(get_async_db),
@@ -757,6 +815,7 @@ async def complete_profile(
 
     access_token = create_access_token(token_data)
     refresh_token = create_refresh_token(token_data)
+    set_auth_cookies(response, request, access_token, refresh_token)
 
     return EmployeeLoginResponse(
         access_token=access_token,
@@ -786,10 +845,10 @@ async def get_current_org_info(
 
     try:
         expire = datetime.strptime(settings.LICENSE_EXPIRE_DATE, "%Y-%m-%d")
-        license_valid = datetime.now(timezone.utc).replace(tzinfo=None) < expire
+        license_valid = now_naive() < expire
     except ValueError:
         license_valid = False
-        expire = datetime.now()
+        expire = now_naive()
 
     return OrgInfoResponse(
         id=org.id,

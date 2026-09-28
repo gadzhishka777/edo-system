@@ -2,8 +2,9 @@
 import enum
 from sqlalchemy import Column, Integer, String, Text, DateTime, Boolean, ForeignKey, Enum as SQLEnum
 from sqlalchemy.orm import relationship
-from sqlalchemy.sql import func
 from app.models.base import Base
+
+from app.core.time import now_naive
 
 
 class MailDirection(str, enum.Enum):
@@ -54,7 +55,7 @@ class MailMessage(Base):
     status = Column(SQLEnum(MailStatus), default=MailStatus.DRAFT)
 
     # Даты
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    created_at = Column(DateTime(timezone=True), default=now_naive)
     sent_at = Column(DateTime(timezone=True), nullable=True)
     read_at = Column(DateTime(timezone=True), nullable=True)
 
@@ -88,8 +89,8 @@ class License(Base):
     expires_at = Column(DateTime(timezone=True), nullable=True)
     
     # Служебные даты
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+    created_at = Column(DateTime(timezone=True), default=now_naive)
+    updated_at = Column(DateTime(timezone=True), onupdate=now_naive)
 
 
 class Organization(Base):
@@ -103,7 +104,7 @@ class Organization(Base):
     address = Column(Text, nullable=True)
     contact_person = Column(String(255), nullable=True)
     contact_email = Column(String(255), nullable=True)
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    created_at = Column(DateTime(timezone=True), default=now_naive)
 
     # Учётные данные для входа
     login = Column(String(100), unique=True, index=True, nullable=False)
@@ -156,4 +157,4 @@ class Contact(Base):
     # Группа
     contact_group = Column(String(100), nullable=True)
 
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    created_at = Column(DateTime(timezone=True), default=now_naive)

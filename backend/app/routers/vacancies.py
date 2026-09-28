@@ -14,6 +14,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.dependencies import get_current_org, get_current_employee
+from app.core.time import now_naive
 from app.database import get_async_db
 from app.models.mail import Organization
 from app.models.employee import Employee
@@ -211,7 +212,7 @@ async def update_vacancy(
     else:
         vacancy.teaching_load = None
 
-    vacancy.updated_at = datetime.utcnow()
+    vacancy.updated_at = now_naive()
     await db.commit()
     await db.refresh(vacancy)
 

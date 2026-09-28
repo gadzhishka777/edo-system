@@ -9,6 +9,7 @@ from sqlalchemy import (
 from sqlalchemy.orm import relationship
 
 from app.models.base import Base
+from app.core.time import now_naive
 
 
 class AppealKind(str, enum.Enum):
@@ -101,7 +102,7 @@ class Appeal(Base):
     reply_approved_by_name = Column(String(255), nullable=True)
 
     # Даты и сроки (календарные дни)
-    created_at = Column(DateTime, default=datetime.now)          # дата поступления
+    created_at = Column(DateTime, default=now_naive)          # дата поступления
     register_deadline = Column(DateTime, nullable=False)         # поступление + 3 дня
     registered_at = Column(DateTime)                             # дата регистрации
     answer_deadline = Column(DateTime)                           # регистрация + 30 дней
@@ -138,7 +139,7 @@ class AppealAttachment(Base):
     file_name = Column(String(500), nullable=False)
     file_path = Column(String(1000), nullable=False)
     file_size = Column(Integer, default=0)
-    uploaded_at = Column(DateTime, default=datetime.now)
+    uploaded_at = Column(DateTime, default=now_naive)
 
     appeal = relationship("Appeal", back_populates="attachments", foreign_keys=[appeal_id])
 
@@ -152,7 +153,7 @@ class AppealStatusHistory(Base):
     employee_name = Column(String(255))                          # снимок ФИО на момент действия
     action = Column(String(255), nullable=False)                 # человекочитаемое действие
     comment = Column(Text)
-    created_at = Column(DateTime, default=datetime.now)
+    created_at = Column(DateTime, default=now_naive)
 
     appeal = relationship("Appeal", back_populates="history", foreign_keys=[appeal_id])
 
@@ -165,7 +166,7 @@ class AppealDocumentLink(Base):
     appeal_id = Column(Integer, ForeignKey("appeals.id"), nullable=False, index=True)
     document_id = Column(Integer, ForeignKey("documents.id"), nullable=False, index=True)
     linked_by_employee_id = Column(Integer, ForeignKey("employees.id"))
-    created_at = Column(DateTime, default=datetime.now)
+    created_at = Column(DateTime, default=now_naive)
     # Признак: документ уже использован в направленном ответе — отвязать нельзя
     used_in_reply = Column(Boolean, default=False, nullable=False)
 
@@ -188,4 +189,4 @@ class ResponseTemplate(Base):
     is_system = Column(Boolean, default=False, nullable=False)
 
     created_by_employee_id = Column(Integer, ForeignKey("employees.id"), nullable=True)
-    created_at = Column(DateTime, default=datetime.now)
+    created_at = Column(DateTime, default=now_naive)

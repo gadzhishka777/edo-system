@@ -21,9 +21,10 @@ from sqlalchemy import (
     String,
     UniqueConstraint,
 )
-from sqlalchemy.sql import func
 
 from app.models.base import Base
+
+from app.core.time import now_naive
 
 
 # ===== СПРАВОЧНИКИ =====
@@ -193,8 +194,8 @@ class SchoolClass(Base):
     academic_year = Column(String(9), nullable=False, default=CURRENT_ACADEMIC_YEAR)
 
     # Служебные даты
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+    created_at = Column(DateTime(timezone=True), default=now_naive)
+    updated_at = Column(DateTime(timezone=True), onupdate=now_naive)
 
     __table_args__ = (
         # В одной организации не может быть двух «5А» в одном учебном году

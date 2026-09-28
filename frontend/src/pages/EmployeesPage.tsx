@@ -37,6 +37,7 @@ import {
 import { styled } from '@mui/material/styles';
 import dayjs, { Dayjs } from 'dayjs';
 import 'dayjs/locale/ru';
+import { parseApiDate } from '../utils/datetime';
 import { DatePicker } from '@mui/x-date-pickers/DatePicker';
 import { LocalizationProvider } from '@mui/x-date-pickers/LocalizationProvider';
 import { AdapterDayjs } from '@mui/x-date-pickers/AdapterDayjs';
@@ -574,7 +575,7 @@ const EmployeesPage: React.FC = () => {
         department: employee.department || '',
         phone: employee.phone || '',
         email: employee.email || '',
-        birthday: employee.birthday ? dayjs(employee.birthday) : null,
+        birthday: employee.birthday ? dayjs(parseApiDate(employee.birthday)) : null,
         notes: employee.notes || '',
         login: employee.login || '',
         password: '',

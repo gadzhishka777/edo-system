@@ -40,6 +40,7 @@ import { LocalizationProvider } from '@mui/x-date-pickers/LocalizationProvider';
 import { AdapterDayjs } from '@mui/x-date-pickers/AdapterDayjs';
 import dayjs from 'dayjs';
 import 'dayjs/locale/ru';
+import { parseApiDate } from '../utils/datetime';
 import {
   Inbox as InboxIcon,
   Outbox as OutboxIcon,
@@ -450,7 +451,8 @@ const MailPage: React.FC = () => {
       }
 
       // ISO / SQL-формат от бэкенда: "2026-08-21T01:13:00", "2026-08-21 01:13:00.000000" и т.п.
-      const parsed = dayjs(raw);
+      // Бэкенд отдаёт naive-даты в московском времени — парсим через parseApiDate.
+      const parsed = dayjs(parseApiDate(raw));
       if (!parsed.isValid()) return '—';
 
       // Защита от неадекватных дат (например, неверно разобранных подписей)

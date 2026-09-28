@@ -47,6 +47,7 @@ import {
 import { styled } from '@mui/material/styles';
 import dayjs, { Dayjs } from 'dayjs';
 import 'dayjs/locale/ru';
+import { parseApiDate } from '../utils/datetime';
 import { DatePicker } from '@mui/x-date-pickers/DatePicker';
 import { LocalizationProvider } from '@mui/x-date-pickers/LocalizationProvider';
 import { AdapterDayjs } from '@mui/x-date-pickers/AdapterDayjs';
@@ -112,9 +113,13 @@ import 'react-pdf/dist/Page/TextLayer.css';
 import 'react-pdf/dist/Page/AnnotationLayer.css';
 import { useEvents } from '../context/EventContext';
 
-// Настройка worker для PDF.js (CDN)
-// ВАЖНО: react-pdf 8.x использует pdfjs-dist 3.x, где worker — классический скрипт (.js), а не ES-модуль (.mjs)
-pdfjs.GlobalWorkerOptions.workerSrc = `https://unpkg.com/pdfjs-dist@${pdfjs.version}/build/pdf.worker.min.js`;
+// Настройка worker для PDF.js — файл раздаётся С НАШЕГО ДОМЕНА.
+// ВАЖНО: react-pdf 8.x использует pdfjs-dist 3.x, где worker — классический
+// скрипт (.js), а не ES-модуль (.mjs). Файл копируется в public/ скриптом
+// frontend/scripts/copy-pdf-worker.js (хуки prestart/prebuild в package.json).
+// Внешний CDN (unpkg) использовать нельзя: CSP продакшена запрещает скрипты и
+// воркеры с чужих домены, а клиент в закрытом контуре интернета не имеет.
+pdfjs.GlobalWorkerOptions.workerSrc = `${process.env.PUBLIC_URL}/pdf.worker.min.js`;
 
 // ===== СТИЛИ =====
 const PageContainer = styled(Box)({
@@ -849,7 +854,7 @@ const DocumentsPage: React.FC = () => {
         normalized = `${dotFormat[1]}-${dotFormat[2]}-${dotFormat[3]}T${dotFormat[4]}`;
       }
 
-      const parsed = dayjs(normalized);
+      const parsed = dayjs(parseApiDate(normalized));
 
       if (!parsed.isValid()) {
         return '—';
@@ -890,7 +895,7 @@ const DocumentsPage: React.FC = () => {
     if (dotFormat) {
       normalized = `${dotFormat[1]}-${dotFormat[2]}-${dotFormat[3]}T${dotFormat[4]}`;
     }
-    const parsed = dayjs(normalized);
+    const parsed = dayjs(parseApiDate(normalized));
     if (!parsed.isValid() || parsed.year() < 2000 || parsed.year() > 2100) return null;
     return parsed.format('YYYY-MM-DD');
   };
@@ -1014,7 +1019,7 @@ const DocumentsPage: React.FC = () => {
       folder: doc.folder,
       customFolderId: doc.custom_folder_id ?? null,
       registrationNumber: doc.registration_number || '',
-      date: doc.created_at ? dayjs(doc.created_at).format('YYYY-MM-DD') : dayjs().format('YYYY-MM-DD'),
+      date: doc.created_at ? dayjs(parseApiDate(doc.created_at)).format('YYYY-MM-DD') : dayjs().format('YYYY-MM-DD'),
       executor: doc.executor || '',
       signerFullName: doc.signer_full_name || doc.signer || '',
       familiarized: [],

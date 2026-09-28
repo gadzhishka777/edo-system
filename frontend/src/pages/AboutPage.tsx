@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { parseApiDate, serverNow } from '../utils/datetime';
 import {
   Box,
   Paper,
@@ -329,8 +330,9 @@ const AboutPage: React.FC = () => {
   const getDaysRemaining = (expireDate: string): number => {
     if (!expireDate) return 0;
     try {
-      const expire = new Date(expireDate);
-      const now = new Date();
+      // Дата лицензии из API — MSK; сравниваем с серверными часами
+      const expire = parseApiDate(expireDate);
+      const now = serverNow();
       const diffTime = expire.getTime() - now.getTime();
       return Math.ceil(diffTime / (1000 * 60 * 60 * 24));
     } catch {
@@ -485,7 +487,7 @@ const AboutPage: React.FC = () => {
             </InfoRow>
             <InfoRow>
               <InfoLabel>Версия</InfoLabel>
-              <InfoValue>0.6</InfoValue>
+              <InfoValue>0.6.1</InfoValue>
             </InfoRow>
             <InfoRow>
               <InfoLabel>Статус лицензии</InfoLabel>

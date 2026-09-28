@@ -176,6 +176,17 @@ asyncio.run(migrate_esa_columns())
 client = TestClient(app, raise_server_exceptions=True)
 
 
+def csrf_headers():
+    """Заголовок для изменяющих запросов (double-submit, core/middleware.py).
+
+    ВАЖНО: как только сервер выдал сессионную cookie (switch-profile её ставит),
+    все последующие POST без X-CSRF-Token получают 403 — это и есть защита от
+    CSRF. Клиент обязан вернуть значение cookie edo_csrf в заголовке.
+    """
+    token = client.cookies.get("edo_csrf")
+    return {"X-CSRF-Token": token} if token else {}
+
+
 def get_profiles(employee_id):
     CURRENT["employee"] = employee_id
     return client.get("/api/auth/eis/profiles")
@@ -183,7 +194,11 @@ def get_profiles(employee_id):
 
 def switch(employee_id, target_id):
     CURRENT["employee"] = employee_id
-    return client.post("/api/auth/eis/switch-profile", json={"employee_id": target_id})
+    return client.post(
+        "/api/auth/eis/switch-profile",
+        json={"employee_id": target_id},
+        headers=csrf_headers(),
+    )
 
 
 # ===================== 1. ПУЛ ПРОФИЛЕЙ =====================

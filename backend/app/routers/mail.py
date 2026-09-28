@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, and_, or_
 
 from app.database import get_async_db
+from app.core.time import now_naive
 from app.config import settings
 from app.core.dependencies import get_current_org, get_current_employee
 from app.models.mail import MailMessage, MailDirection, MailStatus, Organization
@@ -225,7 +226,7 @@ async def send_mail(
         comment=data.comment,
         request_signature=data.request_signature,
         status=status,
-        sent_at=datetime.utcnow(),
+        sent_at=now_naive(),
         is_deleted=False,
         sender_deleted=False,
         recipient_deleted=False,
@@ -476,7 +477,7 @@ async def sign_and_reply(
         f.write(sig_content)
 
     import json
-    now = datetime.now()
+    now = now_naive()
     new_doc = Document(
         uuid=new_uuid,
         name=src_doc.name,
@@ -524,7 +525,7 @@ async def sign_and_reply(
         comment=f"Подписанный ответ на письмо {original.uuid}",
         request_signature=False,
         status=MailStatus.SIGNED,
-        sent_at=datetime.utcnow(),
+        sent_at=now_naive(),
         is_deleted=False,
         sender_deleted=False,
         recipient_deleted=False,

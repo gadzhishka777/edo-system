@@ -59,6 +59,7 @@ import {
   type EisEmployeeCandidate,
 } from '../../api/edoApi';
 import { useEvents, Event } from '../../context/EventContext';
+import { formatApiDate, serverNow } from '../../utils/datetime';
 
 interface HeaderProps {
   onMenuToggle: () => void;
@@ -207,7 +208,9 @@ export const Header: React.FC<HeaderProps> = ({ onMenuToggle, onLogout }) => {
   };
 
   const getTimeAgo = (date: Date): string => {
-    const diff = Date.now() - date.getTime();
+    // Считаем от серверного времени (utils/datetime): часы клиента могут
+    // отставать/спешить, тогда «5 мин назад» превращалось в «2 ч назад».
+    const diff = serverNow().getTime() - date.getTime();
     const minutes = Math.floor(diff / 60000);
     const hours = Math.floor(diff / 3600000);
     const days = Math.floor(diff / 86400000);
@@ -216,7 +219,8 @@ export const Header: React.FC<HeaderProps> = ({ onMenuToggle, onLogout }) => {
     if (minutes < 60) return `${minutes} мин назад`;
     if (hours < 24) return `${hours} ч назад`;
     if (days < 7) return `${days} д назад`;
-    return date.toLocaleDateString('ru-RU');
+    // Дата события — в московском времени, независимо от локали браузера
+    return formatApiDate(date);
   };
 
   const open = Boolean(eventsAnchorEl);

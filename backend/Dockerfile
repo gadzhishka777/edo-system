@@ -21,5 +21,6 @@ RUN mkdir -p /app/uploads /app/signed_docs /app/frontend/public/stamps
 # Открываем порт
 EXPOSE 8000
 
-# Запуск через uvicorn с 4 воркерами
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "4"]
+# Запуск через uvicorn с 4 воркерами; --no-server-header не раскрывает версию
+ENV APP_TIMEZONE=Europe/Moscow
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "4", "--proxy-headers", "--no-server-header"]

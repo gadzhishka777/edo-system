@@ -36,7 +36,7 @@ def _parse_list_env(v):
 class Settings(BaseSettings):
     # Сервер
     APP_NAME: str = "Подсистема ЭДО"
-    APP_VERSION: str = "0.6"
+    APP_VERSION: str = "0.6.1"
     API_HOST: str = "0.0.0.0"
     API_PORT: int = 8000
     API_PREFIX: str = "/api"
@@ -52,7 +52,13 @@ class Settings(BaseSettings):
     UPLOAD_DIR: str = str(BASE_DIR / "uploads")
     SIGNED_DIR: str = str(BASE_DIR / "signed_docs")
     STAMPS_DIR: str = str(BASE_DIR.parent / "frontend" / "public" / "stamps")
-    
+
+    # Позиция штампа по умолчанию, мм — используется legacy-модулем
+    # app/pdf_generator.py. Активный тракт визуализации
+    # (app/services/pdf_service.py) считает координаты в пикселях превью.
+    DEFAULT_STAMP_X: int = 100
+    DEFAULT_STAMP_Y: int = 50
+
     # Безопасность
     SECRET_KEY: str = os.getenv("SECRET_KEY", "edo-secret-key-change-in-production-2026")
     ALGORITHM: str = "HS256"
@@ -75,6 +81,10 @@ class Settings(BaseSettings):
     # Список — через property cors_origins.
     CORS_ORIGINS: str = "http://localhost:3000,http://127.0.0.1:3000,http://localhost:8000"
     
+    # Режим демонстрации: подпись проверяется без обращения к ГОСТ-сервису.
+    # Используется legacy-модулем app/signature.py.
+    DEMO_MODE: bool = os.getenv("DEMO_MODE", "false").lower() in ("1", "true", "yes")
+
     # Go GOST
     GOST_API_URL: str = os.getenv("GOST_API_URL", "http://localhost:8080")
     GOST_API_KEY: str = os.getenv("GOST_API_KEY", "")
@@ -178,6 +188,16 @@ class Settings(BaseSettings):
         extra = "ignore"
 
 settings = Settings()
+
+# ===== Алиасы уровня модуля =====
+# Legacy-модули (app/pdf_generator.py, app/signature.py) импортируют настройки
+# как имена уровня модуля: `from app.config import DEFAULT_STAMP_X`.
+# Раньше эти имена отсутствовали и импорт падал с ImportError, из-за чего
+# пакет app нельзя было импортировать целиком (ломалось у линтеров и любых
+# обходчиков пакета). Сами модули в рантайме не используются.
+DEFAULT_STAMP_X = settings.DEFAULT_STAMP_X
+DEFAULT_STAMP_Y = settings.DEFAULT_STAMP_Y
+DEMO_MODE = settings.DEMO_MODE
 
 # Создаём папки
 os.makedirs(settings.UPLOAD_DIR, exist_ok=True)

@@ -1,8 +1,9 @@
 from sqlalchemy import Column, Integer, String, Text, DateTime, Boolean, Float, ForeignKey, Enum as SQLEnum
 from sqlalchemy.orm import relationship
-from sqlalchemy.sql import func
 import enum
 from app.database import Base
+
+from app.core.time import now_naive
 
 class SignatureType(str, enum.Enum):
     NONE = "none"
@@ -35,8 +36,8 @@ class User(Base):
     hashed_password = Column(String(255), nullable=False)
     full_name = Column(String(255))
     is_active = Column(Boolean, default=True)
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+    created_at = Column(DateTime(timezone=True), default=now_naive)
+    updated_at = Column(DateTime(timezone=True), onupdate=now_naive)
     
     documents = relationship("Document", back_populates="creator")
 
@@ -53,7 +54,7 @@ class Organization(Base):
     contact_person = Column(String(255))
     contact_email = Column(String(255))
     is_active = Column(Boolean, default=True)
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    created_at = Column(DateTime(timezone=True), default=now_naive)
 
 
 class Document(Base):
@@ -75,7 +76,7 @@ class Document(Base):
     executor = Column(String(255))
     
     # Даты
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    created_at = Column(DateTime(timezone=True), default=now_naive)
     signature_date = Column(DateTime(timezone=True), nullable=True)
     
     # Файлы

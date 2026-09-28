@@ -1,33 +1,48 @@
 import axios from 'axios';
 
+import { updateServerTime } from '../utils/datetime';
+
 const API_BASE_URL = process.env.REACT_APP_API_URL || '';
 
 const apiClient = axios.create({
   baseURL: API_BASE_URL,
   timeout: 60000,
+  // Cookie-сессия: браузер шлёт HttpOnly-cookie edo_access/edo_refresh сам.
+  withCredentials: true,
   headers: {
     'Content-Type': 'application/json',
   },
 });
 
-// ===== JWT INTERCEPTOR =====
-function getAccessToken(): string | null {
-  return localStorage.getItem('access_token');
+// ===== СЕССИЯ (HttpOnly-cookie) + CSRF =====
+// JWT больше не хранится в localStorage: сервер ставит HttpOnly-cookie
+// (edo_access/edo_refresh), недоступные JS, — токен нельзя украсть через XSS.
+// На сервере авторизация принимает либо Bearer, либо cookie (core/dependencies.py).
+
+/** Читает cookie по имени (нужно для CSRF-токена; сессионные cookie HttpOnly и здесь не видны). */
+function readCookie(name: string): string | null {
+  const m = document.cookie.match(new RegExp('(?:^|;\\s*)' + name + '=([^;]*)'));
+  return m ? decodeURIComponent(m[1]) : null;
 }
 
-function getRefreshToken(): string | null {
-  return localStorage.getItem('refresh_token');
+/** CSRF-токен для заголовка X-CSRF-Token (double-submit: значение = cookie edo_csrf). */
+function getCsrfToken(): string | null {
+  return readCookie('edo_csrf');
 }
 
-function setTokens(access: string, refresh: string) {
-  localStorage.setItem('access_token', access);
-  localStorage.setItem('refresh_token', refresh);
+/** Публичный доступ к CSRF-токену для модулей, ходящих fetch-ом напрямую (админ-панель). */
+export function readCsrfToken(): string | null {
+  return getCsrfToken();
 }
 
-/** Сохраняет в localStorage всё, что фронт кладёт после успешного логина
- *  (используется и обычным login, и ESA-exchange, чтобы не дублировать). */
+/** Есть ли маркер активной сессии? Сами JWT недоступны JS, ориентируемся на edo_session. */
+export function hasSessionMarker(): boolean {
+  return readCookie('edo_session') === '1' || readCookie('edo_admin_session') === '1';
+}
+
+/** Сохраняет UI-данные сотрудника (несекретные) для отображения в интерфейсе.
+ *  Токены здесь принципиально не сохраняются — они живут только в HttpOnly-cookie. */
 export function persistLogin(resp: EmployeeLoginResponse): void {
-  setTokens(resp.access_token, resp.refresh_token);
   localStorage.setItem('org_name', resp.org_name);
   localStorage.setItem('org_id', String(resp.org_id));
   localStorage.setItem('employee_id', String(resp.employee_id));
@@ -36,13 +51,16 @@ export function persistLogin(resp: EmployeeLoginResponse): void {
 }
 
 function clearTokens() {
-  localStorage.removeItem('access_token');
-  localStorage.removeItem('refresh_token');
   localStorage.removeItem('org_name');
   localStorage.removeItem('org_id');
   localStorage.removeItem('employee_id');
   localStorage.removeItem('employee_name');
   localStorage.removeItem('employee_roles');
+  // Чистим и легаси-ключи токенов (могли остаться от прежних версий SPA).
+  localStorage.removeItem('access_token');
+  localStorage.removeItem('refresh_token');
+  localStorage.removeItem('admin_access_token');
+  localStorage.removeItem('admin_refresh_token');
 }
 
 // ===== Возврат в модуль после внешнего входа (ЕИС) =====
@@ -74,11 +92,14 @@ export function consumeAuthReturn(): { login: string; success: string } {
   return result;
 }
 
-// Добавляем access token к каждому запросу
+// Добавляем CSRF-токен к изменяющим запросам (double-submit с cookie edo_csrf)
 apiClient.interceptors.request.use((config) => {
-  const token = getAccessToken();
-  if (token) {
-    config.headers.Authorization = `Bearer ${token}`;
+  const method = String(config.method || 'get').toLowerCase();
+  if (method !== 'get' && method !== 'head' && method !== 'options') {
+    const csrf = getCsrfToken();
+    if (csrf) {
+      config.headers['X-CSRF-Token'] = csrf;
+    }
   }
   return config;
 });
@@ -88,7 +109,11 @@ let isRefreshing = false;
 let failedQueue: Array<{ resolve: (v: any) => void; reject: (e: any) => void; config: any }> = [];
 
 apiClient.interceptors.response.use(
-  (response) => response,
+  (response) => {
+    // Синхронизация часов клиента с сервером (см. utils/datetime.ts)
+    updateServerTime(response?.headers?.['x-server-time']);
+    return response;
+  },
   async (error) => {
     const originalRequest = error.config;
 
@@ -110,27 +135,16 @@ apiClient.interceptors.response.use(
       isRefreshing = true;
 
       try {
-        const refreshToken = getRefreshToken();
-        if (!refreshToken) {
-          clearTokens();
-          window.location.href = '/login';
-          return Promise.reject(error);
-        }
-
-        const response = await axios.post(`${API_BASE_URL}/api/auth/refresh`, {
-          refresh_token: refreshToken,
-        });
-        const { access_token, refresh_token } = response.data;
-        setTokens(access_token, refresh_token);
+        // Refresh-токен лежит в HttpOnly-cookie edo_refresh — тело запроса не нужно.
+        const response = await apiClient.post('/api/auth/refresh');
+        persistLogin(response.data);
 
         // Повторяем запросы из очереди
         failedQueue.forEach(({ resolve, config }) => {
-          config.headers.Authorization = `Bearer ${access_token}`;
           resolve(apiClient(config));
         });
         failedQueue = [];
 
-        originalRequest.headers.Authorization = `Bearer ${access_token}`;
         return apiClient(originalRequest);
       } catch (refreshError) {
         failedQueue = [];
@@ -309,7 +323,9 @@ export const authApi = {
   },
 
   isAuthenticated: () => {
-    return !!getAccessToken();
+    // JWT живут в HttpOnly-cookie и из JS не видны — проверяем маркер сессии,
+    // который сервер ставит вместе с сессионными cookie.
+    return hasSessionMarker();
   },
 
   /** Публичный статус интеграции с ЕИС: включён ли вход через ЕИС на бэкенде.
@@ -551,25 +567,19 @@ export const updateDocument = async (
   return response.data;
 };
 
-export const downloadOriginal = (uuid: string): string => {
-  const token = getAccessToken();
-  return `${API_BASE_URL}/api/documents/download/${uuid}${token ? `?token=${token}` : ''}`;
-};
+// Ссылки на скачивание: авторизация — сессионная cookie (браузер отправит её сам),
+// JWT в query-строке больше не передаётся (токен светился в логах и истории браузера).
+export const downloadOriginal = (uuid: string): string =>
+  `${API_BASE_URL}/api/documents/download/${uuid}`;
 
-export const downloadArchive = (uuid: string): string => {
-  const token = getAccessToken();
-  return `${API_BASE_URL}/api/documents/download/archive/${uuid}${token ? `?token=${token}` : ''}`;
-};
+export const downloadArchive = (uuid: string): string =>
+  `${API_BASE_URL}/api/documents/download/archive/${uuid}`;
 
-export const downloadSignedCopy = (uuid: string): string => {
-  const token = getAccessToken();
-  return `${API_BASE_URL}/api/documents/download/signed/${uuid}${token ? `?token=${token}` : ''}`;
-};
+export const downloadSignedCopy = (uuid: string): string =>
+  `${API_BASE_URL}/api/documents/download/signed/${uuid}`;
 
-export const downloadDocumentWithStamp = (uuid: string): string => {
-  const token = getAccessToken();
-  return `${API_BASE_URL}/api/documents/download/signed/${uuid}${token ? `?token=${token}` : ''}`;
-};
+export const downloadDocumentWithStamp = (uuid: string): string =>
+  `${API_BASE_URL}/api/documents/download/signed/${uuid}`;
 
 export const getFolderCounts = async (): Promise<Record<string, number>> => {
   const response = await apiClient.get(`/api/documents/counts/summary`);
@@ -1493,8 +1503,6 @@ export const deleteResponseTemplate = async (templateUuid: string) => {
   return response.data;
 };
 
-export const downloadAppealAttachment = (attachmentId: number): string => {
-  const token = getAccessToken();
-  return `${API_BASE_URL}/api/appeals/attachments/${attachmentId}/download${token ? `?token=${token}` : ''}`;
-};
+export const downloadAppealAttachment = (attachmentId: number): string =>
+  `${API_BASE_URL}/api/appeals/attachments/${attachmentId}/download`;
 

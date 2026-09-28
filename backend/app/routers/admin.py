@@ -5,7 +5,7 @@ import os
 import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from fastapi import APIRouter, Depends, HTTPException, status, Query, UploadFile, File, Form
+from fastapi import APIRouter, Depends, HTTPException, status, Query, Request, Response, UploadFile, File, Form
 from fastapi.responses import FileResponse, StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
@@ -22,6 +22,8 @@ from app.models.employee import Employee
 from app.models.pydantic import DocumentResponse
 from app.core.security import get_password_hash, verify_password, create_admin_token, create_refresh_token
 from app.core.dependencies import get_current_admin, get_current_admin_for_download
+from app.core.cookies import set_auth_cookies, clear_auth_cookies
+from app.core.time import now_naive
 from app.config import settings
 from app.utils.search import build_smart_search
 from app.models.appeal import Appeal, AppealAttachment, AppealStatusHistory, AppealKind, AppealApplicantType, AppealStatus
@@ -85,7 +87,7 @@ async def admin_list_appeals(
     """Все обращения по всем организациям (только просмотр)."""
     from app.models.employee import Employee as _Emp
 
-    now = datetime.now()
+    now = now_naive()
     filters = []
     if status:
         filters.append(Appeal.status == status)
@@ -157,7 +159,7 @@ async def admin_get_appeal(
 
     base = _admin_serialize_list_item(
         appeal, org.name if org else "—",
-        len(appeal.attachments) > 0, datetime.now())
+        len(appeal.attachments) > 0, now_naive())
 
     return {
         **base,
@@ -244,9 +246,11 @@ async def _find_org_admin_employee(db: AsyncSession, org: Organization) -> Optio
 @router.post("/login")
 async def admin_login(
     data: dict,
+    request: Request,
+    response: Response,
     db: AsyncSession = Depends(get_async_db),
 ):
-    """Вход администратора по логину и паролю."""
+    """Вход администратора по логину и паролю. Токены кладутся в HttpOnly-cookie."""
     login = (data.get("login") or "").strip()
     password = data.get("password") or ""
 
@@ -274,6 +278,7 @@ async def admin_login(
     token_data = {"sub": str(admin.id), "role": "admin"}
     access_token = create_admin_token(token_data)
     refresh_token = create_refresh_token(token_data)
+    set_auth_cookies(response, request, access_token, refresh_token, admin=True)
 
     return {
         "access_token": access_token,
@@ -286,9 +291,12 @@ async def admin_login(
 
 @router.post("/logout")
 async def admin_logout(
+    request: Request,
+    response: Response,
     admin: AdminUser = Depends(get_current_admin),
 ):
-    """Выход администратора."""
+    """Выход администратора: стираем admin-cookie."""
+    clear_auth_cookies(response, request, admin=True)
     return {"message": "Успешный выход"}
 
 
@@ -627,7 +635,7 @@ async def generate_licenses(
 ):
     """Генерация лицензионных ключей."""
     licenses = []
-    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    now = now_naive()
     expires = now + timedelta(days=duration_days)
 
     for _ in range(count):

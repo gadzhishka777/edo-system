@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, and_, or_
 
 from app.database import get_async_db
+from app.core.time import now_naive
 from app.models import Document, DocumentStatus, SignatureType, FolderType, Organization, StampMapping, CustomFolder
 from app.models.employee import Employee
 from app.models.mail import MailMessage, MailStatus
@@ -311,7 +312,7 @@ async def upload_document(
     else:
         status = DocumentStatus.DRAFT
     
-    now = datetime.now()
+    now = now_naive()
     # Дата документа: из формы, если её задали вручную, иначе текущий момент.
     # Раньше здесь всегда стояло now — введённая дата терялась при сохранении.
     doc_date = _parse_document_date(created_at) or now
@@ -552,7 +553,7 @@ async def verify_signature_endpoint(
         doc.signed_by_employee_id = matched_employee.id
         doc.signer = f"{matched_employee.last_name} {matched_employee.first_name}{' ' + (matched_employee.middle_name or '')}".strip()
         doc.signer_full_name = doc.signer
-        doc.signature_date = _parse_gost_date(signature_date_from_gost) or datetime.now()
+        doc.signature_date = _parse_gost_date(signature_date_from_gost) or now_naive()
     else:
         # Сотрудник не сопоставлен — всё равно сохраняем валидный документ,
         # подпись подтверждена. ФИО из ГОСТ подставляем как есть.
@@ -561,7 +562,7 @@ async def verify_signature_endpoint(
         doc.status = DocumentStatus.SIGNED
         doc.signer = signer_name_from_gost or doc.signer or "Не указан"
         doc.signer_full_name = signer_name_from_gost or doc.signer_full_name or ""
-        doc.signature_date = _parse_gost_date(signature_date_from_gost) or datetime.now()
+        doc.signature_date = _parse_gost_date(signature_date_from_gost) or now_naive()
 
     await db.commit()
     await db.refresh(doc)

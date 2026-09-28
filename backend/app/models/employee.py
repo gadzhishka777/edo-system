@@ -6,9 +6,10 @@
 """
 from sqlalchemy import Column, Integer, String, Boolean, DateTime, Text, ForeignKey
 from sqlalchemy.orm import relationship
-from sqlalchemy.sql import func
 import enum
 from app.models.base import Base
+
+from app.core.time import now_naive
 
 
 class EmployeeRoleEnum(str, enum.Enum):
@@ -95,8 +96,8 @@ class Employee(Base):
     esa_token_expires_at = Column(DateTime(timezone=True), nullable=True)
 
     # Даты
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+    created_at = Column(DateTime(timezone=True), default=now_naive)
+    updated_at = Column(DateTime(timezone=True), onupdate=now_naive)
 
     # Связи
     organization = relationship("Organization", back_populates="employees")
@@ -109,7 +110,7 @@ class DocumentReview(Base):
     id = Column(Integer, primary_key=True, index=True)
     document_id = Column(Integer, ForeignKey("documents.id"), nullable=False, index=True)
     employee_id = Column(Integer, ForeignKey("employees.id"), nullable=False, index=True)
-    reviewed_at = Column(DateTime(timezone=True), server_default=func.now())
+    reviewed_at = Column(DateTime(timezone=True), default=now_naive)
 
     # Уникальность: один сотрудник — один раз с одним документом
     __table_args__ = ()  # будет добавлено ограничение ниже

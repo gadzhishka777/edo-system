@@ -109,6 +109,25 @@ class VisualizeRequest(BaseModel):
     stamp_page: int = 1
     preview_width: int = 600
 
+    @field_validator("stamp_url")
+    @classmethod
+    def validate_stamp_url(cls, v: Optional[str]) -> Optional[str]:
+        """Первый барьер SSRF: только http(s), без userinfo, ограниченная длина.
+        Глубокая проверка (DNS, приватные IP, allowlist) — в pdf_service."""
+        if v is None or v == "":
+            return v
+        from urllib.parse import urlparse
+
+        if len(v) > 500:
+            raise ValueError("stamp_url слишком длинный")
+        if not v.startswith("/"):
+            parsed = urlparse(v)
+            if parsed.scheme not in ("http", "https") or not parsed.hostname:
+                raise ValueError("stamp_url должен быть http(s)-URL или путём внутри каталога штампов")
+            if parsed.username or parsed.password:
+                raise ValueError("stamp_url с userinfo запрещён")
+        return v
+
 class GoskeyData(BaseModel):
     certificate_serial: str
     signer_name: str

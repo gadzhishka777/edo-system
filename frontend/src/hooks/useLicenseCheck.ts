@@ -3,6 +3,7 @@ import { useEffect, useState, useCallback, useRef } from 'react';
 import { useEvents } from '../context/EventContext';
 import { authApi } from '../api/edoApi';
 import dayjs from 'dayjs';
+import { parseApiDate, serverNow } from '../utils/datetime';
 
 interface LicenseInfo {
   license_key: string;
@@ -39,7 +40,8 @@ export const useLicenseCheck = () => {
       setLicenseInfo(info);
       
       if (info.valid && info.expire_date) {
-        const daysUntilExpire = dayjs(info.expire_date).diff(dayjs(), 'day');
+        // Сравнение от серверных часов; дата из API парсится как MSK
+        const daysUntilExpire = dayjs(parseApiDate(info.expire_date)).diff(serverNow(), 'day');
         const daysLeft = Math.max(0, daysUntilExpire);
         info.days_until_expire = daysLeft;
         

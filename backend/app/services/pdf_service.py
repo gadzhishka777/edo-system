@@ -14,6 +14,7 @@ from reportlab.lib.utils import ImageReader
 import httpx
 
 from app.config import BASE_DIR
+from app.core.time import now_naive
 
 logger = logging.getLogger(__name__)
 
@@ -73,24 +74,91 @@ def generate_signed_copy(
     return result
 
 
-def _load_stamp_image(stamp_url: str):
-    """Загружает изображение штампа из URL или локального пути."""
-    if stamp_url.startswith('http'):
-        response = httpx.get(stamp_url, timeout=10)
-        return ImageReader(BytesIO(response.content))
+def _validate_stamp_url(stamp_url: str) -> bool:
+    """
+    SSRF-защита: URL штампа разрешён только если
+      - схема http/https;
+      - нет userinfo (user@host);
+      - хост в allowlist STAMP_URL_ALLOWED_HOSTS (если задан);
+      - ВСЕ IP-адреса хоста — публичные (приватные/loopback/link-local запрещены).
+    """
+    from urllib.parse import urlparse
+    import ipaddress
+    import socket
 
-    # Локальный путь — ищем относительно frontend/public
+    try:
+        parsed = urlparse(stamp_url)
+    except ValueError:
+        return False
+    if parsed.scheme not in ("http", "https"):
+        return False
+    if not parsed.hostname or len(stamp_url) > 500:
+        return False
+    if parsed.username or parsed.password:
+        return False
+
+    allowlist = [h.strip().lower() for h in os.getenv("STAMP_URL_ALLOWED_HOSTS", "").split(",") if h.strip()]
+    host = parsed.hostname.lower()
+    if allowlist and host not in allowlist:
+        return False
+
+    # Хост-литерал IP проверяем напрямую, доменное имя — по всем A/AAAA записям.
+    try:
+        addr_candidates = [ipaddress.ip_address(host)]
+    except ValueError:
+        try:
+            infos = socket.getaddrinfo(host, None)
+        except OSError:
+            return False
+        addr_candidates = []
+        for info in infos:
+            try:
+                addr_candidates.append(ipaddress.ip_address(info[4][0]))
+            except ValueError:
+                return False
+
+    for addr in addr_candidates:
+        if (
+            addr.is_private
+            or addr.is_loopback
+            or addr.is_link_local
+            or addr.is_reserved
+            or addr.is_multicast
+            or addr.is_unspecified
+        ):
+            return False
+    return True
+
+
+def _load_stamp_image(stamp_url: str):
+    """Загружает изображение штампа из разрешённого URL или из каталога штампов."""
+    if stamp_url.startswith('http'):
+        if not _validate_stamp_url(stamp_url):
+            logger.warning("SSRF-защита: отказ загрузки штампа с URL %s", stamp_url[:200])
+            return None
+        try:
+            with httpx.get(stamp_url, timeout=10, follow_redirects=False) as response:
+                if response.status_code != 200:
+                    logger.warning("Штамп недоступен: HTTP %s от %s", response.status_code, stamp_url[:200])
+                    return None
+                content_type = response.headers.get("content-type", "")
+                if not content_type.startswith("image/") or len(response.content) > 5 * 1024 * 1024:
+                    logger.warning("Штамп отклонён: content-type=%s, size=%s", content_type, len(response.content))
+                    return None
+                return ImageReader(BytesIO(response.content))
+        except httpx.HTTPError as e:
+            logger.warning("Ошибка загрузки штампа %s: %s", stamp_url[:200], e)
+            return None
+
+    # Локальный путь — ТОЛЬКО внутри каталога штампов frontend/public.
+    # Чтение произвольных файлов по абсолютному пути запрещено.
     img_path = stamp_url.lstrip('/')
-    # BASE_DIR = backend/, parent = корень проекта
-    public_path = Path(BASE_DIR).parent / 'frontend' / 'public' / img_path
-    if public_path.exists():
+    public_root = (Path(BASE_DIR).parent / 'frontend' / 'public').resolve()
+    public_path = (public_root / img_path).resolve()
+    if str(public_path).startswith(str(public_root) + os.sep) and public_path.is_file():
         return ImageReader(str(public_path))
 
-    # Также пробуем как абсолютный путь
-    if os.path.exists(stamp_url):
-        return ImageReader(stamp_url)
-
-    logger.warning(f"Изображение штампа не найдено: {stamp_url} (искали в {public_path})")
+    logger.warning(f"Изображение штампа не найдено или вне каталога штампов: {stamp_url} (корень: {public_root})")
     return None
 
 
@@ -199,7 +267,7 @@ def create_stamp_pdf(
     # Дата создания
     c.setFont('Helvetica', 7 * scale_factor)
     c.setFillColorRGB(0.5, 0.5, 0.5)
-    c.drawString(x_pt + 10, y_pt + 10, f"Создана: {datetime.now().strftime('%d.%m.%Y %H:%M')}")
+    c.drawString(x_pt + 10, y_pt + 10, f"Создана: {now_naive().strftime('%d.%m.%Y %H:%M')}")
 
     c.save()
     buffer.seek(0)

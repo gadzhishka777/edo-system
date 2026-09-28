@@ -6,8 +6,9 @@
 должность по классификатору, учебная нагрузка (только для учителей) и описание.
 """
 from sqlalchemy import Column, Integer, String, Boolean, DateTime, Text, ForeignKey
-from sqlalchemy.sql import func
 from app.models.base import Base
+
+from app.core.time import now_naive
 
 
 # ===== КЛАССИФИКАТОР ДОЛЖНОСТЕЙ =====
@@ -107,5 +108,5 @@ class Vacancy(Base):
     is_active = Column(Boolean, default=True, nullable=False)
 
     # Служебные даты
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+    created_at = Column(DateTime(timezone=True), default=now_naive)
+    updated_at = Column(DateTime(timezone=True), onupdate=now_naive)

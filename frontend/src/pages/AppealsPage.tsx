@@ -36,6 +36,7 @@ import {
 import { styled } from '@mui/material/styles';
 import dayjs from 'dayjs';
 import 'dayjs/locale/ru';
+import { formatApiDate, formatApiDateTime, serverNow } from '../utils/datetime';
 import {
   Refresh as RefreshIcon,
   Search as SearchIcon,
@@ -205,8 +206,8 @@ const StyledField = styled(TextField)({
   '& .MuiInputLabel-root': { fontFamily: 'Lato, sans-serif' },
 });
 
-const fmtDate = (iso?: string | null) => (iso ? dayjs(iso).format('DD.MM.YYYY') : '—');
-const fmtDateTime = (iso?: string | null) => (iso ? dayjs(iso).format('DD.MM.YYYY HH:mm') : '—');
+const fmtDate = (iso?: string | null) => (iso ? formatApiDate(iso) : '—');
+const fmtDateTime = (iso?: string | null) => (iso ? formatApiDateTime(iso) : '—');
 
 // ===== КОМПОНЕНТ =====
 const AppealsPage: React.FC = () => {
@@ -466,7 +467,7 @@ const AppealsPage: React.FC = () => {
     if (!card) return text;
     const parts = (card.applicant?.full_name || '').split(' ').filter(Boolean);
     const nameOtch = parts.slice(1).join(' ') || card.applicant?.full_name || '';
-    const fmt = (v?: string | null) => (v ? dayjs(v).format('DD.MM.YYYY') : '___');
+    const fmt = (v?: string | null) => (v ? formatApiDate(v) : '___');
     const values: Record<string, string> = {
       // описательные подсказки (вставляет пользователь)
       'ФИО заявителя': card.applicant?.full_name || '',
@@ -1462,7 +1463,7 @@ const AppealsPage: React.FC = () => {
               Регистрация обращения
             </Typography>
             <Typography sx={{ fontFamily: 'Lato, sans-serif', fontSize: '13px', color: '#87879b', mb: 2.5 }}>
-              Введите регистрационный номер. Дата регистрации фиксируется сегодняшним числом ({fmtDate(dayjs().toISOString())}).
+              Введите регистрационный номер. Дата регистрации фиксируется сегодняшним числом ({fmtDate(serverNow().toISOString())}).
               После регистрации начнёт отсчитываться срок ответа — 30 календарных дней.
             </Typography>
             <StyledField

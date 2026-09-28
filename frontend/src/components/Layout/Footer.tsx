@@ -257,7 +257,7 @@ const Footer: React.FC<{ variant?: FooterVariant }> = ({ variant = 'dark' }) => 
                 lineHeight: '16px',
               }}
             >
-              Версия 0.6
+              Версия 0.6.1
             </Typography>
           </Box>
         </Container>

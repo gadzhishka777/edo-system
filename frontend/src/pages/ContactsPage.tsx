@@ -35,6 +35,7 @@ import { LocalizationProvider } from '@mui/x-date-pickers/LocalizationProvider';
 import { AdapterDayjs } from '@mui/x-date-pickers/AdapterDayjs';
 import dayjs, { Dayjs } from 'dayjs';
 import 'dayjs/locale/ru';
+import { formatApiDate, parseApiDate } from '../utils/datetime';
 import { styled } from '@mui/material/styles';
 import {
   CheckBox as CheckBoxIcon,
@@ -297,7 +298,7 @@ const ContactsPage: React.FC = () => {
         position: contact.position || '',
         mobile_phone: contact.mobile_phone || '',
         email: contact.email || '',
-        birthday: contact.birthday ? dayjs(contact.birthday) : null,
+        birthday: contact.birthday ? dayjs(parseApiDate(contact.birthday)) : null,
         notes: contact.notes || '',
       });
     } else {
@@ -373,7 +374,8 @@ const ContactsPage: React.FC = () => {
 
   const formatDate = (dateStr?: string) => {
     if (!dateStr) return '—';
-    try { return dayjs(dateStr).format('DD.MM.YYYY'); } catch { return '—'; }
+    // parseApiDate дополняет naive-строку смещением МСК — дата не «уезжает» в локали браузера
+    try { return dayjs(parseApiDate(dateStr)).format('DD.MM.YYYY'); } catch { return '—'; }
   };
 
   if (loading && contacts.length === 0) {

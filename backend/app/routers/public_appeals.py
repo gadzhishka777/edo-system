@@ -14,6 +14,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
+from app.core.time import now, now_naive
 from app.database import get_async_db
 from app.models.appeal import (
     Appeal, AppealAttachment, AppealStatusHistory,
@@ -40,7 +41,7 @@ def _check_rate_limit(ip: str) -> None:
     Счётчик расходуется только после успешной валидации (см. _commit_rate_limit):
     иначе заявитель, трижды ошибшийся в форме, получает бан на час.
     """
-    now = datetime.now().timestamp()
+    now = now().timestamp()
     bucket = _rate_bucket[ip]
     while bucket and now - bucket[0] > _RATE_WINDOW:
         bucket.popleft()
@@ -50,9 +51,9 @@ def _check_rate_limit(ip: str) -> None:
 
 def _commit_rate_limit(ip: str) -> None:
     """Списание попытки + периодическая чистка памяти."""
-    _rate_bucket[ip].append(datetime.now().timestamp())
+    _rate_bucket[ip].append(now().timestamp())
     if len(_rate_bucket) > 1000:
-        cutoff = datetime.now().timestamp() - _RATE_WINDOW
+        cutoff = now().timestamp() - _RATE_WINDOW
         for key in [k for k, v in _rate_bucket.items() if not v or v[-1] < cutoff]:
             _rate_bucket.pop(key, None)
 
@@ -215,7 +216,7 @@ async def submit_appeal(
         prepared.append((f.filename, data))
 
     # Создание обращения
-    now = datetime.now()
+    now = now_naive()
     appeal_uuid = str(uuid_lib.uuid4())
     appeal = Appeal(
         uuid=appeal_uuid,

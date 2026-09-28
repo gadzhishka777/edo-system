@@ -41,6 +41,11 @@ npm-debug.log*
 # React build
 frontend/build/
 
+# Воркер pdf.js копируется в public/ скриптом frontend/scripts/copy-pdf-worker.js
+# (хуки prestart/prebuild) — в репозитории ему делать нечего, версия должна
+# всегда совпадать с react-pdf-овским pdfjs-dist.
+frontend/public/pdf.worker.min.js
+
 # Логи
 *.log
 logs/
@@ -51,3 +56,11 @@ Thumbs.db
 # SQLite WAL sidecar files
 *.db-shm
 *.db-wal
+
+# Скриншоты для сверки с макетами (локальный артефакт, не для репозитория)
+.screens/
+
+# Локальные артефакты ИИ-ассистента и отладочных прогонов.
+# В .tmp_test/ лежат cookie-jar с живыми JWT — в репозиторий попадать не должны.
+.tmp_test/
+.zcode/

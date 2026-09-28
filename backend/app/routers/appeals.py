@@ -17,6 +17,7 @@ from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
+from app.core.time import now_naive
 from app.database import get_async_db
 from app.models.appeal import (
     Appeal, AppealAttachment, AppealStatusHistory, AppealDocumentLink,
@@ -264,7 +265,7 @@ async def list_appeals(
     db: AsyncSession = Depends(get_async_db),
     org: Organization = Depends(get_current_org),
 ):
-    now = datetime.now()
+    now = now_naive()
 
     filters = [Appeal.owner_org_id == org.id]
     if status:
@@ -510,7 +511,7 @@ async def get_appeal_card(
     db: AsyncSession = Depends(get_async_db),
     org: Organization = Depends(get_current_org),
 ):
-    now = datetime.now()
+    now = now_naive()
     appeal = await _get_appeal(db, appeal_uuid, org)
 
     attachments = [{
@@ -616,7 +617,7 @@ async def register_appeal(
     if dup.scalar_one_or_none():
         raise HTTPException(400, f"Регистрационный номер «{reg_number}» уже используется")
 
-    now = datetime.now()
+    now = now_naive()
     appeal.status = AppealStatus.REGISTERED
     appeal.reg_number = reg_number
     appeal.registered_at = now
@@ -777,7 +778,7 @@ async def redirect_appeal(
     comment = (data.comment or "").strip()
 
     # Копия обращения в организацию-получатель
-    now = datetime.now()
+    now = now_naive()
     forwarded = Appeal(
         uuid=str(uuid_lib.uuid4()),
         system_number="PENDING",
@@ -1211,7 +1212,7 @@ async def reply_to_appeal(
             _add_file(doc.signed_copy_path or doc.original_file_path)
 
     # Формирование письма
-    now = datetime.now()
+    now = now_naive()
     fmt_created = appeal.created_at.strftime("%d.%m.%Y") if appeal.created_at else "___"
     reg_label = appeal.reg_number or appeal.system_number
 

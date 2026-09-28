@@ -1,40 +1,62 @@
 # backend/app/core/dependencies.py
 """
 Зависимости для авторизации: сотрудник + организация.
-get_current_employee — извлекает сотрудника из JWT токена.
-get_current_org — возвращает организацию текущего сотрудника (обёртка для обратной совместимости).
+
+Токен извлекается в порядке приоритета:
+  1. Authorization: Bearer <jwt>      — API-клиенты, smoke-тесты;
+  2. сессионная cookie edo_access / edo_admin_access — браузерный SPA.
+
+Токен в query-параметрах (?token=) больше не принимается:
+JWT в URL попадают в логи прокси и истории браузера.
 """
-from fastapi import Depends, HTTPException, status, Query
-from fastapi.security import OAuth2PasswordBearer
+from typing import Optional
+
+from fastapi import Depends, HTTPException, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from sqlalchemy.orm import joinedload
-from typing import Optional
 
 from app.database import get_async_db
 from app.models.mail import Organization
 from app.models.employee import Employee
 from app.models import AdminUser
 from app.core.security import decode_token
+from app.core.cookies import ACCESS_COOKIE, ADMIN_ACCESS_COOKIE
 
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/login")
-oauth2_scheme_optional = OAuth2PasswordBearer(tokenUrl="/api/auth/login", auto_error=False)
-admin_oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/admin/login")
+
+def _bearer_token(request: Request) -> Optional[str]:
+    auth = request.headers.get("authorization")
+    if auth and auth.lower().startswith("bearer "):
+        return auth[7:].strip() or None
+    return None
+
+
+async def employee_token(request: Request) -> Optional[str]:
+    """Токен сотрудника: Bearer-заголовок, затем cookie."""
+    return _bearer_token(request) or request.cookies.get(ACCESS_COOKIE)
+
+
+async def admin_token(request: Request) -> Optional[str]:
+    """Токен администратора: Bearer-заголовок, затем cookie."""
+    return _bearer_token(request) or request.cookies.get(ADMIN_ACCESS_COOKIE)
 
 
 # ===================== СОТРУДНИК =====================
 
 
 async def get_current_employee(
-    token: str = Depends(oauth2_scheme),
+    token: Optional[str] = Depends(employee_token),
     db: AsyncSession = Depends(get_async_db),
 ) -> Employee:
-    """Извлекает текущего сотрудника из JWT токена."""
+    """Извлекает текущего сотрудника из JWT (Bearer или cookie)."""
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Не удалось проверить учётные данные",
         headers={"WWW-Authenticate": "Bearer"},
     )
+
+    if not token:
+        raise credentials_exception
 
     payload = decode_token(token)
     if payload is None:
@@ -115,27 +137,17 @@ async def get_current_org(
 
 
 async def get_current_org_for_download(
-    token: Optional[str] = Query(None, alias="token"),
-    header_token: Optional[str] = Depends(oauth2_scheme_optional),
+    employee: Employee = Depends(get_current_employee),
     db: AsyncSession = Depends(get_async_db),
 ) -> Organization:
-    """Зависимость для скачивания файлов (token в query или header)."""
-    raw_token = header_token or token
-    if not raw_token:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Не удалось проверить учётные данные",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-    employee = await get_current_employee(raw_token, db)
+    """Зависимость для скачивания файлов (cookie или Bearer)."""
     return await get_current_org(employee, db)
 
 
 async def get_current_org_optional(
-    token: str = Depends(oauth2_scheme),
+    employee: Employee = Depends(get_current_employee),
     db: AsyncSession = Depends(get_async_db),
 ) -> Organization:
-    employee = await get_current_employee(token, db)
     return await get_current_org(employee, db)
 
 
@@ -143,15 +155,18 @@ async def get_current_org_optional(
 
 
 async def get_current_admin(
-    token: str = Depends(admin_oauth2_scheme),
+    token: Optional[str] = Depends(admin_token),
     db: AsyncSession = Depends(get_async_db),
 ) -> AdminUser:
-    """Зависимость: извлекает текущего администратора из JWT токена."""
+    """Зависимость: извлекает текущего администратора из JWT (Bearer или cookie)."""
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Не удалось проверить учётные данные администратора",
         headers={"WWW-Authenticate": "Bearer"},
     )
+
+    if not token:
+        raise credentials_exception
 
     payload = decode_token(token)
     if payload is None:
@@ -184,16 +199,8 @@ async def get_current_admin(
 
 
 async def get_current_admin_for_download(
-    token: Optional[str] = Query(None, alias="token"),
-    header_token: Optional[str] = Depends(admin_oauth2_scheme),
+    admin: AdminUser = Depends(get_current_admin),
     db: AsyncSession = Depends(get_async_db),
 ) -> AdminUser:
-    """Зависимость для скачивания файлов администратором (token в query или header)."""
-    raw_token = header_token or token
-    if not raw_token:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Не удалось проверить учётные данные администратора",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-    return await get_current_admin(raw_token, db)
+    """Зависимость для скачивания файлов администратором (cookie или Bearer)."""
+    return admin

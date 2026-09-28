@@ -17,6 +17,7 @@ from cryptography.x509 import load_pem_x509_certificate
 from cryptography.hazmat.backends import default_backend
 
 from app.config import DEMO_MODE
+from app.core.time import now_naive
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO)
@@ -55,7 +56,7 @@ def _demo_verification(document_content: bytes, signature_data: Dict[str, Any]) 
     is_valid = signature_data.get("valid", False)
     signer_name = signature_data.get("signer", "Иванов И.И.")
     signer_inn = signature_data.get("inn", "1234567890")
-    sign_date = signature_data.get("sign_date", datetime.now().isoformat())
+    sign_date = signature_data.get("sign_date", now_naive().isoformat())
     cert_serial = signature_data.get("cert_serial", "12:34:56:78:90:AB")
     
     # Вычисляем хэш документа (для лога)
@@ -129,7 +130,7 @@ def _real_verification(document_content: bytes, signature_data: Dict[str, Any]) 
         cert_serial = hex(certificate.serial_number)[2:].upper()
         
         # 7. Добавляем информацию о времени
-        sign_date = signature_data.get("timestamp", datetime.now().isoformat())
+        sign_date = signature_data.get("timestamp", now_naive().isoformat())
         
         result = {
             "signature_valid": is_valid,
@@ -150,7 +151,7 @@ def _real_verification(document_content: bytes, signature_data: Dict[str, Any]) 
             "signature_valid": False,
             "signer_name": "Ошибка проверки",
             "signer_inn": "",
-            "signature_date": datetime.now().isoformat(),
+            "signature_date": now_naive().isoformat(),
             "certificate_serial": "НЕДОСТУПЕН",
             "hash_algorithm": "Ошибка",
             "verification_details": f"Ошибка при проверке: {str(e)}"

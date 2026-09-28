@@ -14,6 +14,7 @@ import os
 
 # UTF-8 вывод до первых print (см. комментарий в модуле)
 from app.core.stdio_utf8 import fix as _fix_stdio
+from app.core.time import now_naive
 
 _fix_stdio()
 
@@ -224,13 +225,13 @@ async def create_license():
             existing.is_active = False
             await db.commit()
         
-        license_key = f"LIC-{uuid.uuid4().hex[:8].upper()}-{datetime.now().strftime('%Y%m')}"
+        license_key = f"LIC-{uuid.uuid4().hex[:8].upper()}-{now_naive().strftime('%Y%m')}"
         
         print("\n  Параметры лицензии:")
         days = input("  Срок действия (дней, по умолчанию 365): ").strip()
         days = int(days) if days else 365
         
-        expires_at = datetime.now() + timedelta(days=days)
+        expires_at = now_naive() + timedelta(days=days)
         
         license_obj = License(
             uuid=str(uuid.uuid4()),
@@ -238,7 +239,7 @@ async def create_license():
             duration_days=days,
             is_active=True,
             activated_org_id=org_id,
-            activated_at=datetime.now(),
+            activated_at=now_naive(),
             expires_at=expires_at,
         )
         

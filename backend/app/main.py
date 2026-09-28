@@ -21,6 +21,7 @@ import json
 import secrets
 
 from app.config import settings
+from app.core.time import now_naive, iso_msk, now
 from app.database import async_engine, AsyncSessionLocal
 from app.models.base import Base
 from app.models.mail import Organization, License
@@ -487,7 +488,7 @@ async def seed_response_templates():
                 name=spec["name"],
                 body=spec["body"],
                 is_system=True,
-                created_at=datetime.now(),
+                created_at=now_naive(),
             ))
             created += 1
         if created:
@@ -527,6 +528,27 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Безопасность: заголовки + CSRF (двойной submit для cookie-сессий).
+#
+# ПОРЯДОК ВАЖЕН. В Starlette последний добавленный middleware оказывается
+# САМЫМ ВНЕШНИМ. Итоговая цепочка должна быть такой:
+#
+#     SecurityHeaders -> CORS -> CSRF -> роутер
+#
+# Почему именно так:
+#   - SecurityHeaders снаружи всех: его ответ 403 от CSRF тоже должен получить
+#     nosniff/X-Frame-Options/Content-Language. Если он окажется внутри CSRF,
+#     отказ уйдёт «голым» — без заголовков безопасности.
+#   - CORS снаружи CSRF: тогда отклонённый запрос всё равно получит
+#     Access-Control-Allow-Origin, и в браузере видно настоящую причину (403),
+#     а не замаскированную под CORS-ошибку.
+#   - CSRF снаружи роутера: проверка выполняется до бизнес-логики, ничего не
+#     создаётся и не меняется при подделке.
+from app.core.middleware import CSRFMiddleware, SecurityHeadersMiddleware  # noqa: E402
+
+app.add_middleware(CSRFMiddleware)
+app.add_middleware(SecurityHeadersMiddleware)
+
 # Роутеры
 app.include_router(auth.router, prefix=settings.API_PREFIX)
 app.include_router(documents.router, prefix=settings.API_PREFIX)
@@ -543,12 +565,18 @@ app.include_router(appeals.router, prefix=settings.API_PREFIX)
 
 @app.get("/")
 async def root():
-    return {"service": settings.APP_NAME, "version": settings.APP_VERSION}
+    # Номер версии не отдаём — снижает информативность для разведки.
+    return {"service": settings.APP_NAME}
 
 
 @app.get("/api/health")
 async def health_check():
-    return {"status": "ok", "service": settings.APP_NAME}
+    return {
+        "status": "ok",
+        "service": settings.APP_NAME,
+        "server_time": iso_msk(now()),
+        "timezone": str(now().tzinfo),
+    }
 
 
 def _jsonable_validation_errors(errors: list) -> list:

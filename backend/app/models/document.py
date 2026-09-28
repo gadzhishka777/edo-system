@@ -1,9 +1,10 @@
 # backend/app/models/document.py
 from sqlalchemy import Column, Integer, String, Text, DateTime, Boolean, Float, ForeignKey, Enum as SQLEnum
 from sqlalchemy.orm import relationship
-from sqlalchemy.sql import func
 import enum
 from app.models.base import Base
+
+from app.core.time import now_naive
 
 class SignatureType(str, enum.Enum):
     NONE = "none"
@@ -45,7 +46,7 @@ class Document(Base):
     executor = Column(String(255))
     
     # Даты
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    created_at = Column(DateTime(timezone=True), default=now_naive)
     signature_date = Column(DateTime(timezone=True), nullable=True)
     
     # Файлы
@@ -103,7 +104,7 @@ class StampMapping(Base):
     signer_keyword = Column(String(255), unique=True, index=True, nullable=False)
     stamp_url = Column(String(500), nullable=False)
     stamp_filename = Column(String(255), nullable=False)
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    created_at = Column(DateTime(timezone=True), default=now_naive)
 
 
 class CustomFolder(Base):
@@ -114,4 +115,4 @@ class CustomFolder(Base):
     uuid = Column(String(36), unique=True, index=True, nullable=False)
     org_id = Column(Integer, ForeignKey("organizations.id"), nullable=False, index=True)
     name = Column(String(255), nullable=False)
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    created_at = Column(DateTime(timezone=True), default=now_naive)
