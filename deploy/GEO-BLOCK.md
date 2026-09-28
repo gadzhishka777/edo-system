@@ -60,10 +60,25 @@ curl -s -o /dev/null -w 'HTTP %{http_code}\n' https://toredo.mroo-snpm.ru/
 
 * `/.well-known/...` — ACME-челлендж certbot. Иначе через 90 дней сертификат
   не продлится.
+* `/geo-fonts/...` — шрифт Lato для самой страницы-заглушки
+  (`deploy/geoip/fonts/`). Заблокированный клиент по определению не может
+  взять файл с нашего домена, поэтому этот путь — исключение. Без него
+  «Доступ ограничен» отрисуется системным шрифтом.
 * Доверенные IP (`$geo_trusted`): `127.0.0.1`, `::1`, `31.41.60.0/24` — то есть
   systemd, мониторинг на самом сервере и подсеть админки.
 * `/api/health` на уровне бэкенда — от него зависит `ExecStartPost` в
   `edo-backend.service`.
+
+### Шрифт страницы-заглушки
+
+Страница отдаётся шрифтом **Lato** — тем же, что объявлен в приложении
+(`frontend/src/index.css`). Файлы лежат в репозитории, в
+`deploy/geoip/fonts/`, и отдаются nginx по пути `/geo-fonts/`.
+
+Почему не Google Fonts: там у Lato есть только сабсеты `latin` и `latin-ext`,
+**кириллицы нет** — русский текст молча отрисовался бы системным шрифтом.
+Взята официальная сборка Lato v3.100 (tyPoland, SIL OFL 1.1), в которой
+кириллица есть. Подробности и команды пересборки — `deploy/geoip/fonts/README.md`.
 
 ---
 
@@ -95,6 +110,15 @@ sudo nginx -t && sudo systemctl reload nginx
 
 **Способ 2** — попросить коллегу за границей или использовать любой сервис
 проверки доступности из другой страны.
+
+Проверить, что отдаётся шрифт заглушки (тип обязан быть `font/woff2`,
+иначе браузер вправе шрифт не применить):
+
+```bash
+curl -s -o /dev/null -w 'HTTP %{http_code}  %{content_type}\n' \
+  https://toredo.mroo-snpm.ru/geo-fonts/lato-400.woff2
+# ожидаем: HTTP 200  font/woff2
+```
 
 **Посмотреть, какую страну определил nginx** (временно, потом убрать):
 
@@ -248,6 +272,7 @@ sudo nginx -t && sudo systemctl reload nginx
 | Файл | Назначение |
 |---|---|
 | `deploy/geoip/geo-blocked.html` | страница «Доступ ограничен» (отдаёт nginx) |
+| `deploy/geoip/fonts/` | шрифт Lato для заглушки (отдаётся по `/geo-fonts/`) + лицензия OFL |
 | `deploy/geoip/update_geoip_db.sh` | загрузка/обновление базы стран DB-IP Lite |
 | `deploy/nginx-snippets/edo-geo-block.conf` | GeoIP2, список стран, доверенные IP, ACME (контекст `http`) |
 | `deploy/nginx-snippets/edo-geo-block-server.conf` | логика запрета + `error_page` (внутри `server{}`) |

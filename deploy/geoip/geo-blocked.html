@@ -9,6 +9,40 @@
      а не истёкшая сессия, и уводит пользователя на эту же страницу. -->
 <meta name="edo-geo-block" content="1">
 <style>
+  /* Шрифт Lato — тот же, что объявлен в приложении (frontend/src/index.css).
+     Файлы лежат рядом с этой страницей, в deploy/geoip/fonts/, и отдаются
+     nginx по пути /geo-fonts/ (см. edo-geo-block-server.conf).
+
+     ПОЧЕМУ СВОЙ ФАЙЛ, А НЕ GOOGLE FONTS: в Google Fonts у Lato есть только
+     сабсеты latin и latin-ext — кириллицы там НЕТ, и русский текст молча
+     отрисовался бы системным шрифтом. Здесь же официальная сборка Lato
+     v3.100 (tyPoland, SIL OFL 1.1), в которой кириллица есть.
+     Лицензия: fonts/LICENSE-lato.txt.
+
+     font-display: swap — если шрифт вдруг не загрузится, текст всё равно
+     виден сразу, системным шрифтом. */
+  @font-face {
+    font-family: 'Lato';
+    font-style: normal;
+    font-weight: 400;
+    font-display: swap;
+    src: url('/geo-fonts/lato-400.woff2') format('woff2');
+  }
+  @font-face {
+    font-family: 'Lato';
+    font-style: normal;
+    font-weight: 500;
+    font-display: swap;
+    src: url('/geo-fonts/lato-500.woff2') format('woff2');
+  }
+  @font-face {
+    font-family: 'Lato';
+    font-style: normal;
+    font-weight: 700;
+    font-display: swap;
+    src: url('/geo-fonts/lato-700.woff2') format('woff2');
+  }
+
   :root {
     --bg: #ffffff;
     --fg: #171717;
@@ -32,8 +66,10 @@
   body {
     background: var(--bg);
     color: var(--fg);
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
-                 "Helvetica Neue", Arial, "Noto Sans", sans-serif;
+    /* Стек как в приложении (frontend/src/index.css): Lato, затем системные. */
+    font-family: 'Lato', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
+                 Oxygen, Ubuntu, Cantarell, 'Fira Sans', 'Droid Sans',
+                 'Helvetica Neue', sans-serif;
     -webkit-font-smoothing: antialiased;
     padding: 56px 20px 64px;
     display: flex;
@@ -107,8 +143,6 @@
   </svg>
 
   <h1>Доступ ограничен</h1>
-
-  <p class="lead">Сервис «ТОР ЭДО» доступен только на территории России, Беларуси и Казахстана.</p>
 
   <p class="lead">Чтобы решить проблему, попробуйте сделать следующее:</p>
   <ul>
