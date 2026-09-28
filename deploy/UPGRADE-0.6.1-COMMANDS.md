@@ -296,8 +296,8 @@ cd "$BEND"
 
 # 5.1 Собрать новый venv РЯДОМ — текущий прод не трогаем
 python3.12 -m venv "$VENV_NEW"
-"$VENV_NEW/bin/pip" install --upgrade pip
-"$VENV_NEW/bin/pip" install -r requirements.txt
+"$VENV_NEW/bin/python" -m pip install --upgrade pip
+"$VENV_NEW/bin/python" -m pip install -r requirements.txt
 ```
 
 > **Устанавливать ТОЛЬКО через `-r requirements.txt`.** Не перечисляйте пакеты
@@ -314,7 +314,7 @@ while IFS= read -r req; do
     case "$req" in ''|'#'*) continue ;; esac
     name="${req%%[=<>]*}"; name="${name%%\[*}"   # uvicorn[standard] -> uvicorn
     want="${req##*==}"                    # всё после последнего '=='
-    have=$("$VENV_NEW/bin/pip" show "$name" 2>/dev/null \
+    have=$("$VENV_NEW/bin/python" -m pip show "$name" 2>/dev/null \
              | awk '/^Version:/{print $2}' | tr -d '\r')
     if [ "$have" = "$want" ]; then
         echo "OK    $name $have"
@@ -324,11 +324,11 @@ while IFS= read -r req; do
 done < requirements.txt
 
 # Зависимости не должны конфликтовать между собой
-"$VENV_NEW/bin/pip" check
+"$VENV_NEW/bin/python" -m pip check
 ```
 
 Ожидаем строки `OK` и `No broken requirements found.` Если есть `МИМО` —
-переустановите: `"$VENV_NEW/bin/pip" install --force-reinstall -r requirements.txt`.
+переустановите: `"$VENV_NEW/bin/python" -m pip install --force-reinstall -r requirements.txt`.
 
 > Разбор двух тонкостей в этом цикле (обе реально ломали вывод при проверке):
 > `pip show uvicorn[standard]` **не работает** — extras из имени надо срезать,
@@ -371,10 +371,29 @@ mv venv venv-old && mv venv-061 venv
 VENV="$(dirname "$VENV")/venv"      # имя не меняется, но переменную обновим
 echo "VENV = $VENV"
 "$VENV/bin/python" --version
+
+# ОБЯЗАТЕЛЬНО после переименования: починить shebang в лаунчерах venv.
+# В bin/pip, bin/uvicorn и прочих в первой строке записан АБСОЛЮТНЫЙ путь
+# к интерпретатору. После `mv venv-061 venv` он устаревает, и запуск падает с
+#   Failed to execute .../venv/bin/uvicorn: No such file or directory
+# хотя сам файл на месте. Скрипт правит только сломанные shebang.
+"$PROJ/deploy/fix_venv_shebangs.sh" "$VENV"
+
+# Проверка, что лаунчеры живые
+"$VENV/bin/uvicorn" --version && "$VENV/bin/pip" --version
 ```
 
+> **Почему это важно.** `venv/bin/python` — симлинк на системный python, он
+> переезд переживает. А вот `venv/bin/uvicorn` и `venv/bin/pip` — обычные
+> текстовые файлы, и путь в их первой строке «зашит» на момент установки.
+> Именно из-за этого после переключения venv падает и systemd (он запускает
+> `bin/uvicorn`), и последующий `pip install` внутри этого venv.
+> Если починить shebang нельзя — запускайте через интерпретатор:
+> `"$VENV/bin/python" -m uvicorn app.main:app` и `"$VENV/bin/python" -m pip ...`.
+
 `deploy/start_backend.sh` сам находит venv в обеих раскладках (`backend/venv`,
-затем `<корень>/venv`) — правок не требует. Если у вас свой systemd-юнит —
+затем `<корень>/venv`) и запускает uvicorn через `python -m uvicorn`, поэтому
+к сломанным shebang он невосприимчив. Если у вас свой systemd-юнит —
 проверьте в нём путь к python:
 
 ```bash
@@ -408,8 +427,8 @@ python-dotenv==1.2.2: command not found
 
 ```bash
 cd "$BEND"
-"$VENV_NEW/bin/pip" install -r requirements.txt     # приведёт версии к пинам
-"$VENV_NEW/bin/pip" list 2>/dev/null | grep -E "^(fastapi|starlette|pydantic|uvicorn) "
+"$VENV_NEW/bin/python" -m pip install -r requirements.txt     # приведёт версии к пинам
+"$VENV_NEW/bin/python" -m pip list 2>/dev/null | grep -E "^(fastapi|starlette|pydantic|uvicorn) "
 # ожидаем: fastapi 0.139.0 / starlette 1.3.1 / pydantic 2.13.4 / uvicorn 0.51.0
 ```
 
@@ -797,7 +816,7 @@ systemctl status edo-backend --no-pager | head -15
 
 ```bash
 cd /var/www/edo/backend
-../venv/bin/pip install -r requirements.txt    # или ./venv/bin/pip, если venv внутри backend
+../venv/bin/python -m pip install -r requirements.txt    # или ./venv/bin/python -m pip, если venv внутри backend
 ```
 
 > **Почему так вышло:** venv переносили, а юнит ссылался на старое место.
@@ -896,6 +915,9 @@ cd "$PROJ" && git reset --hard <коммит-из-шага-1.7>
 
 # 13.2 Зависимости (обратная перестановка venv — в каталоге, где он лежит)
 cd "$(dirname "$VENV")" && mv venv venv-061 && mv venv-old venv
+# и сразу починить shebang: после любого переименования venv лаунчеры
+# (bin/uvicorn, bin/pip) ссылаются на несуществующий путь
+"$PROJ/deploy/fix_venv_shebangs.sh" "$VENV"
 
 # 13.3 База — ТОЛЬКО если уже применили сдвиг времени
 sudo systemctl stop edo-backend 2>/dev/null || pkill -f "uvicorn app.main:app"
@@ -986,7 +1008,7 @@ BK=/root/backup/edo-$(date +%F_%H%M) && mkdir -p "$BK" \
  && (sudo systemctl stop edo-backend 2>/dev/null || pkill -f "uvicorn app.main:app") \
  && git pull origin main \
  && cd "$BEND" && python3.12 -m venv "$VENV_NEW" \
- && "$VENV_NEW/bin/pip" install -q -r requirements.txt \
+ && "$VENV_NEW/bin/python" -m pip install -q -r requirements.txt \
  && DOCS_ENABLED=false "$VENV_NEW/bin/python" -c "import app.main as m; print('IMPORT OK', m.app.version)" \
  && cd "$VENVDIR" && mv venv venv-old && mv venv-061 venv && echo "VENV SWITCHED"
 # дальше вручную: шаги 6 (.env), 7 (время), 8 (пароль), 9 (nginx), 10 (фронт), 11 (старт), 12 (приёмка)

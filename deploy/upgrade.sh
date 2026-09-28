@@ -22,6 +22,8 @@
 #  ДРУГИЕ РЕЖИМЫ:
 #      ./deploy/upgrade.sh --check     только посмотреть состояние, ничего не менять
 #      ./deploy/upgrade.sh --backup-only  только сделать бэкап и остановиться
+#      ./deploy/upgrade.sh --fix-shebangs  починить shebang в лаунчерах venv
+#                                        (нужно после переименования/переноса venv)
 #      ./deploy/upgrade.sh --rollback  откатить базу/.env/venv из последнего бэкапа
 #      ./deploy/upgrade.sh --yes       не задавать вопросов (осторожно!)
 #      ./deploy/upgrade.sh --no-stop   не останавливать бэкенд (git pull без простоя)
@@ -37,9 +39,10 @@ set -euo pipefail
 # ------------------------------------------------------------
 # 1. Значения по умолчанию и разбор аргументов
 # ------------------------------------------------------------
-MODE="upgrade"          # upgrade | check | rollback | backup
+MODE="upgrade"          # upgrade | check | rollback | backup | fixshebangs
 ASSUME_YES="0"
 DO_STOP="1"
+DRY_RUN_FLAG=""
 DB_PATH_OVERRIDE=""
 PORT_OVERRIDE=""
 NEW_VENV_NAME="venv-061"   # так называется новое окружение
@@ -50,6 +53,8 @@ while [ $# -gt 0 ]; do
         --check)       MODE="check" ;;
         --rollback)    MODE="rollback" ;;
         --backup-only) MODE="backup" ;;
+        --fix-shebangs) MODE="fixshebangs" ;;
+        --dry-run)     DRY_RUN_FLAG="--dry-run" ;;
         --yes|-y)      ASSUME_YES="1" ;;
         --no-stop)     DO_STOP="0" ;;
         --db)          DB_PATH_OVERRIDE="${2:-}"; shift ;;
@@ -244,7 +249,7 @@ run_check() {
             info "$(grep -E '^version' "$VENV/pyvenv.cfg" 2>/dev/null | head -1 || true)"
         fi
         info "python: $("$VENV/bin/python" --version 2>&1 || echo 'не запускается')"
-        info "fastapi: $("$VENV/bin/pip" show fastapi 2>/dev/null | awk '/^Version:/{print $2}' | tr -d '\r' || true)"
+        info "fastapi: $("$VENV/bin/python" -m pip show fastapi 2>/dev/null | awk '/^Version:/{print $2}' | tr -d '\r' || true)"
     else
         warn "окружение не найдено — ни backend/venv, ни $PROJ/venv"
         warn "скрипт обновления создаст его с нуля: $VENV_NEW"
@@ -518,14 +523,14 @@ build_venv() {
     ok "окружение создано ($("$VENV_NEW/bin/python" --version 2>&1))"
 
     info "обновляю pip…"
-    "$VENV_NEW/bin/pip" install --quiet --upgrade pip setuptools wheel \
+    "$VENV_NEW/bin/python" -m pip install --quiet --upgrade pip setuptools wheel \
         || warn "не удалось обновить pip — продолжаю с тем, что есть"
     ok "pip готов"
 
     info "ставлю зависимости из requirements.txt (это самая долгая часть)…"
     # ВАЖНО: именно -r requirements.txt, а не список пакетов в командной строке.
     # Иначе pip ставит зависимости unpinned и версии разъезжаются.
-    "$VENV_NEW/bin/pip" install -r "$BEND/requirements.txt" || die "pip install не прошёл — смотрите вывод выше"
+    "$VENV_NEW/bin/python" -m pip install -r "$BEND/requirements.txt" || die "pip install не прошёл — смотрите вывод выше"
     ok "зависимости установлены"
 
     hdr "Сверка версий с requirements.txt"
@@ -537,7 +542,7 @@ build_venv() {
         local name="${req%%[=<>]*}"; name="${name%%\[*}"
         local want="${req##*==}"
         local have_v
-        have_v="$("$VENV_NEW/bin/pip" show "$name" 2>/dev/null | awk '/^Version:/{print $2}' | tr -d '\r')"
+        have_v="$("$VENV_NEW/bin/python" -m pip show "$name" 2>/dev/null | awk '/^Version:/{print $2}' | tr -d '\r')"
         if [ "$have_v" = "$want" ]; then
             ok "$name $have_v"
         else
@@ -553,7 +558,7 @@ build_venv() {
         ok "все версии совпадают с requirements.txt"
     fi
 
-    if "$VENV_NEW/bin/pip" check; then ok "pip check: конфликтов нет"; else warn "pip check нашёл проблемы"; fi
+    if "$VENV_NEW/bin/python" -m pip check; then ok "pip check: конфликтов нет"; else warn "pip check нашёл проблемы"; fi
 }
 
 # ============================================================
@@ -627,6 +632,13 @@ ${C_HDR}--- 12. Переключение окружения и запуск ---$
   mv "$(basename "${VENV:-venv}")" "$OLD_VENV_NAME"     # старое -> venv-old
   mv "$NEW_VENV_NAME" "$(basename "${VENV:-venv}")"     # новое  -> рабочее имя
   # если venv-old уже есть — сначала уберите/переименуйте его, иначе mv откажется
+
+  # ВАЖНО! После переименования venv внутри него ЛОМАЮТСЯ shebang у bin/pip,
+  # bin/uvicorn и других лаунчеров: в первой строке записан СТАРЫЙ путь,
+  # которого больше нет. Симптом в логах:
+  #   Failed to execute .../venv/bin/uvicorn: No such file or directory
+  # хотя сам файл на месте. Правит только сломанные shebang:
+  $PROJ/deploy/fix_venv_shebangs.sh
 
   sudo systemctl restart $SERVICE_NAME
   systemctl status $SERVICE_NAME --no-pager
@@ -715,6 +727,15 @@ main() {
     case "$MODE" in
         check)    run_check; return 0 ;;
         rollback) run_rollback; return 0 ;;
+        fixshebangs)
+            # Делегируем в отдельный скрипт: он же вызывается в шаге 12 после
+            # переключения venv, когда лаунчеры внутри venv теряют свой shebang.
+            if [ -n "${VENV:-}" ]; then
+                exec bash "$SCRIPT_DIR/fix_venv_shebangs.sh" $DRY_RUN_FLAG "$VENV"
+            else
+                exec bash "$SCRIPT_DIR/fix_venv_shebangs.sh" $DRY_RUN_FLAG
+            fi
+            ;;
     esac
 
     mkdir -p "$BACKUP_ROOT"

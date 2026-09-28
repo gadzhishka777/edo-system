@@ -20,7 +20,7 @@
 ```bash
 cd backend
 python3 -m venv venv          # если venv уже есть — пропустить (см. примечание)
-./venv/bin/pip install -r requirements.txt
+./venv/bin/python -m pip install -r requirements.txt
 cp .env .env.local   # резервная копия текущего
 ```
 

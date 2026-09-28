@@ -103,8 +103,8 @@ git pull
 ```bash
 cd /var/www/edo/backend
 python3.12 -m venv venv-061
-./venv-061/bin/pip install --upgrade pip
-./venv-061/bin/pip install -r requirements.txt
+./venv-061/bin/python -m pip install --upgrade pip
+./venv-061/bin/python -m pip install -r requirements.txt
 ```
 
 **Проверка ДО остановки сервиса** — приложение должно импортироваться и отдать версию:
