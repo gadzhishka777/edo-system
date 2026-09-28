@@ -68,6 +68,19 @@ sudo ln -sf /etc/nginx/sites-available/edo /etc/nginx/sites-enabled/edo
 sudo nginx -t && sudo systemctl reload nginx
 ```
 
+> **`deploy/nginx.conf` и `deploy/nginx-http.conf` — это конфиги САЙТА.**
+> Копировать их можно **только** в `/etc/nginx/sites-available/<имя сайта>`.
+> В них нет секций `events {}` и `http {}` — главный конфиг подключает их
+> через `include sites-enabled/*`.
+>
+> Если скопировать такой файл в `/etc/nginx/nginx.conf`, nginx потеряет
+> `sites-enabled/*` (отвалятся остальные сайты сервера), `conf.d/*` и
+> `modules-enabled/*` — последнее ломает загрузку модуля `geoip2`, и
+> `nginx -t` падает на `unknown directive "geoip2"`.
+>
+> Проверка: `grep -c worker_processes /etc/nginx/nginx.conf` — должно быть `0`.
+> Починка: `deploy/GEO-BLOCK.md`, раздел «Если nginx.conf перезаписан».
+
 Перед переходом на http обязательно прочитайте шапку `deploy/nginx-http.conf`:
 там перечислены четыре ловушки (HSTS-«привязка» браузеров, `ESA_REDIRECT_URI`
 в ЕИС, флаг `Secure` у cookie, смешанный контент за внешним прокси).

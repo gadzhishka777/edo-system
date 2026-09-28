@@ -11,13 +11,32 @@
 Порядок важен: **сначала модуль и база, потом конфиг.** Если поставить конфиг
 раньше, `nginx -t` упадёт на отсутствующем файле базы, и `reload` не состоится.
 
+Всё сразу делает установщик — он идемпотентный, проверяет предпосылки,
+делает бэкапы и **откатывается сам**, если `nginx -t` не прошёл:
+
+```bash
+cd /var/www/edo
+git pull
+sudo bash deploy/geoip/install_geo_block.sh
+```
+
+Полезные флаги: `--dry-run` (только показать план), `--http` (поставить
+HTTP-вариант конфига), `--no-reload`.
+
+<details>
+<summary>То же самое вручную (если хочется по шагам)</summary>
+
 ```bash
 cd /var/www/edo
 git pull
 
+# 0. ПРОВЕРИТЬ, ЧТО /etc/nginx/nginx.conf — ГЛАВНЫЙ конфиг, а не файл сайта
+grep -c worker_processes /etc/nginx/nginx.conf     # ожидаем 0
+
 # 1. модуль GeoIP2 для nginx (есть в main-репозитории Ubuntu 22.04)
 sudo apt update
 sudo apt install -y libnginx-mod-http-geoip2
+ls /etc/nginx/modules-enabled/ | grep geoip2       # модуль должен быть включён
 
 # 2. база стран (~8 МБ, CC BY 4.0, без регистрации)
 sudo bash deploy/geoip/update_geoip_db.sh
@@ -29,6 +48,16 @@ sudo cp /etc/nginx/sites-available/edo "/etc/nginx/sites-available/edo.bak-$(dat
 sudo cp deploy/nginx.conf /etc/nginx/sites-available/edo
 sudo nginx -t && sudo systemctl reload nginx
 ```
+
+> **`deploy/nginx.conf` — это конфиг САЙТА, а не главный конфиг nginx.**
+> Он копируется **только** в `/etc/nginx/sites-available/<имя сайта>`.
+> Если скопировать его в `/etc/nginx/nginx.conf`, nginx потеряет
+> `include sites-enabled/*` (отвалятся все остальные сайты сервера),
+> `include conf.d/*` и `include modules-enabled/*` — а без последнего модуль
+> `geoip2` не загрузится и `nginx -t` упадёт на `unknown directive "geoip2"`.
+> Как починить — в разделе «Грабли» ниже.
+
+</details>
 
 Проверить, что сам сервер (localhost) по-прежнему видит сайт:
 
@@ -220,14 +249,108 @@ sudo nginx -t && sudo systemctl reload nginx
 
 ---
 
+## Если nginx.conf перезаписан конфигом сайта
+
+**Симптом:** `nginx -t` падает на `unknown directive "geoip2"` (или на
+`"server" directive is not allowed here`), хотя модуль установлен.
+
+**Причина:** `deploy/nginx.conf` — это конфиг **сайта**. В нём нет секций
+`events {}` и `http {}`; он рассчитан на то, что его подключит главный конфиг
+из `sites-enabled/`. Если положить его в `/etc/nginx/nginx.conf`, nginx теряет:
+
+| Что теряется | Последствие |
+|---|---|
+| `include /etc/nginx/sites-enabled/*;` | отваливаются **все остальные сайты** сервера (например, `school.mroo-snpm.ru`) |
+| `include /etc/nginx/modules-enabled/*.conf;` | не грузится модуль `geoip2` → `unknown directive "geoip2"` |
+| `include /etc/nginx/conf.d/*.conf;` | отваливаются общие настройки |
+
+Сайт при этом **не падает**: `reload` не состоялся, nginx продолжает работать
+на прежнем конфиге. Но при **перезагрузке сервера** nginx не запустится —
+поэтому чинить нужно сразу.
+
+**Проверка одной командой:**
+
+```bash
+grep -c worker_processes /etc/nginx/nginx.conf
+```
+
+`0` — значит в `nginx.conf` лежит конфиг сайта. В настоящем главном конфиге
+`worker_processes` есть всегда.
+
+**Лечение (копировать целиком):**
+
+```bash
+# 1. сохранить текущее состояние, ничего не удаляя
+sudo mkdir -p /root/nginx-recovery
+sudo cp -a /etc/nginx/nginx.conf /root/nginx-recovery/nginx.conf.wrong-copy
+
+# 2. убрать ошибочно скопированный файл в сторону
+sudo mv /etc/nginx/nginx.conf /etc/nginx/nginx.conf.wrong-copy
+
+# 3. вернуть оригинал из пакета nginx
+cd /tmp && apt-get download nginx && dpkg-deb -x nginx_*.deb nginx-pkg
+sudo cp /tmp/nginx-pkg/etc/nginx/nginx.conf /etc/nginx/nginx.conf
+
+# 4. проверить, что вернулись все три include
+grep -nE '^\s*include' /etc/nginx/nginx.conf
+
+# 5. проверить синтаксис и перезагрузить
+sudo nginx -t && sudo systemctl reload nginx
+```
+
+> `apt-get install --reinstall nginx` здесь **не поможет**: файл в системе
+> существует (просто не тот), и dpkg оставит его как «изменённый вручную».
+> Поэтому оригинал берётся прямо из `.deb`.
+>
+> Если скачать пакет нельзя (нет сети или nginx не из apt) — вот минимальный
+> рабочий главный конфиг, его достаточно:
+>
+> ```nginx
+> user www-data;
+> worker_processes auto;
+> pid /run/nginx.pid;
+> include /etc/nginx/modules-enabled/*.conf;
+>
+> events { worker_connections 768; }
+>
+> http {
+>     include /etc/nginx/mime.types;
+>     default_type application/octet-stream;
+>     ssl_protocols TLSv1.2 TLSv1.3;
+>     access_log /var/log/nginx/access.log;
+>     error_log /var/log/nginx/error.log;
+>     gzip on;
+>     include /etc/nginx/conf.d/*.conf;
+>     include /etc/nginx/sites-enabled/*;
+> }
+> ```
+>
+> Если в вашем прежнем `nginx.conf` были свои настройки внутри `http {}`
+> (например, `client_max_body_size` или `server_names_hash_bucket_size`),
+> их придётся вернуть руками — они в этом шаблоне не восстановятся.
+
+После этого конфиг сайта ставится уже **правильно**:
+
+```bash
+sudo bash deploy/geoip/install_geo_block.sh
+```
+
+---
+
 ## Грабли
 
 * **`nginx -t` падает: `open() "/var/lib/nginx-geoip/dbip-country-lite.mmdb" failed`.**
   Файла базы нет. Сначала `sudo bash deploy/geoip/update_geoip_db.sh`, потом
   ставить конфиг. Сайт при этом не падает — работает на прежнем конфиге.
-* **`nginx -t` падает: `unknown directive "geoip2"`.** Не установлен модуль:
-  `sudo apt install libnginx-mod-http-geoip2`. Проверить, что он подхватился:
-  `ls /etc/nginx/modules-enabled/ | grep geoip2`.
+* **`nginx -t` падает: `unknown directive "geoip2"`.** Две причины, проверять
+  в этом порядке:
+  1. **Не установлен модуль** — `sudo apt install libnginx-mod-http-geoip2`,
+     затем `ls /etc/nginx/modules-enabled/ | grep geoip2`.
+  2. **Главный конфиг потерял `include modules-enabled/*`** — почти всегда
+     потому, что в `/etc/nginx/nginx.conf` случайно скопировали
+     `deploy/nginx.conf` (конфиг сайта). Проверка:
+     `grep -c worker_processes /etc/nginx/nginx.conf` — если `0`, это не
+     главный конфиг. Лечение — раздел «Если nginx.conf перезаписан» ниже.
 * **`nginx -t` падает: `unknown directive "set"` / `"map"`.** Скорее всего
   фрагмент `edo-geo-block.conf` попал внутрь `server{}`. Он обязан быть в
   контексте `http` — то есть в файле сайта **до** первого `server {`.
@@ -274,6 +397,7 @@ sudo nginx -t && sudo systemctl reload nginx
 | `deploy/geoip/geo-blocked.html` | страница «Доступ ограничен» (отдаёт nginx) |
 | `deploy/geoip/fonts/` | шрифт Lato для заглушки (отдаётся по `/geo-fonts/`) + лицензия OFL |
 | `deploy/geoip/update_geoip_db.sh` | загрузка/обновление базы стран DB-IP Lite |
+| `deploy/geoip/install_geo_block.sh` | установка всего сразу: проверки, модуль, база, конфиги, откат при ошибке |
 | `deploy/nginx-snippets/edo-geo-block.conf` | GeoIP2, список стран, доверенные IP, ACME (контекст `http`) |
 | `deploy/nginx-snippets/edo-geo-block-server.conf` | логика запрета + `error_page` (внутри `server{}`) |
 | `backend/app/core/middleware.py` | `GeoBlockMiddleware` — вторая линия обороны |
