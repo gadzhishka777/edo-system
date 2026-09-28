@@ -89,7 +89,12 @@ log "  домен       : $DOMAIN"
 # 1. Главный конфиг nginx должен быть главным конфигом
 # ------------------------------------------------------------
 step "1/6  Главный конфиг $MAIN_CONF"
-[ -f "$MAIN_CONF" ] || die "$MAIN_CONF не существует"
+[ -f "$MAIN_CONF" ] || die "$MAIN_CONF не существует.
+Главный конфиг nginx удалён или переименован. Верните его из пакета:
+    sudo apt-get install --reinstall -o Dpkg::Options::=\"--force-confmiss\" nginx-common
+    sudo nginx -t
+Затем запустите этот скрипт снова.
+Подробности — deploy/GEO-BLOCK.md, раздел «Если nginx.conf перезаписан»."
 
 if ! grep -qE '^[[:space:]]*worker_processes' "$MAIN_CONF"; then
     log "В $MAIN_CONF нет директивы worker_processes."
@@ -103,14 +108,12 @@ if ! grep -qE '^[[:space:]]*worker_processes' "$MAIN_CONF"; then
 
 Восстановите главный конфиг:
     sudo mv $MAIN_CONF $MAIN_CONF.wrong-copy
-    # затем взять оригинал из пакета:
-    cd /tmp && rm -rf nginx-pkg nginx_*.deb
-    apt-get download nginx && dpkg-deb -x nginx_*.deb nginx-pkg
-    sudo cp /tmp/nginx-pkg/etc/nginx/nginx.conf $MAIN_CONF
+    # затем вернуть его из пакета nginx-common:
+    sudo apt-get install --reinstall -o Dpkg::Options::="--force-confmiss" nginx-common
     sudo nginx -t
 
 Затем запустите этот скрипт снова.
-Подробности — deploy/GEO-BLOCK.md, раздел «Грабли».
+Подробности — deploy/GEO-BLOCK.md, раздел «Если nginx.conf перезаписан».
 TEXT
     else
         die "$MAIN_CONF не похож на главный конфиг nginx (нет worker_processes)"
@@ -150,7 +153,7 @@ else
             log "  установка не прошла — возможно, устарел список пакетов: sudo apt update"
     else
         die "пакет с модулем geoip2 не найден в репозиториях.
-Ubuntu 22.04:  sudo apt update && sudo apt install -y libnginx-mod-http-geoip2
+Ubuntu 22.04 / 24.04:  sudo apt update && sudo apt install -y libnginx-mod-http-geoip2
 Если nginx ставился из репозитория nginx.org — имя пакета nginx-module-geoip2."
     fi
     have_module || die "после установки модуль всё ещё не найден в $MODULES_PATH"

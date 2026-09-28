@@ -33,7 +33,7 @@ git pull
 # 0. ПРОВЕРИТЬ, ЧТО /etc/nginx/nginx.conf — ГЛАВНЫЙ конфиг, а не файл сайта
 grep -c worker_processes /etc/nginx/nginx.conf     # ожидаем 0
 
-# 1. модуль GeoIP2 для nginx (есть в main-репозитории Ubuntu 22.04)
+# 1. модуль GeoIP2 для nginx (есть в main-репозитории Ubuntu 22.04 и 24.04)
 sudo apt update
 sudo apt install -y libnginx-mod-http-geoip2
 ls /etc/nginx/modules-enabled/ | grep geoip2       # модуль должен быть включён
@@ -282,15 +282,13 @@ grep -c worker_processes /etc/nginx/nginx.conf
 ```bash
 # 1. сохранить текущее состояние, ничего не удаляя
 sudo mkdir -p /root/nginx-recovery
-sudo cp -a /etc/nginx/nginx.conf /root/nginx-recovery/nginx.conf.wrong-copy
+sudo cp -a /etc/nginx/nginx.conf /root/nginx-recovery/nginx.conf.wrong-copy 2>/dev/null
 
 # 2. убрать ошибочно скопированный файл в сторону
 sudo mv /etc/nginx/nginx.conf /etc/nginx/nginx.conf.wrong-copy
 
-# 3. вернуть оригинал из пакета nginx
-cd /tmp && rm -rf nginx-pkg nginx_*.deb
-apt-get download nginx && dpkg-deb -x nginx_*.deb nginx-pkg
-sudo cp /tmp/nginx-pkg/etc/nginx/nginx.conf /etc/nginx/nginx.conf
+# 3. вернуть главный конфиг из пакета
+sudo apt-get install --reinstall -o Dpkg::Options::="--force-confmiss" nginx-common
 
 # 4. проверить, что вернулись все три include
 grep -nE '^\s*include' /etc/nginx/nginx.conf
@@ -299,12 +297,31 @@ grep -nE '^\s*include' /etc/nginx/nginx.conf
 sudo nginx -t && sudo systemctl reload nginx
 ```
 
-> `apt-get install --reinstall nginx` здесь **не поможет**: файл в системе
-> существует (просто не тот), и dpkg оставит его как «изменённый вручную».
-> Поэтому оригинал берётся прямо из `.deb`.
+> **Почему `nginx-common`, а не `nginx`.** В Ubuntu `/etc/nginx/nginx.conf`
+> принадлежит пакету **`nginx-common`**. Пакет `nginx` — метапакет: внутри
+> только зависимости и changelog, самого конфига там нет
+> (`apt-get download nginx` → 525 КБ пустоты). Проверено на Ubuntu 24.04.
 >
-> Если скачать пакет нельзя (нет сети или nginx не из apt) — вот минимальный
-> рабочий главный конфиг, его достаточно:
+> **Почему `--force-confmiss`.** Для dpkg удалённый вручную conffile — это
+> «так и задумано», и он его не восстанавливает. Опция `--force-confmiss`
+> возвращает именно **отсутствующие** conffiles и не трогает изменённые.
+> Поэтому `apt-get install --reinstall nginx-common` **без** этой опции
+> не поможет.
+>
+> **Если apt недоступен** — берём файл из `.deb` вручную:
+>
+> ```bash
+> cd /tmp && rm -rf nginx-pkg nginx-common_*.deb
+> apt-get download nginx-common
+> dpkg-deb -x nginx-common_*.deb nginx-pkg
+> sudo cp /tmp/nginx-pkg/etc/nginx/nginx.conf /etc/nginx/nginx.conf
+> sudo nginx -t && sudo systemctl reload nginx
+> ```
+>
+> Если в вашем прежнем `nginx.conf` были свои настройки внутри `http {}`
+> (например, `client_max_body_size` или `server_names_hash_bucket_size`),
+> их придётся вернуть руками — стандартный конфиг их не содержит.
+> Минимальный рабочий вариант, если совсем ничего не осталось:
 >
 > ```nginx
 > user www-data;
@@ -325,10 +342,6 @@ sudo nginx -t && sudo systemctl reload nginx
 >     include /etc/nginx/sites-enabled/*;
 > }
 > ```
->
-> Если в вашем прежнем `nginx.conf` были свои настройки внутри `http {}`
-> (например, `client_max_body_size` или `server_names_hash_bucket_size`),
-> их придётся вернуть руками — они в этом шаблоне не восстановятся.
 
 После этого конфиг сайта ставится уже **правильно**:
 
