@@ -18,7 +18,6 @@
     "@types/react-dom": "^19.2.3",
     "axios": "^1.18.1",
     "dayjs": "^1.11.21",
-    "pdfjs-dist": "^4.3.136",
     "react": "^19.2.7",
     "react-dom": "^19.2.7",
     "react-draggable": "^4.7.0",

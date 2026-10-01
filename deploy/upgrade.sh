@@ -12,7 +12,9 @@
 #
 #  ЧЕГО СКРИПТ НЕ ДЕЛАЕТ (специально — здесь нужны ваши глаза):
 #    правка .env, сдвиг времени в базе, пароль администратора, nginx,
-#    сборка фронта, переключение venv, запуск сервиса.
+#    переключение venv, запуск сервиса.
+#  СБОРКА ФРОНТА — теперь ДЕЛАЕТСЯ автоматически (с проверкой воркера PDF),
+#  см. build_frontend() и verify_pdf_worker(). Пропустить: --no-frontend.
 #    В конце скрипт печатает ровно то, что осталось сделать руками,
 #    по шагам и с готовыми командами.
 #
@@ -42,6 +44,7 @@ set -euo pipefail
 MODE="upgrade"          # upgrade | check | rollback | backup | fixshebangs
 ASSUME_YES="0"
 DO_STOP="1"
+DO_FRONTEND="1"          # собирать фронт автоматически (--no-frontend чтобы пропустить)
 DRY_RUN_FLAG=""
 DB_PATH_OVERRIDE=""
 PORT_OVERRIDE=""
@@ -57,6 +60,7 @@ while [ $# -gt 0 ]; do
         --dry-run)     DRY_RUN_FLAG="--dry-run" ;;
         --yes|-y)      ASSUME_YES="1" ;;
         --no-stop)     DO_STOP="0" ;;
+        --no-frontend) DO_FRONTEND="0" ;;
         --db)          DB_PATH_OVERRIDE="${2:-}"; shift ;;
         --port)        PORT_OVERRIDE="${2:-}"; shift ;;
         --help|-h)
@@ -318,6 +322,12 @@ run_check() {
     [ -f /etc/nginx/snippets/edo-security-headers.conf ] && ok "nginx: сниппет заголовков установлен" \
         || warn "nginx: сниппета /etc/nginx/snippets/edo-security-headers.conf нет (нужен для 0.6.1)"
     [ -f "$PROJ/frontend/build/index.html" ] && ok "фронт собран" || warn "фронт не собран"
+    if [ -f "$PROJ/frontend/build/pdf.worker.min.js" ]; then
+        ok "воркер PDF в сборке: $(ls -lh "$PROJ/frontend/build/pdf.worker.min.js" | awk '{print $5}')"
+    else
+        warn "воркер PDF ОТСУТСТВУЕТ в сборке — предпросмотр PDF в «Документах» не работает!"
+        info "  исправление: cd $PROJ/frontend && npm ci && npm run build"
+    fi
 
     hdr "Бэкапы"
     if [ -d "$BACKUP_ROOT" ]; then
@@ -562,6 +572,67 @@ build_venv() {
 }
 
 # ============================================================
+#  СБОРКА ФРОНТЕНДА + ПРОВЕРКА ВОРКЕРА PDF
+# ============================================================
+build_frontend() {
+    hdr "Шаг 5.5. Сборка фронтенда"
+    local FE="$PROJ/frontend"
+    [ -d "$FE" ] || die "каталог фронтенда не найден: $FE"
+    [ -f "$FE/package.json" ] || die "нет $FE/package.json"
+
+    have node || die "node не найден — нужен Node.js 18+ для сборки фронта (apt-get install -y nodejs npm)."
+    info "node: $(node --version 2>&1)   npm: $(npm --version 2>&1)"
+
+    cd "$FE"
+    info "чистая установка зависимостей (npm ci)…"
+    npm ci --no-audit --no-fund || die "npm ci не прошёл — смотрите вывод выше"
+    ok "зависимости установлены"
+
+    info "сборка (npm run build → хук prebuild копирует pdf.worker.min.js)…"
+    npm run build || die "npm run build не прошёл — воркер PDF мог не скопироваться"
+    ok "фронтенд собран"
+
+    # критичная проверка: воркер PDF обязан попасть в сборку
+    verify_pdf_worker "$FE"
+
+    cd "$PROJ"
+}
+
+# Проверяет, что воркер PDF присутствует в build/ и его версия совпадает с
+# pdfjs-dist, который реально использует react-pdf. Без этого предпросмотр
+# PDF в «Документах» падает (самая частая причина «в проде не работает PDF»).
+verify_pdf_worker() {
+    local FE="$1"
+    local worker="$FE/build/pdf.worker.min.js"
+    hdr "Проверка воркера PDF в сборке"
+    if [ ! -f "$worker" ]; then
+        err "ВНИМАНИЕ: $worker ОТСУТСТВУЕТ!"
+        err "nginx по try_files отдаст на /pdf.worker.min.js файл index.html,"
+        err "и pdf.js не сможет запустить воркер -> предпросмотр PDF падает."
+        err "Причина: сборка фронта не выполнялась, либо хук prebuild не скопировал воркер."
+        die "Исправление вручную: cd $FE && npm ci && npm run build"
+    fi
+    local size
+    size="$(stat -c%s "$worker" 2>/dev/null || wc -c < "$worker")"
+    if [ "${size:-0}" -lt 300000 ]; then
+        die "воркер подозрительно мал ($size байт) — похоже, это не pdf.worker.min.js. Пересоберите фронт."
+    fi
+    ok "воркер на месте: $(ls -lh "$worker" | awk '{print $5}')"
+
+    # сверка версии воркера с установленным pdfjs-dist (приоритет — вложенный у react-pdf)
+    local installed=""
+    installed="$(node -p "require('$FE/node_modules/react-pdf/node_modules/pdfjs-dist/package.json').version" 2>/dev/null \
+                 || node -p "require('$FE/node_modules/pdfjs-dist/package.json').version" 2>/dev/null)"
+    if [ -n "$installed" ]; then
+        if grep -q "$installed" "$worker"; then
+            ok "версия воркера совпадает с pdfjs-dist@$installed"
+        else
+            warn "не удалось подтвердить версию воркера ($installed) внутри файла сборки — проверьте глазами"
+        fi
+    fi
+}
+
+# ============================================================
 #  ПРОВЕРКА, ЧТО НОВЫЙ КОД ИМПОРТИРУЕТСЯ
 # ============================================================
 verify_import() {
@@ -623,8 +694,12 @@ ${C_HDR}--- 10. nginx ---${C_OFF}
   sudo cp $PROJ/deploy/nginx.conf /etc/nginx/sites-available/edo.conf
   sudo nginx -t && sudo systemctl reload nginx
 
-${C_HDR}--- 11. Фронт ---${C_OFF}
-  cd $PROJ/frontend && npm ci && npm run build
+${C_HDR}--- 11. Фронт (собирается автоматически на шаге 5.5) ---${C_OFF}
+  Скрипт уже выполнил: npm ci && npm run build и проверил, что
+  build/pdf.worker.min.js на месте. Если нужно пересобрать вручную:
+    cd $PROJ/frontend && npm ci && npm run build
+  Проверить воркер на живом сайте:
+    bash $PROJ/deploy/check_pdf_worker.sh
   (старая сборка лежит в бэкапе: $BK/frontend-build.tar.gz)
 
 ${C_HDR}--- 12. Переключение окружения и запуск ---${C_OFF}
@@ -806,6 +881,12 @@ main() {
     pull_code
     build_venv
     verify_import
+    if [ "$DO_FRONTEND" = "1" ]; then
+        build_frontend
+    else
+        hdr "Сборка фронтенда — пропущена (флаг --no-frontend)"
+        info "если понадобится собрать вручную: cd $PROJ/frontend && npm ci && npm run build"
+    fi
     print_next_steps
 }
 

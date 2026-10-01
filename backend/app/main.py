@@ -560,6 +560,11 @@ app.add_middleware(GeoBlockMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins,
+    # Локальная разработка: любой loopback-origin (localhost / 127.0.0.1 / ::1)
+    # на ЛЮБОМ порту. Фронт, поднятый не на стандартном порту (CRA берёт 3001+),
+    # иначе получал бы «CORS заблокировал» на загрузке файлов. В проде API —
+    # same-origin, поэтому этот regex не задействован и на безопасность не влияет.
+    allow_origin_regex=r"^https?://(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

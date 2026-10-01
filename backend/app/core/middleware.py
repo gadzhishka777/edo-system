@@ -28,6 +28,7 @@ GeoBlockMiddleware — вторая линия обороны гео-огран�
 разрешённых стран. По умолчанию выключено — см. GEO_BLOCK_ENABLED в config.py.
 """
 import logging
+import re
 
 from fastapi import Request
 from fastapi.responses import JSONResponse
@@ -80,8 +81,26 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         return response
 
 
+_LOOPBACK_RE = re.compile(r"^https?://(localhost|127\.0\.0\.1|\[::1\])(:\d+)?/?$", re.IGNORECASE)
+
+
+def _is_loopback_origin(origin: str) -> bool:
+    """True для http(s)://localhost / 127.0.0.1 / [::1] на любом порту.
+
+    Локальная разработка: фронт часто поднимается не на стандартном порту из
+    CORS_ORIGINS (CRA берёт 3001/3002, если 3000 занят). С точки зрения CORS это
+    тот же хост — отдавать файлы (загрузка PDF) с него безопасно, иначе браузер
+    видит ответ без Access-Control-Allow-Origin и маскирует любую 403 под
+    «CORS заблокировал».
+    """
+    return bool(_LOOPBACK_RE.match(origin or ""))
+
+
 def _origin_allowed(origin: str, request: Request) -> bool:
     origin = origin.rstrip("/").lower()
+    # Локальная разработка: любой loopback-origin на любом порту.
+    if _is_loopback_origin(origin):
+        return True
     if origin in [o.rstrip("/").lower() for o in settings.cors_origins]:
         return True
     # Same-origin запросы: origin вида scheme://host[:port] совпадает с хостом запроса.
@@ -95,6 +114,27 @@ def _origin_allowed(origin: str, request: Request) -> bool:
     return False
 
 
+def _cors_reflect_headers(request: Request) -> dict:
+    """Заголовки для НАШИХ 403, чтобы браузер показал настоящую причину отказа
+    вместо «CORS заблокировал».
+
+    Когда ответ уходит без Access-Control-Allow-Origin, браузер маскирует 403 под
+    CORS-ошибку («No 'Access-Control-Allow-Origin' header is present»), и
+    разработчик видит не «запрещённый Origin» / «CSRF-токен устарел», а ложный
+    CORS. Отражаем Origin ТОЛЬКО для разрешённых/loopback/same-host — иначе мы бы
+    открыли чтение ответа любому произвольному сайту (это был бы CORS-хол с
+    credentials).
+    """
+    origin = request.headers.get("origin")
+    if origin and _origin_allowed(origin, request):
+        return {
+            "Access-Control-Allow-Origin": origin,
+            "Access-Control-Allow-Credentials": "true",
+            "Vary": "Origin",
+        }
+    return {}
+
+
 class CSRFMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
         path = request.url.path
@@ -104,13 +144,18 @@ class CSRFMiddleware(BaseHTTPMiddleware):
         origin = request.headers.get("origin")
         if origin and not _origin_allowed(origin, request):
             logger.warning("CSRF: запрещённый Origin=%s для %s %s", origin, request.method, path)
-            return JSONResponse(status_code=403, content={"detail": "Запрос отклонён проверкой безопасности"})
+            return JSONResponse(
+                status_code=403,
+                content={"detail": "Запрос отклонён проверкой безопасности"},
+                headers=_cors_reflect_headers(request),
+            )
 
         if has_session_cookie(request) and not verify_csrf(request):
             logger.warning("CSRF: отсутствует/невалиден X-CSRF-Token для %s %s", request.method, path)
             return JSONResponse(
                 status_code=403,
                 content={"detail": "CSRF-токен устарел, обновите страницу и попробуйте снова"},
+                headers=_cors_reflect_headers(request),
             )
 
         return await call_next(request)
@@ -172,4 +217,5 @@ class GeoBlockMiddleware(BaseHTTPMiddleware):
         return JSONResponse(
             status_code=403,
             content={"detail": GEO_BLOCK_DETAIL, "code": "geo_blocked"},
+            headers=_cors_reflect_headers(request),
         )
