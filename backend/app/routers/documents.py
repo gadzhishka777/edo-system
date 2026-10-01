@@ -3,7 +3,7 @@ import json
 import logging
 from datetime import datetime, date, time
 from pathlib import Path
-from typing import Optional
+from typing import Optional, List
 import shutil
 import re
 
@@ -15,11 +15,15 @@ from sqlalchemy import select, func, and_, or_
 from app.database import get_async_db
 from app.core.time import now_naive
 from app.models import Document, DocumentStatus, SignatureType, FolderType, Organization, StampMapping, CustomFolder
+from app.models.document import DocumentType, Numerator, RegistryKind, REGISTRY_KIND_LABELS
 from app.models.employee import Employee
 from app.models.mail import MailMessage, MailStatus
 from app.models.pydantic import (
     DocumentCreate, DocumentUpdate, DocumentResponse,
-    PaginatedResponse, VisualizeRequest
+    PaginatedResponse, VisualizeRequest,
+    DocumentTypeCreate, DocumentTypeUpdate, DocumentTypeResponse,
+    NumeratorCreate, NumeratorUpdate, NumeratorResponse,
+    NextRegistrationNumberResponse,
 )
 from app.services.signature_service import verify_signature
 from app.services.pdf_service import generate_signed_copy
@@ -263,13 +267,212 @@ async def delete_custom_folder(
     return {"message": f"Папка «{folder.name}» удалена"}
 
 
+# ---------------------------------------------------------------------------
+# СЭД: виды документов и нумераторы (Ф1)
+# ---------------------------------------------------------------------------
+
+_DEFAULT_NUMERATOR_PREFIX = {
+    RegistryKind.INCOMING: "ВХ",
+    RegistryKind.OUTGOING: "ИСХ",
+    RegistryKind.INTERNAL: "ВН",
+}
+
+
+async def _ensure_numerator(db: AsyncSession, org: Organization, registry_kind: RegistryKind) -> Numerator:
+    """Возвращает нумератор для (org, registry_kind), создавая дефолтный при необходимости.
+    При смене года счётчик сбрасывается."""
+    result = await db.execute(
+        select(Numerator).where(Numerator.org_id == org.id, Numerator.registry_kind == registry_kind)
+    )
+    num = result.scalar_one_or_none()
+    if num is None:
+        num = Numerator(
+            org_id=org.id,
+            name=f"Нумератор: {REGISTRY_KIND_LABELS.get(registry_kind, registry_kind.value)}",
+            registry_kind=registry_kind,
+            prefix=_DEFAULT_NUMERATOR_PREFIX.get(registry_kind, ""),
+            year=now_naive().year,
+            counter=0,
+        )
+        db.add(num)
+        await db.commit()
+        await db.refresh(num)
+    cur_year = now_naive().year
+    if num.year != cur_year:
+        num.year = cur_year
+        num.counter = 0
+        await db.commit()
+    return num
+
+
+def _format_reg_number(num: Numerator, counter: int) -> str:
+    try:
+        return num.template.format(prefix=num.prefix, year=num.year, counter=counter)
+    except (KeyError, ValueError, IndexError):
+        return f"{num.prefix}-{num.year}-{counter:04d}"
+
+
+async def _assign_reg_number(db: AsyncSession, org: Organization, registry_kind: RegistryKind):
+    """Потребляет следующий рег. номер (инкремент счётчика) и возвращает (номер, дата)."""
+    num = await _ensure_numerator(db, org, registry_kind)
+    num.counter += 1
+    await db.commit()
+    return _format_reg_number(num, num.counter), now_naive()
+
+
+@router.get("/document-types", response_model=List[DocumentTypeResponse])
+async def list_document_types(
+    db: AsyncSession = Depends(get_async_db),
+    org: Organization = Depends(get_current_org),
+):
+    result = await db.execute(
+        select(DocumentType).where(DocumentType.org_id == org.id).order_by(DocumentType.name)
+    )
+    return result.scalars().all()
+
+
+@router.post("/document-types", response_model=DocumentTypeResponse)
+async def create_document_type(
+    data: DocumentTypeCreate,
+    db: AsyncSession = Depends(get_async_db),
+    org: Organization = Depends(get_current_org),
+):
+    dt = DocumentType(org_id=org.id, **data.model_dump())
+    db.add(dt)
+    await db.commit()
+    await db.refresh(dt)
+    return dt
+
+
+@router.put("/document-types/{type_uuid}", response_model=DocumentTypeResponse)
+async def update_document_type(
+    type_uuid: str,
+    data: DocumentTypeUpdate,
+    db: AsyncSession = Depends(get_async_db),
+    org: Organization = Depends(get_current_org),
+):
+    result = await db.execute(
+        select(DocumentType).where(DocumentType.uuid == type_uuid, DocumentType.org_id == org.id)
+    )
+    dt = result.scalar_one_or_none()
+    if not dt:
+        raise HTTPException(404, "Вид документа не найден")
+    for k, v in data.model_dump(exclude_unset=True).items():
+        setattr(dt, k, v)
+    await db.commit()
+    await db.refresh(dt)
+    return dt
+
+
+@router.delete("/document-types/{type_uuid}")
+async def delete_document_type(
+    type_uuid: str,
+    db: AsyncSession = Depends(get_async_db),
+    org: Organization = Depends(get_current_org),
+):
+    result = await db.execute(
+        select(DocumentType).where(DocumentType.uuid == type_uuid, DocumentType.org_id == org.id)
+    )
+    dt = result.scalar_one_or_none()
+    if not dt:
+        raise HTTPException(404, "Вид документа не найден")
+    await db.delete(dt)
+    await db.commit()
+    return {"message": f"Вид документа «{dt.name}» удалён"}
+
+
+@router.get("/numerators", response_model=List[NumeratorResponse])
+async def list_numerators(
+    db: AsyncSession = Depends(get_async_db),
+    org: Organization = Depends(get_current_org),
+):
+    result = await db.execute(
+        select(Numerator).where(Numerator.org_id == org.id).order_by(Numerator.registry_kind)
+    )
+    return result.scalars().all()
+
+
+@router.post("/numerators", response_model=NumeratorResponse)
+async def create_numerator(
+    data: NumeratorCreate,
+    db: AsyncSession = Depends(get_async_db),
+    org: Organization = Depends(get_current_org),
+):
+    existing = await db.execute(
+        select(Numerator).where(Numerator.org_id == org.id, Numerator.registry_kind == data.registry_kind)
+    )
+    if existing.scalar_one_or_none():
+        raise HTTPException(400, "Нумератор для этого канцелярского вида уже существует")
+    payload = data.model_dump(exclude_unset=True)
+    if not payload.get("prefix"):
+        payload["prefix"] = _DEFAULT_NUMERATOR_PREFIX.get(data.registry_kind, "")
+    num = Numerator(org_id=org.id, **payload)
+    db.add(num)
+    await db.commit()
+    await db.refresh(num)
+    return num
+
+
+@router.put("/numerators/{num_uuid}", response_model=NumeratorResponse)
+async def update_numerator(
+    num_uuid: str,
+    data: NumeratorUpdate,
+    db: AsyncSession = Depends(get_async_db),
+    org: Organization = Depends(get_current_org),
+):
+    result = await db.execute(
+        select(Numerator).where(Numerator.uuid == num_uuid, Numerator.org_id == org.id)
+    )
+    num = result.scalar_one_or_none()
+    if not num:
+        raise HTTPException(404, "Нумератор не найден")
+    for k, v in data.model_dump(exclude_unset=True).items():
+        setattr(num, k, v)
+    await db.commit()
+    await db.refresh(num)
+    return num
+
+
+@router.delete("/numerators/{num_uuid}")
+async def delete_numerator(
+    num_uuid: str,
+    db: AsyncSession = Depends(get_async_db),
+    org: Organization = Depends(get_current_org),
+):
+    result = await db.execute(
+        select(Numerator).where(Numerator.uuid == num_uuid, Numerator.org_id == org.id)
+    )
+    num = result.scalar_one_or_none()
+    if not num:
+        raise HTTPException(404, "Нумератор не найден")
+    await db.delete(num)
+    await db.commit()
+    return {"message": f"Нумератор «{num.name}» удалён"}
+
+
+@router.get("/next-registration-number", response_model=NextRegistrationNumberResponse)
+async def next_registration_number(
+    registry_kind: RegistryKind = Query(...),
+    db: AsyncSession = Depends(get_async_db),
+    org: Organization = Depends(get_current_org),
+):
+    """Возвращает СЛЕДУЮЩИЙ (ещё не занятый) рег. номер для канцелярского вида.
+    Не потребляет номер — реальное присвоение происходит при загрузке/регистрации."""
+    num = await _ensure_numerator(db, org, registry_kind)
+    return NextRegistrationNumberResponse(
+        registry_kind=registry_kind,
+        registration_number=_format_reg_number(num, num.counter + 1),
+        numerator_id=num.id,
+    )
+
+
 @router.post("/upload", response_model=DocumentResponse)
 async def upload_document(
     file: UploadFile = File(...),
     name: str = Form(...),
     type: str = Form(...),
     folder: FolderType = Form(...),
-    registration_number: str = Form(...),
+    registration_number: Optional[str] = Form(None),
     signer: str = Form(...),
     signer_full_name: Optional[str] = Form(None),
     signer_inn: Optional[str] = Form(None),
@@ -278,6 +481,9 @@ async def upload_document(
     custom_folder_id: Optional[int] = Form(None),
     signer_employee_id: Optional[int] = Form(None),
     executor_employee_id: Optional[int] = Form(None),
+    # --- СЭД (Ф1) ---
+    document_type_id: Optional[int] = Form(None),
+    registry_kind: Optional[RegistryKind] = Form(None),
     created_at: Optional[str] = Form(
         None,
         description=(
@@ -316,12 +522,19 @@ async def upload_document(
     # Дата документа: из формы, если её задали вручную, иначе текущий момент.
     # Раньше здесь всегда стояло now — введённая дата терялась при сохранении.
     doc_date = _parse_document_date(created_at) or now
+
+    # СЭД (Ф1): авто-присвоение рег. номера из нумератора, если не задан вручную
+    reg_number = (registration_number or "").strip()
+    reg_date = None
+    if not reg_number and registry_kind:
+        reg_number, reg_date = await _assign_reg_number(db, org, registry_kind)
+
     doc = Document(
         uuid=doc_uuid,
         name=name,
         type=type,
         folder=folder,
-        registration_number=registration_number,
+        registration_number=reg_number,
         signer=signer,
         signer_full_name=signer_full_name or signer,
         signer_inn=signer_inn,
@@ -338,6 +551,10 @@ async def upload_document(
         executor_employee_id=executor_employee_id,
         owner_org_id=org.id,
         custom_folder_id=custom_folder_id,
+        # --- СЭД ---
+        document_type_id=document_type_id,
+        registry_kind=registry_kind,
+        registration_date=reg_date,
     )
     doc.metadata_outdated = _compute_metadata_outdated(doc)
     

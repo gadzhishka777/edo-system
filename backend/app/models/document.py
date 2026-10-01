@@ -2,6 +2,7 @@
 from sqlalchemy import Column, Integer, String, Text, DateTime, Boolean, Float, ForeignKey, Enum as SQLEnum
 from sqlalchemy.orm import relationship
 import enum
+import uuid
 from app.models.base import Base
 
 from app.core.time import now_naive
@@ -26,6 +27,19 @@ class FolderType(str, enum.Enum):
     INCOMING = "incoming"
     OUTGOING = "outgoing"
     TASKS = "tasks"
+
+class RegistryKind(str, enum.Enum):
+    """Канцелярский вид (направление движения документа)."""
+    INCOMING = "incoming"      # входящий
+    OUTGOING = "outgoing"      # исходящий
+    INTERNAL = "internal"      # внутренний
+
+# Читаемые названия для UI
+REGISTRY_KIND_LABELS = {
+    RegistryKind.INCOMING: "Входящий",
+    RegistryKind.OUTGOING: "Исходящий",
+    RegistryKind.INTERNAL: "Внутренний",
+}
 
 class Document(Base):
     __tablename__ = "documents"
@@ -89,10 +103,19 @@ class Document(Base):
     # Флаг: старые метаданные (ручной ввод ФИО)
     metadata_outdated = Column(Boolean, default=False, index=True)
 
+    # --- СЭД: карточка документа (Ф0/Ф1) ---
+    # Вид документа (Приказ, Письмо, Служебная записка ...) — справочник по организации
+    document_type_id = Column(Integer, ForeignKey("document_types.id"), nullable=True, index=True)
+    # Канцелярский вид (направление): входящий / исходящий / внутренний
+    registry_kind = Column(SQLEnum(RegistryKind), nullable=True, index=True)
+    # Дата регистрации (заполняется автоматически при присвоении рег. номера)
+    registration_date = Column(DateTime(timezone=True), nullable=True)
+
     # Связи
     created_by_employee = relationship("Employee", foreign_keys=[created_by_employee_id])
     signed_by_employee = relationship("Employee", foreign_keys=[signed_by_employee_id])
     executor_employee = relationship("Employee", foreign_keys=[executor_employee_id])
+    document_type = relationship("DocumentType", back_populates="documents")
 
 
 class StampMapping(Base):
@@ -115,4 +138,45 @@ class CustomFolder(Base):
     uuid = Column(String(36), unique=True, index=True, nullable=False)
     org_id = Column(Integer, ForeignKey("organizations.id"), nullable=False, index=True)
     name = Column(String(255), nullable=False)
+    created_at = Column(DateTime(timezone=True), default=now_naive)
+
+
+class DocumentType(Base):
+    """Вид документа (справочник организации): Приказ, Письмо, Служебная записка ...
+
+    Определяет набор полей карточки и направление (канцелярский вид) по умолчанию.
+    """
+    __tablename__ = "document_types"
+
+    id = Column(Integer, primary_key=True, index=True)
+    uuid = Column(String(36), unique=True, index=True, nullable=False, default=lambda: str(uuid.uuid4()))
+    org_id = Column(Integer, ForeignKey("organizations.id"), nullable=False, index=True)
+    name = Column(String(255), nullable=False)
+    code = Column(String(50), nullable=True)  # короткий код/аббревиатура (опц.)
+    # Канцелярский вид по умолчанию для этого вида документа
+    registry_kind = Column(SQLEnum(RegistryKind), nullable=True, index=True)
+    is_active = Column(Boolean, default=True)
+    created_at = Column(DateTime(timezone=True), default=now_naive)
+
+    documents = relationship("Document", back_populates="document_type")
+
+
+class Numerator(Base):
+    """Нумератор регистрационных номеров для организации по канцелярскому виду.
+
+    Хранит шаблон (например "{prefix}-{year}-{counter:04d}") и текущий счётчик.
+    На один (org_id, registry_kind) — один нумератор.
+    """
+    __tablename__ = "numerators"
+
+    id = Column(Integer, primary_key=True, index=True)
+    uuid = Column(String(36), unique=True, index=True, nullable=False, default=lambda: str(uuid.uuid4()))
+    org_id = Column(Integer, ForeignKey("organizations.id"), nullable=False, index=True)
+    name = Column(String(255), nullable=False)
+    registry_kind = Column(SQLEnum(RegistryKind), nullable=False, index=True)
+    # Шаблон: поддерживаются подстановки {prefix}, {year}, {counter:N}
+    template = Column(String(255), nullable=False, default="{prefix}-{year}-{counter:04d}")
+    prefix = Column(String(20), nullable=False, default="")
+    year = Column(Integer, nullable=False, default=lambda: now_naive().year)
+    counter = Column(Integer, nullable=False, default=0)
     created_at = Column(DateTime(timezone=True), default=now_naive)

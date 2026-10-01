@@ -45,6 +45,7 @@ import {
   FormControlLabel,
 } from '@mui/material';
 import { styled } from '@mui/material/styles';
+import DocumentCard from '../components/DocumentCard';
 import dayjs, { Dayjs } from 'dayjs';
 import 'dayjs/locale/ru';
 import { parseApiDate } from '../utils/datetime';
@@ -98,7 +99,9 @@ import {
   visualizeSignature,
   updateDocumentWithEmployees,
   getDocumentEmployees,
-  type DocumentEmployee,
+  getDocumentTypes,
+  getNextRegistrationNumber,
+  REGISTRY_KIND_LABELS,
   SignatureType,
   authApi,
   getStampMapping,
@@ -107,6 +110,7 @@ import {
   deleteCustomFolder,
   CustomFolder,
 } from '../api/edoApi';
+import type { DocumentEmployee, DocumentType, RegistryKind } from '../api/edoApi';
 import { getApiErrorMessage } from '../api/edoApi';
 import { Document as PDFDocument, Page, pdfjs } from 'react-pdf';
 import 'react-pdf/dist/Page/TextLayer.css';
@@ -578,6 +582,10 @@ const DocumentsPage: React.FC = () => {
   
   // ===== СОСТОЯНИЕ ЗАГРУЗКИ =====
   const [activeStep, setActiveStep] = useState(0);
+
+  // СЭД (Ф0): карточка документа — открывается по клику на строку
+  const [docCardOpen, setDocCardOpen] = useState(false);
+  const [docCardUuid, setDocCardUuid] = useState<string | null>(null);
   const [uploadData, setUploadData] = useState({
     signatureType: 'HAND' as SignatureType,
     pdfFile: null as File | null,
@@ -596,6 +604,9 @@ const DocumentsPage: React.FC = () => {
     visualizeStamp: false,
     customStampUrl: '',
     _doc_uuid: '',
+    // --- СЭД (Ф1) ---
+    documentTypeId: null as number | null,
+    registryKind: null as RegistryKind | null,
   });
   const [uploadLoading, setUploadLoading] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
@@ -603,6 +614,14 @@ const DocumentsPage: React.FC = () => {
   const [selectedUploadExecutor, setSelectedUploadExecutor] = useState<number | null>(null);
   const [uploadSignerSearch, setUploadSignerSearch] = useState('');
   const [uploadExecutorSearch, setUploadExecutorSearch] = useState('');
+  // СЭД (Ф1): справочник видов документов для Stepper'а создания
+  const [documentTypes, setDocumentTypes] = useState<DocumentType[]>([]);
+
+  useEffect(() => {
+    getDocumentTypes()
+      .then(setDocumentTypes)
+      .catch(() => setDocumentTypes([]));
+  }, []);
 
   const [verificationResult, setVerificationResult] = useState<{
     status: 'idle' | 'loading' | 'success' | 'error';
@@ -1161,6 +1180,8 @@ const DocumentsPage: React.FC = () => {
           signature_type: uploadData.signatureType,
           custom_folder_id: uploadData.customFolderId,
           created_at: uploadData.date ? `${uploadData.date}T00:00:00` : undefined,
+          document_type_id: uploadData.documentTypeId,
+          registry_kind: uploadData.registryKind,
         });
         docUuid = doc.uuid;
         setUploadData(prev => ({ ...prev, _doc_uuid: docUuid }));
@@ -1274,6 +1295,8 @@ const DocumentsPage: React.FC = () => {
       visualizeStamp: false,
       customStampUrl: '',
       _doc_uuid: '',
+      documentTypeId: null,
+      registryKind: null,
     });
     setSelectedUploadSigner(null);
     setSelectedUploadExecutor(null);
@@ -1389,6 +1412,8 @@ const DocumentsPage: React.FC = () => {
           signature_type: uploadData.signatureType,
           custom_folder_id: uploadData.customFolderId,
           created_at: uploadData.date ? `${uploadData.date}T00:00:00` : undefined,
+          document_type_id: uploadData.documentTypeId,
+          registry_kind: uploadData.registryKind,
           signer_employee_id: selectedUploadSigner,
           executor_employee_id: selectedUploadExecutor,
         });
@@ -1415,6 +1440,8 @@ const DocumentsPage: React.FC = () => {
             ? `${uploadData.date}T00:00:00`
             : undefined,
           custom_folder_id: uploadData.customFolderId,
+          document_type_id: uploadData.documentTypeId,
+          registry_kind: uploadData.registryKind,
           signer_employee_id: selectedUploadSigner,
           executor_employee_id: selectedUploadExecutor,
         });
@@ -2045,6 +2072,61 @@ const DocumentsPage: React.FC = () => {
           />
         </Box>
 
+        <Box sx={{ display: 'flex', gap: 2 }}>
+          <FormControl fullWidth size="small">
+            <InputLabel sx={{ fontFamily: 'Lato, sans-serif' }}>Вид документа (СЭД)</InputLabel>
+            <Select
+              value={uploadData.documentTypeId ?? ''}
+              onChange={(e) => {
+                const id = (e.target.value as number | '') || null;
+                setUploadData(prev => ({ ...prev, documentTypeId: id }));
+              }}
+              label="Вид документа (СЭД)"
+              sx={{ borderRadius: '8px', fontFamily: 'Lato, sans-serif' }}
+            >
+              <MenuItem value="">
+                <em>Не выбран</em>
+              </MenuItem>
+              {documentTypes.map((t) => (
+                <MenuItem key={t.uuid} value={t.id}>
+                  {t.name}
+                </MenuItem>
+              ))}
+            </Select>
+          </FormControl>
+
+          <FormControl fullWidth size="small">
+            <InputLabel sx={{ fontFamily: 'Lato, sans-serif' }}>Канцелярский вид</InputLabel>
+            <Select
+              value={uploadData.registryKind ?? ''}
+              onChange={(e) => {
+                const kind = (e.target.value as RegistryKind) || null;
+                setUploadData(prev => ({ ...prev, registryKind: kind }));
+                if (kind) {
+                  getNextRegistrationNumber(kind)
+                    .then((r) => {
+                      setUploadData(prev =>
+                        prev.registrationNumber ? prev : { ...prev, registrationNumber: r.registration_number }
+                      );
+                    })
+                    .catch(() => {});
+                }
+              }}
+              label="Канцелярский вид"
+              sx={{ borderRadius: '8px', fontFamily: 'Lato, sans-serif' }}
+            >
+              <MenuItem value="">
+                <em>Не выбран</em>
+              </MenuItem>
+              {(Object.keys(REGISTRY_KIND_LABELS) as RegistryKind[]).map((k) => (
+                <MenuItem key={k} value={k}>
+                  {REGISTRY_KIND_LABELS[k]}
+                </MenuItem>
+              ))}
+            </Select>
+          </FormControl>
+        </Box>
+
         <StyledTextField
           fullWidth
           label="Наименование"
@@ -2669,16 +2751,22 @@ const DocumentsPage: React.FC = () => {
                           key={doc.uuid}
                           hover
                           selected={isSelected}
+                          onClick={() => {
+                            setDocCardUuid(doc.uuid);
+                            setDocCardOpen(true);
+                          }}
                           sx={{
                             transition: 'background-color 0.2s ease',
                             backgroundColor: isOutdated ? '#fff9e6' : 'inherit',
                             '&:hover': { backgroundColor: isOutdated ? '#fff3cc' : '#f9fafe' },
+                            cursor: 'pointer',
                           }}
                         >
                           <TableCell padding="checkbox">
                             <Checkbox
                               checked={isSelected}
-                              onChange={() => {
+                              onChange={(e) => {
+                                e.stopPropagation();
                                 setSelectedDocuments(prev =>
                                   prev.includes(doc.uuid)
                                     ? prev.filter(id => id !== doc.uuid)
@@ -2724,7 +2812,7 @@ const DocumentsPage: React.FC = () => {
                               {formatDate(dateToShow)}
                             </Typography>
                           </TableCell>
-                          <TableCell align="right">
+                          <TableCell align="right" onClick={(e) => e.stopPropagation()}>
                             {renderActionButtons(doc)}
                             <Tooltip title="Ещё">
                               <IconButton
@@ -3144,6 +3232,12 @@ const DocumentsPage: React.FC = () => {
             </ModalContainer>
           </Fade>
         </Modal>
+
+        <DocumentCard
+          open={docCardOpen}
+          uuid={docCardUuid}
+          onClose={() => setDocCardOpen(false)}
+        />
       </PageContainer>
     </LocalizationProvider>
   );

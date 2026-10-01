@@ -393,6 +393,13 @@ export const authApi = {
 export type DocumentStatus = 'draft' | 'pending' | 'signed' | 'rejected';
 export type SignatureType = 'none' | 'HAND' | 'PEP' | 'UNEP' | 'UKEP';
 export type FolderType = 'orders' | 'regulations' | 'provisions' | 'incoming' | 'outgoing' | 'tasks';
+/** Канцелярский вид (направление движения документа). */
+export type RegistryKind = 'incoming' | 'outgoing' | 'internal';
+export const REGISTRY_KIND_LABELS: Record<RegistryKind, string> = {
+  incoming: 'Входящий',
+  outgoing: 'Исходящий',
+  internal: 'Внутренний',
+};
 
 export interface DocumentEmployee {
   id: number;
@@ -438,6 +445,11 @@ export interface Document {
   signed_by_employee_name?: string | null;
   signer_employee_name?: string | null;
   executor_employee_name?: string | null;
+  // --- СЭД (Ф1) ---
+  document_type_id?: number | null;
+  registry_kind?: RegistryKind | null;
+  registration_date?: string | null;
+  document_type_name?: string | null;
 }
 
 export interface PaginatedResponse {
@@ -501,6 +513,9 @@ export const uploadDocument = async (
     executor_employee_id?: number | null;
     /** Дата документа (ISO). Не задана — сервер поставит текущий момент. */
     created_at?: string;
+    /** СЭД (Ф1) */
+    document_type_id?: number | null;
+    registry_kind?: RegistryKind | null;
   }
 ): Promise<Document> => {
   const formData = new FormData();
@@ -508,7 +523,7 @@ export const uploadDocument = async (
   formData.append('name', data.name);
   formData.append('type', data.type);
   formData.append('folder', data.folder);
-  formData.append('registration_number', data.registration_number);
+  if (data.registration_number) formData.append('registration_number', data.registration_number);
   formData.append('signer', data.signer);
   if (data.signer_full_name) formData.append('signer_full_name', data.signer_full_name);
   if (data.signer_inn) formData.append('signer_inn', data.signer_inn);
@@ -518,6 +533,8 @@ export const uploadDocument = async (
   if (data.signer_employee_id) formData.append('signer_employee_id', String(data.signer_employee_id));
   if (data.executor_employee_id) formData.append('executor_employee_id', String(data.executor_employee_id));
   if (data.created_at) formData.append('created_at', data.created_at);
+  if (data.document_type_id) formData.append('document_type_id', String(data.document_type_id));
+  if (data.registry_kind) formData.append('registry_kind', data.registry_kind);
 
   const response = await apiClient.post('/api/documents/upload', formData, {
     headers: { 'Content-Type': 'multipart/form-data' },
@@ -584,6 +601,8 @@ export const updateDocument = async (
     executor?: string;
     created_at?: string;
     custom_folder_id?: number | null;
+    document_type_id?: number | null;
+    registry_kind?: RegistryKind | null;
   }
 ): Promise<Document> => {
   const response = await apiClient.put(`/api/documents/${uuid}`, data);
@@ -633,9 +652,85 @@ export const updateDocumentWithEmployees = async (
     custom_folder_id?: number | null;
     signer_employee_id?: number | null;
     executor_employee_id?: number | null;
+    document_type_id?: number | null;
+    registry_kind?: RegistryKind | null;
   }
 ): Promise<Document> => {
   const response = await apiClient.put(`/api/documents/${uuid}`, data);
+  return response.data;
+};
+
+// ===== СЭД: виды документов и нумераторы (Ф1) =====
+export interface DocumentType {
+  id: number;
+  uuid: string;
+  org_id: number;
+  name: string;
+  code?: string | null;
+  registry_kind?: RegistryKind | null;
+  is_active: boolean;
+  created_at: string;
+}
+
+export interface Numerator {
+  id: number;
+  uuid: string;
+  org_id: number;
+  name: string;
+  registry_kind: RegistryKind;
+  template: string;
+  prefix: string;
+  year?: number | null;
+  counter: number;
+  created_at: string;
+}
+
+export interface NextRegistrationNumber {
+  registry_kind: RegistryKind;
+  registration_number: string;
+  numerator_id?: number | null;
+}
+
+export const getDocumentTypes = async (): Promise<DocumentType[]> => {
+  const response = await apiClient.get(`/api/documents/document-types`);
+  return response.data;
+};
+
+export const createDocumentType = async (data: Partial<DocumentType>): Promise<DocumentType> => {
+  const response = await apiClient.post(`/api/documents/document-types`, data);
+  return response.data;
+};
+
+export const updateDocumentType = async (uuid: string, data: Partial<DocumentType>): Promise<DocumentType> => {
+  const response = await apiClient.put(`/api/documents/document-types/${uuid}`, data);
+  return response.data;
+};
+
+export const deleteDocumentType = async (uuid: string): Promise<void> => {
+  await apiClient.delete(`/api/documents/document-types/${uuid}`);
+};
+
+export const getNumerators = async (): Promise<Numerator[]> => {
+  const response = await apiClient.get(`/api/documents/numerators`);
+  return response.data;
+};
+
+export const createNumerator = async (data: Partial<Numerator>): Promise<Numerator> => {
+  const response = await apiClient.post(`/api/documents/numerators`, data);
+  return response.data;
+};
+
+export const updateNumerator = async (uuid: string, data: Partial<Numerator>): Promise<Numerator> => {
+  const response = await apiClient.put(`/api/documents/numerators/${uuid}`, data);
+  return response.data;
+};
+
+export const deleteNumerator = async (uuid: string): Promise<void> => {
+  await apiClient.delete(`/api/documents/numerators/${uuid}`);
+};
+
+export const getNextRegistrationNumber = async (registryKind: RegistryKind): Promise<NextRegistrationNumber> => {
+  const response = await apiClient.get(`/api/documents/next-registration-number?registry_kind=${registryKind}`);
   return response.data;
 };
 

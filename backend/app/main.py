@@ -147,6 +147,9 @@ async def create_employees_table():
                 'signed_by_employee_id': 'INTEGER REFERENCES employees(id)',
                 'executor_employee_id': 'INTEGER REFERENCES employees(id)',
                 'metadata_outdated': 'BOOLEAN DEFAULT 0',
+                'document_type_id': 'INTEGER REFERENCES document_types(id)',
+                'registry_kind': 'VARCHAR(20)',
+                'registration_date': 'TIMESTAMP',
             }
             for col_name, col_def in new_doc_columns.items():
                 if col_name not in columns:

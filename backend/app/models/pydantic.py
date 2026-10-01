@@ -5,7 +5,7 @@ from typing import Optional, List, Dict, Any, Union
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
-from app.models.document import SignatureType, DocumentStatus, FolderType
+from app.models.document import SignatureType, DocumentStatus, FolderType, RegistryKind
 from app.models.employee import EmployeeRoleEnum
 
 
@@ -99,6 +99,9 @@ class DocumentUpdate(BaseModel):
     signer_employee_id: Optional[int] = None
     executor_employee_id: Optional[int] = None
     metadata_outdated: Optional[bool] = None
+    # --- СЭД ---
+    document_type_id: Optional[int] = None
+    registry_kind: Optional[RegistryKind] = None
 
 
 class VisualizeRequest(BaseModel):
@@ -173,7 +176,12 @@ class DocumentResponse(BaseModel):
     signed_by_employee_name: Optional[str] = None
     signer_employee_name: Optional[str] = None
     executor_employee_name: Optional[str] = None
-    
+    # --- СЭД ---
+    document_type_id: Optional[int] = None
+    registry_kind: Optional[RegistryKind] = None
+    registration_date: Optional[datetime] = None
+    document_type_name: Optional[str] = None
+
     class Config:
         from_attributes = True
         arbitrary_types_allowed = True
@@ -196,6 +204,69 @@ class DocumentResponse(BaseModel):
     # ✅ Проверка, является ли подпись собственноручной
     def is_handwritten_signature(self) -> bool:
         return self.signature_type == SignatureType.HAND
+
+
+# ===== Вид документа (СЭД: справочник) =====
+class DocumentTypeBase(BaseModel):
+    name: str
+    code: Optional[str] = None
+    registry_kind: Optional[RegistryKind] = None
+    is_active: bool = True
+
+class DocumentTypeCreate(DocumentTypeBase):
+    pass
+
+class DocumentTypeUpdate(BaseModel):
+    name: Optional[str] = None
+    code: Optional[str] = None
+    registry_kind: Optional[RegistryKind] = None
+    is_active: Optional[bool] = None
+
+class DocumentTypeResponse(DocumentTypeBase):
+    id: int
+    uuid: str
+    org_id: int
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+# ===== Нумератор (СЭД) =====
+class NumeratorBase(BaseModel):
+    name: str
+    registry_kind: RegistryKind
+    template: str = "{prefix}-{year}-{counter:04d}"
+    prefix: str = ""
+    year: Optional[int] = None
+
+class NumeratorCreate(NumeratorBase):
+    pass
+
+class NumeratorUpdate(BaseModel):
+    name: Optional[str] = None
+    registry_kind: Optional[RegistryKind] = None
+    template: Optional[str] = None
+    prefix: Optional[str] = None
+    year: Optional[int] = None
+
+class NumeratorResponse(NumeratorBase):
+    id: int
+    uuid: str
+    org_id: int
+    counter: int
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+# ===== Ответ со следующим рег. номером =====
+class NextRegistrationNumberResponse(BaseModel):
+    registry_kind: RegistryKind
+    registration_number: str
+    numerator_id: Optional[int] = None
+
 
 # ===== Проверка подписи =====
 class SignatureVerifyRequest(BaseModel):
