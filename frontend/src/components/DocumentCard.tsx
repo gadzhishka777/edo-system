@@ -29,6 +29,7 @@ import {
   updateDocument,
   DocumentType,
 } from '../api/edoApi';
+import DocumentAttachmentsTab from './DocumentAttachmentsTab';
 
 type TabKey = 'details' | 'attachments' | 'registry' | 'hierarchy' | 'discussions';
 
@@ -235,16 +236,14 @@ export const DocumentCard: React.FC<{
           </Stack>
         )}
 
-        {!loading && !error && doc && tab !== 'details' && tab !== 'registry' && (
+        {!loading && !error && doc && tab === 'attachments' && (
+          <DocumentAttachmentsTab documentUuid={doc.uuid} />
+        )}
+
+        {!loading && !error && doc && (tab === 'hierarchy' || tab === 'discussions') && (
           <Box sx={{ py: 5, textAlign: 'center', color: '#87879b' }}>
             <Typography>
-              Вкладка «
-              {tab === 'attachments'
-                ? 'Вложения'
-                : tab === 'hierarchy'
-                ? 'Иерархия'
-                : 'Обсуждения'}
-              » — в разработке (следующие фазы СЭД).
+              Вкладка «{tab === 'hierarchy' ? 'Иерархия' : 'Обсуждения'}» — в разработке (следующие фазы СЭД).
             </Typography>
           </Box>
         )}

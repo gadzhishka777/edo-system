@@ -116,6 +116,11 @@ class Document(Base):
     signed_by_employee = relationship("Employee", foreign_keys=[signed_by_employee_id])
     executor_employee = relationship("Employee", foreign_keys=[executor_employee_id])
     document_type = relationship("DocumentType", back_populates="documents")
+    attachments = relationship(
+        "DocumentAttachment", back_populates="document",
+        cascade="all, delete-orphan", foreign_keys="DocumentAttachment.document_id",
+        order_by="DocumentAttachment.created_at",
+    )
 
 
 class StampMapping(Base):
@@ -180,3 +185,72 @@ class Numerator(Base):
     year = Column(Integer, nullable=False, default=lambda: now_naive().year)
     counter = Column(Integer, nullable=False, default=0)
     created_at = Column(DateTime(timezone=True), default=now_naive)
+
+
+class AttachmentType(str, enum.Enum):
+    """Тип вложения (по спецификации СЭД)."""
+    REPORT = "report"          # Отчёт исполнителя
+    DOCUMENT = "document"      # Документ
+    APPENDIX = "appendix"      # Приложение
+    DATA = "data"              # Данные
+    ATTACHMENT = "attachment"  # Вложение
+
+
+ATTACHMENT_TYPE_LABELS = {
+    AttachmentType.REPORT: "Отчёт исполнителя",
+    AttachmentType.DOCUMENT: "Документ",
+    AttachmentType.APPENDIX: "Приложение",
+    AttachmentType.DATA: "Данные",
+    AttachmentType.ATTACHMENT: "Вложение",
+}
+
+
+class DocumentAttachment(Base):
+    """Логическое вложение карточки документа (может иметь несколько версий)."""
+    __tablename__ = "document_attachments"
+
+    id = Column(Integer, primary_key=True, index=True)
+    uuid = Column(String(36), unique=True, index=True, nullable=False, default=lambda: str(uuid.uuid4()))
+    document_id = Column(Integer, ForeignKey("documents.id"), nullable=False, index=True)
+    org_id = Column(Integer, ForeignKey("organizations.id"), nullable=False, index=True)
+
+    name = Column(String(500), nullable=False)              # отображаемое имя
+    type = Column(SQLEnum(AttachmentType), nullable=False, default=AttachmentType.ATTACHMENT)
+    comment = Column(Text, nullable=True)
+    # Признак «основное вложение» — в документе может быть только одно
+    is_primary = Column(Boolean, default=False, nullable=False, index=True)
+    # Номер текущей (последней) версии
+    current_version = Column(Integer, default=1, nullable=False)
+
+    created_at = Column(DateTime(timezone=True), default=now_naive)
+    created_by_employee_id = Column(Integer, ForeignKey("employees.id"), nullable=True)
+
+    document = relationship("Document", back_populates="attachments", foreign_keys=[document_id])
+    versions = relationship(
+        "AttachmentVersion", back_populates="attachment",
+        cascade="all, delete-orphan", order_by="AttachmentVersion.version",
+    )
+
+
+class AttachmentVersion(Base):
+    """Версия файла вложения (конкретный загруженный файл)."""
+    __tablename__ = "attachment_versions"
+
+    id = Column(Integer, primary_key=True, index=True)
+    uuid = Column(String(36), unique=True, index=True, nullable=False, default=lambda: str(uuid.uuid4()))
+    attachment_id = Column(Integer, ForeignKey("document_attachments.id"), nullable=False, index=True)
+    version = Column(Integer, nullable=False, default=1)
+
+    file_name = Column(String(500), nullable=False)
+    file_size = Column(Integer, default=0)
+    file_path = Column(String(1000), nullable=False)
+
+    signature_file_path = Column(String(1000), nullable=True)
+    has_sig_file = Column(Boolean, default=False)
+    signature_type = Column(SQLEnum(SignatureType), default=SignatureType.NONE)
+
+    comment = Column(Text, nullable=True)
+    created_at = Column(DateTime(timezone=True), default=now_naive)
+    created_by_employee_id = Column(Integer, ForeignKey("employees.id"), nullable=True)
+
+    attachment = relationship("DocumentAttachment", back_populates="versions", foreign_keys=[attachment_id])

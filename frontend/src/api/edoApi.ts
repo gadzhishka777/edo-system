@@ -734,6 +734,99 @@ export const getNextRegistrationNumber = async (registryKind: RegistryKind): Pro
   return response.data;
 };
 
+// ===== СЭД: вложения документа и версии (Ф2) =====
+export type AttachmentType = 'report' | 'document' | 'appendix' | 'data' | 'attachment';
+export const ATTACHMENT_TYPE_LABELS: Record<AttachmentType, string> = {
+  report: 'Отчёт исполнителя',
+  document: 'Документ',
+  appendix: 'Приложение',
+  data: 'Данные',
+  attachment: 'Вложение',
+};
+
+export interface AttachmentVersion {
+  id: number;
+  uuid: string;
+  version: number;
+  file_name: string;
+  file_size: number;
+  has_sig_file: boolean;
+  signature_type: SignatureType;
+  comment?: string | null;
+  created_at: string;
+  created_by_employee_id?: number | null;
+}
+
+export interface DocumentAttachment {
+  id: number;
+  uuid: string;
+  document_id: number;
+  name: string;
+  type: AttachmentType;
+  comment?: string | null;
+  is_primary: boolean;
+  current_version: number;
+  created_at: string;
+  created_by_employee_id?: number | null;
+  version_count: number;
+  latest_version?: AttachmentVersion | null;
+}
+
+export const getAttachments = async (docUuid: string): Promise<DocumentAttachment[]> => {
+  const response = await apiClient.get(`/api/documents/${docUuid}/attachments`);
+  return response.data;
+};
+
+export const createAttachment = async (
+  docUuid: string,
+  file: File,
+  data: { type?: AttachmentType; name?: string; comment?: string } = {},
+): Promise<DocumentAttachment> => {
+  const formData = new FormData();
+  formData.append('file', file);
+  if (data.type) formData.append('type', data.type);
+  if (data.name) formData.append('name', data.name);
+  if (data.comment) formData.append('comment', data.comment);
+  const response = await apiClient.post(`/api/documents/${docUuid}/attachments`, formData, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+  });
+  return response.data;
+};
+
+export const getAttachmentVersions = async (attUuid: string): Promise<AttachmentVersion[]> => {
+  const response = await apiClient.get(`/api/documents/attachments/${attUuid}/versions`);
+  return response.data;
+};
+
+export const addAttachmentVersion = async (
+  attUuid: string,
+  file: File,
+  comment?: string,
+): Promise<AttachmentVersion> => {
+  const formData = new FormData();
+  formData.append('file', file);
+  if (comment) formData.append('comment', comment);
+  const response = await apiClient.post(`/api/documents/attachments/${attUuid}/versions`, formData, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+  });
+  return response.data;
+};
+
+export const updateAttachment = async (
+  attUuid: string,
+  data: { name?: string; type?: AttachmentType; comment?: string; is_primary?: boolean },
+): Promise<DocumentAttachment> => {
+  const response = await apiClient.put(`/api/documents/attachments/${attUuid}`, data);
+  return response.data;
+};
+
+export const deleteAttachment = async (attUuid: string): Promise<void> => {
+  await apiClient.delete(`/api/documents/attachments/${attUuid}`);
+};
+
+export const downloadAttachmentVersion = (versionUuid: string): string =>
+  `${API_BASE_URL}/api/documents/attachments/download/${versionUuid}`;
+
 // ===== Почта =====
 export interface Organization {
   id: number;

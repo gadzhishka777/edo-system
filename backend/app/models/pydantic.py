@@ -5,7 +5,7 @@ from typing import Optional, List, Dict, Any, Union
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
-from app.models.document import SignatureType, DocumentStatus, FolderType, RegistryKind
+from app.models.document import SignatureType, DocumentStatus, FolderType, RegistryKind, AttachmentType
 from app.models.employee import EmployeeRoleEnum
 
 
@@ -266,6 +266,48 @@ class NextRegistrationNumberResponse(BaseModel):
     registry_kind: RegistryKind
     registration_number: str
     numerator_id: Optional[int] = None
+
+
+# ===== Вложения документа (СЭД: Ф2) =====
+class AttachmentVersionResponse(BaseModel):
+    id: int
+    uuid: str
+    version: int
+    file_name: str
+    file_size: int
+    has_sig_file: bool
+    signature_type: SignatureType
+    comment: Optional[str] = None
+    created_at: datetime
+    created_by_employee_id: Optional[int] = None
+
+    class Config:
+        from_attributes = True
+
+
+class DocumentAttachmentResponse(BaseModel):
+    id: int
+    uuid: str
+    document_id: int
+    name: str
+    type: AttachmentType
+    comment: Optional[str] = None
+    is_primary: bool
+    current_version: int
+    created_at: datetime
+    created_by_employee_id: Optional[int] = None
+    version_count: int = 0
+    latest_version: Optional[AttachmentVersionResponse] = None
+
+    class Config:
+        from_attributes = True
+
+
+class AttachmentUpdate(BaseModel):
+    name: Optional[str] = None
+    type: Optional[AttachmentType] = None
+    comment: Optional[str] = None
+    is_primary: Optional[bool] = None
 
 
 # ===== Проверка подписи =====

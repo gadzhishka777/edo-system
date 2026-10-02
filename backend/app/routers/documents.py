@@ -15,7 +15,10 @@ from sqlalchemy import select, func, and_, or_
 from app.database import get_async_db
 from app.core.time import now_naive
 from app.models import Document, DocumentStatus, SignatureType, FolderType, Organization, StampMapping, CustomFolder
-from app.models.document import DocumentType, Numerator, RegistryKind, REGISTRY_KIND_LABELS
+from app.models.document import (
+    DocumentType, Numerator, RegistryKind, REGISTRY_KIND_LABELS,
+    DocumentAttachment, AttachmentVersion, AttachmentType, ATTACHMENT_TYPE_LABELS,
+)
 from app.models.employee import Employee
 from app.models.mail import MailMessage, MailStatus
 from app.models.pydantic import (
@@ -24,6 +27,7 @@ from app.models.pydantic import (
     DocumentTypeCreate, DocumentTypeUpdate, DocumentTypeResponse,
     NumeratorCreate, NumeratorUpdate, NumeratorResponse,
     NextRegistrationNumberResponse,
+    DocumentAttachmentResponse, AttachmentVersionResponse, AttachmentUpdate,
 )
 from app.services.signature_service import verify_signature
 from app.services.pdf_service import generate_signed_copy
@@ -1036,6 +1040,221 @@ async def list_org_employees(
         "position": e.position,
         "login": e.login,
     } for e in employees]
+
+
+# ---------------------------------------------------------------------------
+# СЭД: вложения документа и их версии (Ф2)
+# ---------------------------------------------------------------------------
+
+async def _fill_attachment_meta(a: DocumentAttachment, db: AsyncSession) -> DocumentAttachment:
+    """Подставляет в ORM-объект не-колоночные поля version_count и latest_version."""
+    vres = await db.execute(
+        select(AttachmentVersion)
+        .where(AttachmentVersion.attachment_id == a.id)
+        .order_by(AttachmentVersion.version)
+    )
+    versions = vres.scalars().all()
+    a.version_count = len(versions)
+    a.latest_version = versions[-1] if versions else None
+    return a
+
+
+async def _owned_attachment(att_uuid: str, org: Organization, db: AsyncSession) -> DocumentAttachment:
+    result = await db.execute(select(DocumentAttachment).where(DocumentAttachment.uuid == att_uuid))
+    att = result.scalar_one_or_none()
+    if not att:
+        raise HTTPException(404, "Вложение не найдено")
+    if att.org_id != org.id:
+        raise HTTPException(403, "Вложение не принадлежит вашей организации")
+    return att
+
+
+def _validate_attachment_file(file: UploadFile) -> None:
+    if file.size and file.size > settings.MAX_FILE_SIZE:
+        raise HTTPException(400, f"Файл слишком большой. Максимум {settings.MAX_FILE_SIZE // (1024*1024)} МБ")
+    ext = Path(file.filename).suffix.lower()
+    if ext not in settings.ALLOWED_EXTENSIONS:
+        raise HTTPException(400, f"Неподдерживаемый формат. Разрешены: {', '.join(settings.ALLOWED_EXTENSIONS)}")
+
+
+@router.get("/{doc_uuid}/attachments", response_model=List[DocumentAttachmentResponse])
+async def list_attachments(
+    doc_uuid: str,
+    db: AsyncSession = Depends(get_async_db),
+    org: Organization = Depends(get_current_org),
+):
+    """Список вложений карточки документа (с текущей версией и их количеством)."""
+    doc = await _accessible_doc(doc_uuid, org, db)
+    result = await db.execute(
+        select(DocumentAttachment)
+        .where(DocumentAttachment.document_id == doc.id)
+        .order_by(DocumentAttachment.created_at)
+    )
+    atts = result.scalars().all()
+    for a in atts:
+        await _fill_attachment_meta(a, db)
+    return atts
+
+
+@router.post("/{doc_uuid}/attachments", response_model=DocumentAttachmentResponse)
+async def create_attachment(
+    doc_uuid: str,
+    file: UploadFile = File(...),
+    type: AttachmentType = Form(AttachmentType.ATTACHMENT),
+    name: Optional[str] = Form(None),
+    comment: Optional[str] = Form(None),
+    db: AsyncSession = Depends(get_async_db),
+    org: Organization = Depends(get_current_org),
+    employee: Employee = Depends(get_current_employee),
+):
+    """Добавление нового вложения (первая версия)."""
+    doc = await _accessible_doc(doc_uuid, org, db)
+    if doc.owner_org_id != org.id:
+        raise HTTPException(403, "Добавлять вложения может только владелец документа")
+    _validate_attachment_file(file)
+
+    ver_uuid = str(uuid.uuid4())
+    path = await save_upload_file(file, settings.UPLOAD_DIR, ver_uuid)
+
+    att = DocumentAttachment(
+        document_id=doc.id,
+        org_id=org.id,
+        name=(name or file.filename),
+        type=type,
+        comment=comment,
+        current_version=1,
+        created_by_employee_id=employee.id,
+    )
+    db.add(att)
+    await db.flush()
+
+    ver = AttachmentVersion(
+        uuid=ver_uuid,
+        attachment_id=att.id,
+        version=1,
+        file_name=file.filename,
+        file_size=file.size or 0,
+        file_path=path,
+        created_by_employee_id=employee.id,
+    )
+    db.add(ver)
+    await db.commit()
+    await db.refresh(att)
+    await _fill_attachment_meta(att, db)
+    return att
+
+
+@router.get("/attachments/{att_uuid}/versions", response_model=List[AttachmentVersionResponse])
+async def list_attachment_versions(
+    att_uuid: str,
+    db: AsyncSession = Depends(get_async_db),
+    org: Organization = Depends(get_current_org),
+):
+    att = await _owned_attachment(att_uuid, org, db)
+    result = await db.execute(
+        select(AttachmentVersion)
+        .where(AttachmentVersion.attachment_id == att.id)
+        .order_by(AttachmentVersion.version)
+    )
+    return result.scalars().all()
+
+
+@router.post("/attachments/{att_uuid}/versions", response_model=AttachmentVersionResponse)
+async def add_attachment_version(
+    att_uuid: str,
+    file: UploadFile = File(...),
+    comment: Optional[str] = Form(None),
+    db: AsyncSession = Depends(get_async_db),
+    org: Organization = Depends(get_current_org),
+    employee: Employee = Depends(get_current_employee),
+):
+    """Добавление новой версии к существующему вложению."""
+    att = await _owned_attachment(att_uuid, org, db)
+    _validate_attachment_file(file)
+
+    new_version = (att.current_version or 0) + 1
+    ver_uuid = str(uuid.uuid4())
+    path = await save_upload_file(file, settings.UPLOAD_DIR, ver_uuid)
+    ver = AttachmentVersion(
+        uuid=ver_uuid,
+        attachment_id=att.id,
+        version=new_version,
+        file_name=file.filename,
+        file_size=file.size or 0,
+        file_path=path,
+        comment=comment,
+        created_by_employee_id=employee.id,
+    )
+    att.current_version = new_version
+    db.add(ver)
+    await db.commit()
+    await db.refresh(ver)
+    return ver
+
+
+@router.put("/attachments/{att_uuid}", response_model=DocumentAttachmentResponse)
+async def update_attachment(
+    att_uuid: str,
+    data: AttachmentUpdate,
+    db: AsyncSession = Depends(get_async_db),
+    org: Organization = Depends(get_current_org),
+):
+    att = await _owned_attachment(att_uuid, org, db)
+    payload = data.model_dump(exclude_unset=True)
+    if payload.get("is_primary") is True:
+        # основным может быть только одно вложение документа
+        others = await db.execute(
+            select(DocumentAttachment).where(
+                DocumentAttachment.document_id == att.document_id,
+                DocumentAttachment.id != att.id,
+            )
+        )
+        for o in others.scalars().all():
+            o.is_primary = False
+    for k, v in payload.items():
+        setattr(att, k, v)
+    await db.commit()
+    await db.refresh(att)
+    await _fill_attachment_meta(att, db)
+    return att
+
+
+@router.delete("/attachments/{att_uuid}")
+async def delete_attachment(
+    att_uuid: str,
+    db: AsyncSession = Depends(get_async_db),
+    org: Organization = Depends(get_current_org),
+):
+    att = await _owned_attachment(att_uuid, org, db)
+    vres = await db.execute(select(AttachmentVersion).where(AttachmentVersion.attachment_id == att.id))
+    for v in vres.scalars().all():
+        if v.file_path:
+            delete_file(v.file_path)
+        if v.signature_file_path:
+            delete_file(v.signature_file_path)
+    await db.delete(att)
+    await db.commit()
+    return {"message": f"Вложение «{att.name}» удалено"}
+
+
+@router.get("/attachments/download/{version_uuid}")
+async def download_attachment_version(
+    version_uuid: str,
+    db: AsyncSession = Depends(get_async_db),
+    org: Organization = Depends(get_current_org_for_download),
+):
+    result = await db.execute(select(AttachmentVersion).where(AttachmentVersion.uuid == version_uuid))
+    ver = result.scalar_one_or_none()
+    if not ver:
+        raise HTTPException(404, "Версия вложения не найдена")
+    att_res = await db.execute(select(DocumentAttachment).where(DocumentAttachment.id == ver.attachment_id))
+    att = att_res.scalar_one_or_none()
+    if not att or att.org_id != org.id:
+        raise HTTPException(403, "Вложение не принадлежит вашей организации")
+    path = Path(ver.file_path)
+    if not path.exists():
+        raise HTTPException(404, "Файл не найден на диске")
+    return FileResponse(str(path), filename=ver.file_name)
 
 
 @router.get("/{doc_uuid}", response_model=DocumentResponse)
