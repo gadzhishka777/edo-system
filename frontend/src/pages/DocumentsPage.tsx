@@ -99,6 +99,7 @@ import {
   visualizeSignature,
   updateDocumentWithEmployees,
   getDocumentEmployees,
+  getMyFolderPermissions,
   getDocumentTypes,
   getNextRegistrationNumber,
   REGISTRY_KIND_LABELS,
@@ -110,8 +111,9 @@ import {
   deleteCustomFolder,
   CustomFolder,
 } from '../api/edoApi';
-import type { DocumentEmployee, DocumentType, RegistryKind } from '../api/edoApi';
+import type { DocumentEmployee, DocumentType, RegistryKind, MyFolderPermissions, FolderPermissionFolder } from '../api/edoApi';
 import { getApiErrorMessage } from '../api/edoApi';
+import FolderPermissionsDialog from '../components/FolderPermissionsDialog';
 import { Document as PDFDocument, Page, pdfjs } from 'react-pdf';
 import 'react-pdf/dist/Page/TextLayer.css';
 import 'react-pdf/dist/Page/AnnotationLayer.css';
@@ -542,6 +544,24 @@ const DocumentsPage: React.FC = () => {
   const [isPending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
+  const [myPermissions, setMyPermissions] = useState<Record<string, MyFolderPermissions> | null>(null);
+  const [permissionsOpen, setPermissionsOpen] = useState(false);
+
+  // Эффективные права текущего сотрудника по папкам (для гейтинга UI).
+  useEffect(() => {
+    getMyFolderPermissions()
+      .then((r) => setMyPermissions(r.permissions))
+      .catch(() => { /* права недоступны — гейтинг не применяем */ });
+  }, []);
+
+  // Гейтинг по правам доступа к папкам (фронт отражает enforcement бэкенда).
+  const tabRef = (id: string): string => (id.startsWith('custom_') ? `custom:${id.slice('custom_'.length)}` : id);
+  const permFor = (id: string) => (myPermissions ? myPermissions[tabRef(id)] : undefined);
+  const canViewTab = (id: string) => id === 'all' || !myPermissions || (permFor(id)?.view ?? true);
+  const canCreateActive = () => activeFolder === 'all' || !myPermissions || (permFor(activeFolder)?.create_edit ?? true);
+  const canDeleteActive = () => activeFolder === 'all' || !myPermissions || (permFor(activeFolder)?.delete ?? true);
+  const canCreateTab = (id: string) => !myPermissions || (permFor(id)?.create_edit ?? true);
+
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
   const [pageSize] = useState(20);
@@ -2045,18 +2065,22 @@ const DocumentsPage: React.FC = () => {
               input={<OutlinedInput label="Папка" />}
               sx={{ borderRadius: '8px', fontFamily: 'Lato, sans-serif' }}
             >
-              <MenuItem value="orders">Приказы</MenuItem>
-              <MenuItem value="regulations">Распоряжения</MenuItem>
-              <MenuItem value="provisions">Положения</MenuItem>
-              <MenuItem value="incoming">Входящие</MenuItem>
-              <MenuItem value="outgoing">Исходящие</MenuItem>
-              <MenuItem value="tasks">Поручения</MenuItem>
-              {customFolders.length > 0 && (
+              {[
+                { id: 'orders', label: 'Приказы' },
+                { id: 'regulations', label: 'Распоряжения' },
+                { id: 'provisions', label: 'Положения' },
+                { id: 'incoming', label: 'Входящие' },
+                { id: 'outgoing', label: 'Исходящие' },
+                { id: 'tasks', label: 'Поручения' },
+              ].filter((o) => canCreateTab(o.id)).map((o) => (
+                <MenuItem key={o.id} value={o.id}>{o.label}</MenuItem>
+              ))}
+              {customFolders.some((cf) => canCreateTab(`custom_${cf.id}`)) && (
                 <Box sx={{ px: 2, py: 0.5, fontSize: '11px', color: '#87879b', fontWeight: 600, textTransform: 'uppercase' }}>
                   Пользовательские
                 </Box>
               )}
-              {customFolders.map((cf) => (
+              {customFolders.filter((cf) => canCreateTab(`custom_${cf.id}`)).map((cf) => (
                 <MenuItem key={cf.id} value={`custom_${cf.id}`}>{cf.name}</MenuItem>
               ))}
             </Select>
@@ -2465,7 +2489,7 @@ const DocumentsPage: React.FC = () => {
               },
             }}
           >
-            {folderTabs.map((tab) => {
+            {folderTabs.filter((tab) => canViewTab(tab.id)).map((tab) => {
               const count = getFolderCount(tab.id);
               return (
                 <Tab
@@ -2493,7 +2517,7 @@ const DocumentsPage: React.FC = () => {
                 />
               );
             })}
-            {customFolders.map((cf) => {
+            {customFolders.filter((cf) => canViewTab(`custom_${cf.id}`)).map((cf) => {
               const count = getFolderCount(`custom_${cf.id}`);
               return (
                 <Tab
@@ -2545,16 +2569,20 @@ const DocumentsPage: React.FC = () => {
 
             <Divider orientation="vertical" flexItem sx={{ mx: 0.5 }} />
 
-            <Tooltip title="Загрузить">
-              <ToolbarButton size="small" onClick={handleOpenUploadModal}>
-                <CloudUploadIcon fontSize="small" />
-              </ToolbarButton>
+            <Tooltip title={canCreateActive() ? 'Загрузить' : 'Нет прав на создание документов в этой папке'}>
+              <span>
+                <ToolbarButton size="small" disabled={!canCreateActive()} onClick={handleOpenUploadModal}>
+                  <CloudUploadIcon fontSize="small" />
+                </ToolbarButton>
+              </span>
             </Tooltip>
 
-            <Tooltip title="Удалить">
-              <ToolbarButton size="small" disabled={selectedDocuments.length === 0} onClick={() => setIsDeleteModalOpen(true)}>
-                <DeleteIcon fontSize="small" />
-              </ToolbarButton>
+            <Tooltip title={canDeleteActive() ? 'Удалить' : 'Нет прав на удаление документов в этой папке'}>
+              <span>
+                <ToolbarButton size="small" disabled={selectedDocuments.length === 0 || !canDeleteActive()} onClick={() => setIsDeleteModalOpen(true)}>
+                  <DeleteIcon fontSize="small" />
+                </ToolbarButton>
+              </span>
             </Tooltip>
 
             <Divider orientation="vertical" flexItem sx={{ mx: 0.5 }} />
@@ -2623,11 +2651,15 @@ const DocumentsPage: React.FC = () => {
                   <ListItemText>Удалить текущую папку</ListItemText>
                 </MenuItem>
               )}
-              <MenuItem onClick={handleMenuClose}>
-                <ListItemIcon><CloudUploadIcon fontSize="small" /></ListItemIcon>
-                <ListItemText>Импорт</ListItemText>
-              </MenuItem>
+              {authApi.isOrgAdmin() && (
+                <MenuItem onClick={() => { handleMenuClose(); setPermissionsOpen(true); }}>
+                  <ListItemIcon><LockIcon fontSize="small" /></ListItemIcon>
+                  <ListItemText>Права доступа</ListItemText>
+                </MenuItem>
+              )}
             </Menu>
+
+            <FolderPermissionsDialog open={permissionsOpen} onClose={() => setPermissionsOpen(false)} />
           </ToolbarRight>
         </ToolbarContainer>
 
@@ -2711,7 +2743,7 @@ const DocumentsPage: React.FC = () => {
                     Сбросить фильтры
                   </UploadButton>
                 ) : (
-                  <UploadButton startIcon={<CloudUploadIcon />} onClick={handleOpenUploadModal}>
+                  <UploadButton startIcon={<CloudUploadIcon />} disabled={!canCreateActive()} onClick={handleOpenUploadModal}>
                     Загрузить документ
                   </UploadButton>
                 )}

@@ -404,6 +404,11 @@ export const authApi = {
     const roles = localStorage.getItem('employee_roles');
     return roles ? JSON.parse(roles) : [];
   },
+  isOrgAdmin: (): boolean => {
+    const roles = localStorage.getItem('employee_roles');
+    const list: string[] = roles ? JSON.parse(roles) : [];
+    return list.includes('org_admin');
+  },
 };
 
 export type DocumentStatus = 'draft' | 'pending' | 'signed' | 'rejected';
@@ -650,6 +655,70 @@ export const deleteDocument = async (uuid: string): Promise<void> => {
 
 export const getDocumentEmployees = async (): Promise<DocumentEmployee[]> => {
   const response = await apiClient.get(`/api/documents/employees`);
+  return response.data;
+};
+
+// ===== Права доступа к папкам документов =====
+
+export type FolderPermissionAction = 'view' | 'create_edit' | 'delete';
+
+export interface FolderPermissionRule {
+  id?: number;
+  grantee_type: 'role' | 'user';
+  grantee_key: string;
+  can_view: boolean;
+  can_create_edit: boolean;
+  can_delete: boolean;
+}
+
+export interface FolderPermissionFolder {
+  ref: string;
+  label: string;
+  type: 'system' | 'custom';
+  rules: FolderPermissionRule[];
+}
+
+export interface FolderPermissionsResponse {
+  folders: FolderPermissionFolder[];
+}
+
+export interface MyFolderPermissions {
+  view: boolean;
+  create_edit: boolean;
+  delete: boolean;
+}
+
+export interface MyFolderPermissionsResponse {
+  permissions: Record<string, MyFolderPermissions>;
+}
+
+/** Список всех папок организации с правилами доступа (только админ). */
+export const getFolderPermissions = async (): Promise<FolderPermissionsResponse> => {
+  const response = await apiClient.get('/api/documents/folder-permissions');
+  return response.data;
+};
+
+/** Эффективные права текущего сотрудника по всем папкам. */
+export const getMyFolderPermissions = async (): Promise<MyFolderPermissionsResponse> => {
+  const response = await apiClient.get('/api/documents/folder-permissions/mine');
+  return response.data;
+};
+
+export interface FolderPermissionUpdateResponse {
+  folder_ref: string;
+  rules: FolderPermissionRule[];
+  message?: string;
+}
+
+/** Полная перезапись правил доступа для папки (только админ). */
+export const putFolderPermissions = async (
+  folderRef: string,
+  rules: FolderPermissionRule[],
+): Promise<FolderPermissionUpdateResponse> => {
+  const response = await apiClient.put(
+    `/api/documents/folder-permissions/${encodeURIComponent(folderRef)}`,
+    { rules },
+  );
   return response.data;
 };
 

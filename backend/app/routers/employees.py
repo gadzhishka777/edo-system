@@ -14,7 +14,7 @@ from sqlalchemy import select, func
 
 from app.database import get_async_db
 from app.models.mail import Organization
-from app.models.employee import Employee, EmployeeRoleEnum
+from app.models.employee import Employee
 from app.utils.search import build_smart_search
 from app.models.pydantic import (
     EmployeeCreate,
@@ -25,6 +25,7 @@ from app.models.pydantic import (
     EmployeeRoleListResponse,
 )
 from app.core.dependencies import get_current_org, get_current_employee
+from app.core.roles import ROLE_MAP
 from app.core.security import get_password_hash, generate_employee_password, generate_employee_login
 
 router = APIRouter(prefix="/employees", tags=["employees"])
@@ -33,41 +34,17 @@ router = APIRouter(prefix="/employees", tags=["employees"])
 # ===================== СПИСОК РОЛЕЙ =====================
 
 def _get_all_roles() -> List[EmployeeRoleInfo]:
-    """Возвращает полный список ролей с группировкой по категориям."""
-    roles_map = {
-        # --- Базовые ---
-        EmployeeRoleEnum.ARCHIVE_ACCESS: ("Доступ к архиву", "basic"),
-        EmployeeRoleEnum.DOCUMENT_INITIATOR: ("Инициатор документов", "basic"),
-        EmployeeRoleEnum.TASK_INITIATOR: ("Инициатор поручений", "basic"),
-        EmployeeRoleEnum.TASK_EXECUTOR: ("Исполнитель поручений", "basic"),
-        EmployeeRoleEnum.CONTROLLER: ("Контролёр", "basic"),
-        EmployeeRoleEnum.OBSERVER: ("Наблюдатель", "basic"),
-        EmployeeRoleEnum.DOC_REVIEW: ("Ознакомление с документами", "basic"),
-        EmployeeRoleEnum.CITIZEN_APPEALS: ("Работа с обращениями граждан", "basic"),
-        EmployeeRoleEnum.APPROVER: ("Согласующий", "basic"),
-        EmployeeRoleEnum.TASK_CREATOR: ("Создание поручений", "basic"),
-        EmployeeRoleEnum.RECURRING_TASK_CREATOR: ("Создание периодических поручений", "basic"),
-        EmployeeRoleEnum.CO_EXECUTOR: ("Соисполнитель", "basic"),
-        # --- Делопроизводитель ---
-        EmployeeRoleEnum.ARCHIVIST: ("Архивариус", "clerk"),
-        EmployeeRoleEnum.CLERK: ("Делопроизводитель", "clerk"),
-        EmployeeRoleEnum.CITIZEN_APPEALS_REGISTRAR: ("Регистратор обращений граждан", "clerk"),
-        EmployeeRoleEnum.DICTIONARY_EDITOR: ("Редактирование справочников", "clerk"),
-        # --- Руководитель ---
-        EmployeeRoleEnum.DEPARTMENT_HEAD: ("Руководитель департамента", "manager"),
-        EmployeeRoleEnum.FINAL_APPROVER: ("Утверждающий", "manager"),
-        # --- Администратор ---
-        EmployeeRoleEnum.USER_SUBSTITUTION_EDITOR: ("Редактирование замещений пользователей", "admin"),
-        EmployeeRoleEnum.ORG_ADMIN: ("Администратор (Организация)", "admin"),
-    }
+    """Возвращает полный список ролей с группировкой по категориям.
 
+    Реестр ролей — единый источник (`app.core.roles.ROLE_MAP`).
+    """
     return [
         EmployeeRoleInfo(
             value=role.value,
             label=label,
             category=category,
         )
-        for role, (label, category) in roles_map.items()
+        for role, (label, category) in ROLE_MAP.items()
     ]
 
 

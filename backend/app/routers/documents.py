@@ -18,6 +18,7 @@ from app.models import Document, DocumentStatus, SignatureType, FolderType, Orga
 from app.models.document import (
     DocumentType, Numerator, RegistryKind, REGISTRY_KIND_LABELS,
     DocumentAttachment, AttachmentVersion, AttachmentType, ATTACHMENT_TYPE_LABELS,
+    FolderPermission,
 )
 from app.models.employee import Employee
 from app.models.mail import MailMessage, MailStatus
@@ -32,9 +33,17 @@ from app.models.pydantic import (
 from app.services.signature_service import verify_signature
 from app.services.pdf_service import generate_signed_copy
 from app.config import settings
-from app.core.dependencies import get_current_org, get_current_org_for_download, get_current_employee
+from app.core.dependencies import get_current_org, get_current_org_for_download, get_current_employee, require_org_admin
+from app.core.folder_access import (
+    ACTION_VIEW, ACTION_CREATE_EDIT, ACTION_DELETE,
+    get_folder_rules, require_folder_permission, has_folder_permission,
+    get_denied_folder_refs, document_folder_ref_expression, folder_ref_for_doc,
+    CATEGORY_GRANT_PREFIX,
+)
+from app.core.roles import ROLE_CATEGORY, GRANTABLE_CATEGORIES
 from app.utils.file_utils import save_upload_file, delete_file
 from app.utils.search import build_smart_search
+from pydantic import BaseModel
 
 router = APIRouter(prefix="/documents", tags=["documents"])
 logger = logging.getLogger("edo.documents")
@@ -266,9 +275,214 @@ async def delete_custom_folder(
     for doc in docs_result.scalars().all():
         doc.custom_folder_id = None
 
+    # Удаляем правила доступа, привязанные к этой папке (иначе orphan-правила
+    # продолжат скрывать документы, переехавшие в «Все документы»).
+    perms_result = await db.execute(
+        select(FolderPermission).where(
+            FolderPermission.org_id == org.id,
+            FolderPermission.folder_ref == f"custom:{folder.id}",
+        )
+    )
+    for perm in perms_result.scalars().all():
+        await db.delete(perm)
+
     await db.delete(folder)
     await db.commit()
     return {"message": f"Папка «{folder.name}» удалена"}
+
+
+# ===================== ПРАВА ДОСТУПА К ПАПКАМ =====================
+#
+# Настраиваются только администратором организации (org_admin).
+# Права (действия): view — просмотр, create_edit — создание/редактирование,
+# delete — удаление. Поведение «открыто всем» по умолчанию: папка без правил
+# доступна всем сотрудникам организации, пока админ не ограничит её явно.
+
+# Читаемые названия системных папок (совпадают с вкладками фронтенда).
+FOLDER_LABELS = {
+    FolderType.ORDERS.value: "Приказы",
+    FolderType.REGULATIONS.value: "Распоряжения",
+    FolderType.PROVISIONS.value: "Положения",
+    FolderType.INCOMING.value: "Входящие",
+    FolderType.OUTGOING.value: "Исходящие",
+    FolderType.TASKS.value: "Поручения",
+}
+
+
+def _serialize_folder_permission(rule: FolderPermission) -> dict:
+    return {
+        "id": rule.id,
+        "grantee_type": rule.grantee_type,
+        "grantee_key": rule.grantee_key,
+        "can_view": rule.can_view,
+        "can_create_edit": rule.can_create_edit,
+        "can_delete": rule.can_delete,
+    }
+
+
+async def _list_all_folder_refs(db, org) -> list:
+    """Все папки организации (системные + кастомные) с лейблами."""
+    system = [
+        {"ref": ref, "label": label, "type": "system"}
+        for ref, label in FOLDER_LABELS.items()
+    ]
+    custom_res = await db.execute(
+        select(CustomFolder)
+        .where(CustomFolder.org_id == org.id)
+        .order_by(CustomFolder.created_at.desc())
+    )
+    custom = [
+        {"ref": f"custom:{f.id}", "label": f.name, "type": "custom"}
+        for f in custom_res.scalars().all()
+    ]
+    return system + custom
+
+
+async def _validate_folder_ref(db, org, folder_ref: str) -> None:
+    """folder_ref должен быть системной папкой или существующей кастомной."""
+    if folder_ref in FOLDER_LABELS:
+        return
+    if folder_ref.startswith("custom:"):
+        try:
+            cid = int(folder_ref.split(":", 1)[1])
+        except (ValueError, IndexError):
+            raise HTTPException(400, f"Некорректный идентификатор папки: {folder_ref}")
+        res = await db.execute(
+            select(CustomFolder).where(CustomFolder.id == cid, CustomFolder.org_id == org.id)
+        )
+        if res.scalar_one_or_none() is None:
+            raise HTTPException(404, "Кастомная папка не найдена")
+        return
+    raise HTTPException(400, f"Неизвестная папка: {folder_ref}")
+
+
+@router.get("/folder-permissions")
+async def list_folder_permissions(
+    db: AsyncSession = Depends(get_async_db),
+    admin: Employee = Depends(require_org_admin),
+    org: Organization = Depends(get_current_org),
+):
+    """Список всех папок организации с действующими правилами доступа.
+    Только для администратора организации."""
+    folders = await _list_all_folder_refs(db, org)
+    for f in folders:
+        rules = await get_folder_rules(db, org.id, f["ref"])
+        f["rules"] = [_serialize_folder_permission(r) for r in rules]
+    return {"folders": folders}
+
+
+@router.get("/folder-permissions/mine")
+async def my_folder_permissions(
+    db: AsyncSession = Depends(get_async_db),
+    employee: Employee = Depends(get_current_employee),
+    org: Organization = Depends(get_current_org),
+):
+    """Эффективные права текущего сотрудника по всем папкам (для гейтинга UI)."""
+    folders = await _list_all_folder_refs(db, org)
+    permissions = {}
+    for f in folders:
+        ref = f["ref"]
+        permissions[ref] = {
+            "view": await has_folder_permission(db, employee, org.id, ref, ACTION_VIEW),
+            "create_edit": await has_folder_permission(db, employee, org.id, ref, ACTION_CREATE_EDIT),
+            "delete": await has_folder_permission(db, employee, org.id, ref, ACTION_DELETE),
+        }
+    return {"permissions": permissions}
+
+
+@router.get("/folder-permissions/{folder_ref}")
+async def get_folder_permission(
+    folder_ref: str,
+    db: AsyncSession = Depends(get_async_db),
+    admin: Employee = Depends(require_org_admin),
+    org: Organization = Depends(get_current_org),
+):
+    """Правила доступа для конкретной папки (только администратор)."""
+    await _validate_folder_ref(db, org, folder_ref)
+    rules = await get_folder_rules(db, org.id, folder_ref)
+    return {
+        "folder_ref": folder_ref,
+        "rules": [_serialize_folder_permission(r) for r in rules],
+    }
+
+
+class FolderPermissionRuleIn(BaseModel):
+    grantee_type: str  # 'role' | 'user'
+    grantee_key: str
+    can_view: bool = False
+    can_create_edit: bool = False
+    can_delete: bool = False
+
+
+class FolderPermissionUpdate(BaseModel):
+    rules: List[FolderPermissionRuleIn]
+
+
+@router.put("/folder-permissions/{folder_ref}")
+async def update_folder_permission(
+    folder_ref: str,
+    payload: FolderPermissionUpdate,
+    db: AsyncSession = Depends(get_async_db),
+    admin: Employee = Depends(require_org_admin),
+    org: Organization = Depends(get_current_org),
+):
+    """Полная перезапись правил доступа для папки (только администратор)."""
+    await _validate_folder_ref(db, org, folder_ref)
+
+    # Валидируем и очищаем входные правила
+    clean_rules = []
+    for r in payload.rules:
+        if r.grantee_type not in ("role", "user"):
+            raise HTTPException(400, "grantee_type должен быть 'role' или 'user'")
+        if not r.grantee_key:
+            raise HTTPException(400, "grantee_key обязателен")
+        if r.grantee_type == "role":
+            key = r.grantee_key
+            if key.startswith(CATEGORY_GRANT_PREFIX):
+                category = key[len(CATEGORY_GRANT_PREFIX):]
+                if category not in GRANTABLE_CATEGORIES:
+                    raise HTTPException(400, f"Неизвестная категория роли: {category}")
+            elif key not in ROLE_CATEGORY:
+                raise HTTPException(400, f"Неизвестная роль: {key}")
+        else:  # user
+            if not r.grantee_key.isdigit():
+                raise HTTPException(400, "grantee_key для сотрудника должен быть числовым id")
+        if not (r.can_view or r.can_create_edit or r.can_delete):
+            # Правило без отмеченных действий бессмысленно — пропускаем
+            continue
+        clean_rules.append(r)
+
+    # Удаляем старые правила этой папки
+    old = await db.execute(
+        select(FolderPermission).where(
+            FolderPermission.org_id == org.id,
+            FolderPermission.folder_ref == folder_ref,
+        )
+    )
+    for rule in old.scalars().all():
+        await db.delete(rule)
+
+    # Вставляем новые
+    for r in clean_rules:
+        db.add(FolderPermission(
+            uuid=str(uuid.uuid4()),
+            org_id=org.id,
+            folder_ref=folder_ref,
+            grantee_type=r.grantee_type,
+            grantee_key=r.grantee_key,
+            can_view=r.can_view,
+            can_create_edit=r.can_create_edit,
+            can_delete=r.can_delete,
+            created_by_employee_id=admin.id,
+        ))
+    await db.commit()
+
+    new_rules = await get_folder_rules(db, org.id, folder_ref)
+    return {
+        "folder_ref": folder_ref,
+        "rules": [_serialize_folder_permission(r) for r in new_rules],
+        "message": "Права доступа обновлены",
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -509,7 +723,12 @@ async def upload_document(
     ext = Path(file.filename).suffix.lower()
     if ext not in settings.ALLOWED_EXTENSIONS:
         raise HTTPException(400, f"Неподдерживаемый формат. Разрешены: {', '.join(settings.ALLOWED_EXTENSIONS)}")
-    
+
+    # Права доступа: создание документа требует права «создание/редактирование»
+    # для целевой папки (org_admin — всегда; папка без правил — открыта всем).
+    target_folder_ref = f"custom:{custom_folder_id}" if custom_folder_id else folder.value
+    await require_folder_permission(db, employee, org.id, target_folder_ref, ACTION_CREATE_EDIT)
+
     # Сохранение файла
     doc_uuid = str(uuid.uuid4())
     file_path = await save_upload_file(file, settings.UPLOAD_DIR, doc_uuid)
@@ -824,6 +1043,7 @@ async def get_documents(
     custom_folder_id: Optional[int] = Query(None),
     db: AsyncSession = Depends(get_async_db),
     org: Organization = Depends(get_current_org),
+    employee: Employee = Depends(get_current_employee),
 ):
     """Получение списка документов с фильтрацией и пагинацией (только своей организации)"""
     
@@ -865,7 +1085,25 @@ async def get_documents(
             search,
         )
         filters.append(condition)
-    
+
+    # Права доступа к папкам документов.
+    requested_ref = None
+    if folder:
+        requested_ref = folder.value
+    elif custom_folder_id:
+        requested_ref = f"custom:{custom_folder_id}"
+
+    if requested_ref:
+        # Явный запрос конкретной папки — требуем право просмотра (иначе 403).
+        await require_folder_permission(db, employee, org.id, requested_ref, ACTION_VIEW)
+    else:
+        # «Все документы»: скрываем документы из папок без права просмотра.
+        # org_admin получает пустой denied => фильтр не накладывается.
+        denied = await get_denied_folder_refs(db, employee, org.id, ACTION_VIEW)
+        if denied:
+            query = query.where(document_folder_ref_expression().notin_(denied))
+            count_query = count_query.where(document_folder_ref_expression().notin_(denied))
+
     if filters:
         query = query.where(and_(*filters))
         count_query = count_query.where(and_(*filters))
@@ -1262,8 +1500,11 @@ async def get_document(
     doc_uuid: str,
     db: AsyncSession = Depends(get_async_db),
     org: Organization = Depends(get_current_org),
+    employee: Employee = Depends(get_current_employee),
 ):
     doc = await _accessible_doc(doc_uuid, org, db)
+    # Права доступа: просмотр карточки требует права view для папки документа.
+    await require_folder_permission(db, employee, org.id, folder_ref_for_doc(doc), ACTION_VIEW)
     
     if doc.goskey_data and isinstance(doc.goskey_data, str):
         try:
@@ -1283,10 +1524,13 @@ async def update_document(
     data: DocumentUpdate,
     db: AsyncSession = Depends(get_async_db),
     org: Organization = Depends(get_current_org),
+    employee: Employee = Depends(get_current_employee),
 ):
     doc = await _accessible_doc(doc_uuid, org, db)
     if doc.owner_org_id != org.id:
         raise HTTPException(403, "Редактировать может только владелец документа")
+    # Права доступа: редактирование требует права create_edit для папки документа.
+    await require_folder_permission(db, employee, org.id, folder_ref_for_doc(doc), ACTION_CREATE_EDIT)
     
     update_data = data.model_dump(exclude_unset=True)
 
@@ -1336,6 +1580,7 @@ async def delete_document(
     doc_uuid: str,
     db: AsyncSession = Depends(get_async_db),
     org: Organization = Depends(get_current_org),
+    employee: Employee = Depends(get_current_employee),
 ):
     result = await db.execute(select(Document).where(Document.uuid == doc_uuid))
     doc = result.scalar_one_or_none()
@@ -1343,6 +1588,8 @@ async def delete_document(
         raise HTTPException(404, "Документ не найден")
     if doc.owner_org_id != org.id:
         raise HTTPException(403, "Удалить может только владелец документа")
+    # Права доступа: удаление требует права delete для папки документа.
+    await require_folder_permission(db, employee, org.id, folder_ref_for_doc(doc), ACTION_DELETE)
 
     # Удаляем связи обращение↔документ, иначе они станут «осиротевшими» и
     # вызовут 500 при загрузке карточки обращения (JOIN с несуществующим документом).

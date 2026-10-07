@@ -32,6 +32,7 @@ import {
 } from '@mui/icons-material';
 import { authApi, type OrgInfo } from '../api/edoApi';
 import { getApiErrorMessage } from '../api/edoApi';
+import { APP_VERSION } from '../version';
 
 const PageContainer = styled(Box)({
   padding: '24px 32px',
@@ -478,7 +479,7 @@ const AboutPage: React.FC = () => {
             </InfoRow>
             <InfoRow>
               <InfoLabel>Версия</InfoLabel>
-              <InfoValue>0.6.1</InfoValue>
+              <InfoValue>{APP_VERSION}</InfoValue>
             </InfoRow>
             <InfoRow>
               <InfoLabel>Статус лицензии</InfoLabel>

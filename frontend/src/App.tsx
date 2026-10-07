@@ -23,6 +23,7 @@ import { KND_HOME_PATH, KND_LOGIN_PATH } from './theme/knd';
 import { EventProvider } from './context/EventContext';
 import { useLicenseCheck } from './hooks/useLicenseCheck';
 import ErrorBoundary from './components/ErrorBoundary';
+import WhatsNewDialog from './components/WhatsNewDialog';
 
 // Компонент для проверки лицензии при загрузке приложения
 const LicenseChecker: React.FC<{ children: React.ReactNode }> = ({ children }) => {
@@ -86,6 +87,8 @@ function App() {
                 element={
                   isAuthenticated ? (
                     <Box sx={{ display: 'flex', flex: 1 }}>
+                      {/* Уведомление «Что нового» — показывается один раз на версию после входа */}
+                      <WhatsNewDialog />
                       <Sidebar open={sidebarOpen} onClose={() => setSidebarOpen(false)} mobile={isMobile} />
                       <Box sx={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: '100vh' }}>
                         <Header onMenuToggle={handleToggleSidebar} onLogout={handleLogout} />

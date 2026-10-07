@@ -12,6 +12,7 @@ import {
   useTheme,
 } from '@mui/material';
 import { Close as CloseIcon } from '@mui/icons-material';
+import { APP_VERSION } from '../../version';
 
 // ===== КОНТАКТЫ =====
 const SUPPORT_EMAIL = 'obrazovanieo7@mail.ru';
@@ -257,7 +258,7 @@ const Footer: React.FC<{ variant?: FooterVariant }> = ({ variant = 'dark' }) => 
                 lineHeight: '16px',
               }}
             >
-              Версия 0.6.1
+              Версия {APP_VERSION}
             </Typography>
           </Box>
         </Container>

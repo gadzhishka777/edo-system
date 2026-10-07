@@ -13,6 +13,7 @@ import {
 } from '@mui/material';
 import { styled } from '@mui/material/styles';
 import { getPendingApprovalCount } from '../../api/edoApi';
+import { APP_VERSION } from '../../version';
 import {
   Mail as MailIcon,
   Description as DocumentsIcon,
@@ -191,7 +192,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ open, onClose, mobile = false 
           <LogoText variant="caption">ТОР ЭДО</LogoText>
           <LogoSubText variant="caption">электронный документооборот</LogoSubText>
         </LogoBox>
-        <VersionText variant="caption">v0.6.1</VersionText>
+        <VersionText variant="caption">v{APP_VERSION}</VersionText>
       </LogoContainer>
 
       <List sx={{ flex: 1, px: 1 }}>

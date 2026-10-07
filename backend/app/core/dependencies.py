@@ -10,6 +10,7 @@
 JWT в URL попадают в логи прокси и истории браузера.
 """
 from typing import Optional
+import json
 
 from fastapi import Depends, HTTPException, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -204,3 +205,31 @@ async def get_current_admin_for_download(
 ) -> AdminUser:
     """Зависимость для скачивания файлов администратором (cookie или Bearer)."""
     return admin
+
+
+# ===================== АДМИН ОРГАНИЗАЦИИ =====================
+
+
+def _employee_roles(employee: Employee) -> set:
+    """Множество ролей сотрудника (из JSON-строки employee.roles)."""
+    try:
+        roles = json.loads(employee.roles) if employee.roles else []
+    except (ValueError, TypeError):
+        roles = []
+    return set(roles) if isinstance(roles, list) else set()
+
+
+async def require_org_admin(
+    employee: Employee = Depends(get_current_employee),
+) -> Employee:
+    """Только сотрудник с ролью org_admin может управлять настройками организации.
+
+    Используется для административных эндпоинтов (права доступа к папкам,
+    управление сотрудниками и т.п.).
+    """
+    if "org_admin" not in _employee_roles(employee):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Только администратор организации может выполнять это действие.",
+        )
+    return employee

@@ -1,5 +1,5 @@
 # backend/app/models/document.py
-from sqlalchemy import Column, Integer, String, Text, DateTime, Boolean, Float, ForeignKey, Enum as SQLEnum
+from sqlalchemy import Column, Integer, String, Text, DateTime, Boolean, Float, ForeignKey, Enum as SQLEnum, UniqueConstraint
 from sqlalchemy.orm import relationship
 import enum
 import uuid
@@ -254,3 +254,44 @@ class AttachmentVersion(Base):
     created_by_employee_id = Column(Integer, ForeignKey("employees.id"), nullable=True)
 
     attachment = relationship("DocumentAttachment", back_populates="versions", foreign_keys=[attachment_id])
+
+
+class FolderPermission(Base):
+    """Право доступа к папке документов.
+
+    Папка идентифицируется строкой folder_ref:
+      - системный раздел — значение FolderType ("orders", "regulations", ...);
+      - пользовательская папка — "custom:<custom_folder_id>".
+    Грант задаётся либо ролью сотрудника (grantee_type='role', grantee_key —
+    значение EmployeeRoleEnum), либо конкретным сотрудником
+    (grantee_type='user', grantee_key — строковый id сотрудника).
+
+    Права: can_view (просмотр), can_create_edit (создание/редактирование),
+    can_delete (удаление). Если для folder_ref нет НИ ОДНОГО правила — папка
+    открыта всем сотрудникам организации (поведение по умолчанию, чтобы не
+    ломать существующие папки). Как только появляется хотя бы одно правило,
+    папка становится ограниченной: действие разрешено только грантам, у
+    которых оно отмечено. Администратор организации (org_admin) всегда имеет
+    полный доступ.
+    """
+
+    __tablename__ = "folder_permissions"
+
+    id = Column(Integer, primary_key=True, index=True)
+    uuid = Column(String(36), unique=True, index=True, nullable=False, default=lambda: str(uuid.uuid4()))
+    org_id = Column(Integer, ForeignKey("organizations.id"), nullable=False, index=True)
+    folder_ref = Column(String(64), nullable=False, index=True)
+    grantee_type = Column(String(16), nullable=False)  # 'role' | 'user'
+    grantee_key = Column(String(64), nullable=False)    # роль | строковый id сотрудника
+    can_view = Column(Boolean, default=False, nullable=False)
+    can_create_edit = Column(Boolean, default=False, nullable=False)
+    can_delete = Column(Boolean, default=False, nullable=False)
+    created_at = Column(DateTime(timezone=True), default=now_naive)
+    created_by_employee_id = Column(Integer, ForeignKey("employees.id"), nullable=True)
+
+    __table_args__ = (
+        UniqueConstraint(
+            "org_id", "folder_ref", "grantee_type", "grantee_key",
+            name="uq_folder_permission",
+        ),
+    )
