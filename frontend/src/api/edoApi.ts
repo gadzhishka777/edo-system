@@ -1606,9 +1606,10 @@ export const getAppealTargets = async (): Promise<AppealTarget[]> => {
 };
 
 export const submitPublicAppeal = async (formData: FormData): Promise<{ message: string; system_number: string; register_deadline?: string }> => {
-  const r = await publicApiClient.post(`/api/public/appeals/`, formData, {
-    headers: { 'Content-Type': 'multipart/form-data' },
-  });
+  // НЕ ставим Content-Type вручную: браузер/axios сами выставят
+  // multipart/form-data с корректным boundary. Явный заголовок без boundary
+  // ломает парсинг multipart на бэкенде (Starlette) → 500.
+  const r = await publicApiClient.post(`/api/public/appeals/`, formData);
   return r.data;
 };
 
