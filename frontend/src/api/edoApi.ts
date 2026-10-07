@@ -1501,6 +1501,21 @@ export const publicApiClient = axios.create({
   timeout: 60000,
 });
 
+// CSRF double-submit и для публичных запросов: бэкенд проверяет CSRF, если у
+// запроса есть сессионная cookie (залогиненный пользователь, открывший
+// публичную форму). Без этого заголовка залогиненный юзер ловит 403
+// «CSRF-токен устарел» при отправке обращения.
+publicApiClient.interceptors.request.use((config) => {
+  const method = String(config.method || 'get').toLowerCase();
+  if (method !== 'get' && method !== 'head' && method !== 'options') {
+    const csrf = getCsrfToken();
+    if (csrf) {
+      config.headers['X-CSRF-Token'] = csrf;
+    }
+  }
+  return config;
+});
+
 export type AppealKind = 'complaint' | 'application' | 'suggestion';
 export type AppealApplicantType = 'citizen' | 'organization';
 export type AppealStatus = 'new' | 'registered' | 'on_execution' | 'answered' | 'redirected';
