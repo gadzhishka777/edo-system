@@ -50,6 +50,19 @@ export function persistLogin(resp: EmployeeLoginResponse): void {
   localStorage.setItem('employee_roles', JSON.stringify(resp.roles));
 }
 
+/** Стирает маркерные cookie сессии (edo_session / edo_admin_session).
+ *  Они non-HttpOnly (видны JS), поэтому их можно удалить отсюда.
+ *
+ *  ВАЖНО: без этого isAuthenticated() продолжает возвращать true после
+ *  неудачного refresh/logout — фронтенд зацикливается:
+ *  защищённый API → 401 → window.location.href='/login' → перезагрузка →
+ *  isAuthenticated() всё ещё true → снова защищённый API → … (вечная перезагрузка). */
+function clearSessionMarkers() {
+  const expired = 'Thu, 01 Jan 1970 00:00:00 GMT';
+  document.cookie = 'edo_session=; Path=/; Expires=' + expired + '; Max-Age=0';
+  document.cookie = 'edo_admin_session=; Path=/; Expires=' + expired + '; Max-Age=0';
+}
+
 function clearTokens() {
   localStorage.removeItem('org_name');
   localStorage.removeItem('org_id');
@@ -61,6 +74,9 @@ function clearTokens() {
   localStorage.removeItem('refresh_token');
   localStorage.removeItem('admin_access_token');
   localStorage.removeItem('admin_refresh_token');
+  // Стираем маркер сессии в cookie — иначе isAuthenticated() врёт и SPA
+  // уходит в петлю перезагрузок после failed refresh / logout.
+  clearSessionMarkers();
 }
 
 // ===== Возврат в модуль после внешнего входа (ЕИС) =====
