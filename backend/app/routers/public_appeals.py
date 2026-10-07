@@ -41,9 +41,9 @@ def _check_rate_limit(ip: str) -> None:
     Счётчик расходуется только после успешной валидации (см. _commit_rate_limit):
     иначе заявитель, трижды ошибшийся в форме, получает бан на час.
     """
-    now = now().timestamp()
+    ts = now().timestamp()
     bucket = _rate_bucket[ip]
-    while bucket and now - bucket[0] > _RATE_WINDOW:
+    while bucket and ts - bucket[0] > _RATE_WINDOW:
         bucket.popleft()
     if len(bucket) >= _RATE_LIMIT:
         raise HTTPException(429, "Слишком много обращений с этого адреса. Попробуйте позже.")
@@ -283,7 +283,7 @@ async def submit_appeal(
         await db.rollback()
         if appeal_dir and appeal_dir.exists():
             shutil.rmtree(appeal_dir, ignore_errors=True)
-        logger.error("submit_appeal failed (ip=%s): %s", ip, e)
+        logger.exception("submit_appeal failed (ip=%s): %s", ip, e)
         raise HTTPException(
             500, "Не удалось сохранить обращение. Попробуйте отправить его ещё раз.",
         )
