@@ -86,8 +86,30 @@ const adminApi = {
     return csrf ? { 'X-CSRF-Token': csrf } : {};
   },
 
+  /**
+   * CSRF-токен мог протухнуть: backend ротирует edo_csrf на каждом входе
+   * (в т.ч. из другой вкладки), а в памяти этой вкладки лежит старое значение.
+   * Тогда изменяющий запрос прилетит с 403 «CSRF-токен устарел». Здесь
+   * перечитываем токен из свежей cookie и повторяем запрос один раз.
+   *
+   * Восстановиться можно, потому что getHeaders() читает cookie в момент
+   * вызова, а не кэширует значение при монтировании страницы.
+   */
+  retryWithFreshCsrf: async (run: () => Promise<Response>): Promise<Response> => {
+    const r = await run();
+    if (r.status !== 403) return r;
+    let detail = '';
+    try {
+      detail = ((await r.clone().json()) as { detail?: string }).detail || '';
+    } catch {
+      return r;
+    }
+    if (!detail.includes('CSRF')) return r;
+    return run();
+  },
+
   getStats: async () => {
-    const r = await apiFetch(`${API_BASE}/api/admin/stats`, { headers: adminApi.getHeaders() });
+    const r = await apiFetch(`${API_BASE}/api/admin/stats`);
     if (!r.ok) throw new Error('Ошибка загрузки статистики');
     return r.json();
   },
@@ -95,7 +117,7 @@ const adminApi = {
   getVacancies: async (page = 1, size = 20, search = '') => {
     const params = new URLSearchParams({ page: String(page), size: String(size) });
     if (search) params.set('search', search);
-    const r = await apiFetch(`${API_BASE}/api/admin/vacancies?${params}`, { headers: adminApi.getHeaders() });
+    const r = await apiFetch(`${API_BASE}/api/admin/vacancies?${params}`);
     if (!r.ok) throw new Error('Ошибка загрузки вакансий');
     return r.json();
   },
@@ -103,17 +125,17 @@ const adminApi = {
   getOrganizations: async (page = 1, size = 20, search = '') => {
     const params = new URLSearchParams({ page: String(page), size: String(size) });
     if (search) params.set('search', search);
-    const r = await apiFetch(`${API_BASE}/api/admin/organizations?${params}`, { headers: adminApi.getHeaders() });
+    const r = await apiFetch(`${API_BASE}/api/admin/organizations?${params}`);
     if (!r.ok) throw new Error('Ошибка загрузки организаций');
     return r.json();
   },
 
   createOrganization: async (data: any) => {
-    const r = await apiFetch(`${API_BASE}/api/admin/organizations`, {
+    const r = await adminApi.retryWithFreshCsrf(() => apiFetch(`${API_BASE}/api/admin/organizations`, {
       method: 'POST',
       headers: { ...adminApi.getHeaders(), 'Content-Type': 'application/json' },
       body: JSON.stringify(data),
-    });
+    }));
     if (!r.ok) {
       const err = await r.json().catch(() => ({ detail: 'Ошибка создания' }));
       throw new Error(err.detail || 'Ошибка создания');
@@ -122,11 +144,11 @@ const adminApi = {
   },
 
   updateOrganization: async (orgId: number, data: any) => {
-    const r = await apiFetch(`${API_BASE}/api/admin/organizations/${orgId}`, {
+    const r = await adminApi.retryWithFreshCsrf(() => apiFetch(`${API_BASE}/api/admin/organizations/${orgId}`, {
       method: 'PUT',
       headers: { ...adminApi.getHeaders(), 'Content-Type': 'application/json' },
       body: JSON.stringify(data),
-    });
+    }));
     if (!r.ok) {
       const err = await r.json().catch(() => ({ detail: 'Ошибка обновления' }));
       throw new Error(err.detail || 'Ошибка обновления');
@@ -135,10 +157,10 @@ const adminApi = {
   },
 
   deactivateOrganization: async (orgId: number) => {
-    const r = await apiFetch(`${API_BASE}/api/admin/organizations/${orgId}`, {
+    const r = await adminApi.retryWithFreshCsrf(() => apiFetch(`${API_BASE}/api/admin/organizations/${orgId}`, {
       method: 'DELETE',
       headers: adminApi.getHeaders(),
-    });
+    }));
     if (!r.ok) {
       const err = await r.json().catch(() => ({ detail: 'Ошибка деактивации' }));
       throw new Error(err.detail || 'Ошибка деактивации');
@@ -147,11 +169,11 @@ const adminApi = {
   },
 
   updateCredentials: async (orgId: number, data: any) => {
-    const r = await apiFetch(`${API_BASE}/api/admin/organizations/${orgId}/credentials`, {
+    const r = await adminApi.retryWithFreshCsrf(() => apiFetch(`${API_BASE}/api/admin/organizations/${orgId}/credentials`, {
       method: 'PUT',
       headers: { ...adminApi.getHeaders(), 'Content-Type': 'application/json' },
       body: JSON.stringify(data),
-    });
+    }));
     if (!r.ok) {
       const err = await r.json().catch(() => ({ detail: 'Ошибка обновления учётных данных' }));
       throw new Error(err.detail || 'Ошибка обновления учётных данных');
@@ -163,14 +185,14 @@ const adminApi = {
     const params = new URLSearchParams({ page: String(page), size: String(size) });
     if (search) params.set('search', search);
     if (folder) params.set('folder', folder);
-    const r = await apiFetch(`${API_BASE}/api/admin/organizations/${orgId}/documents?${params}`, { headers: adminApi.getHeaders() });
+    const r = await apiFetch(`${API_BASE}/api/admin/organizations/${orgId}/documents?${params}`);
     if (!r.ok) throw new Error('Ошибка загрузки документов');
     return r.json();
   },
 
   // ===== ШТАМПЫ =====
   getStamps: async () => {
-    const r = await apiFetch(`${API_BASE}/api/admin/stamps`, { headers: adminApi.getHeaders() });
+    const r = await apiFetch(`${API_BASE}/api/admin/stamps`);
     if (!r.ok) throw new Error('Ошибка загрузки штампов');
     return r.json();
   },
@@ -179,11 +201,11 @@ const adminApi = {
     const formData = new FormData();
     formData.append('signer_keyword', signerKeyword);
     formData.append('file', file);
-    const r = await apiFetch(`${API_BASE}/api/admin/stamps`, {
+    const r = await adminApi.retryWithFreshCsrf(() => apiFetch(`${API_BASE}/api/admin/stamps`, {
       method: 'POST',
       headers: adminApi.getHeaders(),
       body: formData,
-    });
+    }));
     if (!r.ok) {
       const err = await r.json().catch(() => ({ detail: 'Ошибка загрузки штампа' }));
       throw new Error(err.detail || 'Ошибка загрузки штампа');
@@ -192,10 +214,10 @@ const adminApi = {
   },
 
   deleteStamp: async (stampId: number) => {
-    const r = await apiFetch(`${API_BASE}/api/admin/stamps/${stampId}`, {
+    const r = await adminApi.retryWithFreshCsrf(() => apiFetch(`${API_BASE}/api/admin/stamps/${stampId}`, {
       method: 'DELETE',
       headers: adminApi.getHeaders(),
-    });
+    }));
     if (!r.ok) {
       const err = await r.json().catch(() => ({ detail: 'Ошибка удаления' }));
       throw new Error(err.detail || 'Ошибка удаления');
@@ -212,13 +234,13 @@ const adminApi = {
     if (params.org_id) q.set('org_id', String(params.org_id));
     if (params.search) q.set('search', params.search);
     if (params.overdue) q.set('overdue', 'true');
-    const r = await apiFetch(`${API_BASE}/api/admin/appeals?${q}`, { headers: adminApi.getHeaders() });
+    const r = await apiFetch(`${API_BASE}/api/admin/appeals?${q}`);
     if (!r.ok) throw new Error('Ошибка загрузки обращений');
     return r.json();
   },
 
   getAppealCard: async (uuid: string) => {
-    const r = await apiFetch(`${API_BASE}/api/admin/appeals/${uuid}`, { headers: adminApi.getHeaders() });
+    const r = await apiFetch(`${API_BASE}/api/admin/appeals/${uuid}`);
     if (!r.ok) throw new Error('Ошибка загрузки обращения');
     return r.json();
   },
@@ -244,17 +266,17 @@ const adminApi = {
   getLicenses: async (page = 1, size = 20, search = '') => {
     const params = new URLSearchParams({ page: String(page), size: String(size) });
     if (search) params.set('search', search);
-    const r = await apiFetch(`${API_BASE}/api/admin/licenses?${params}`, { headers: adminApi.getHeaders() });
+    const r = await apiFetch(`${API_BASE}/api/admin/licenses?${params}`);
     if (!r.ok) throw new Error('Ошибка загрузки лицензий');
     return r.json();
   },
 
   generateLicenses: async (count = 5, durationDays = 180) => {
     const params = new URLSearchParams({ count: String(count), duration_days: String(durationDays) });
-    const r = await apiFetch(`${API_BASE}/api/admin/licenses?${params}`, {
+    const r = await adminApi.retryWithFreshCsrf(() => apiFetch(`${API_BASE}/api/admin/licenses?${params}`, {
       method: 'POST',
       headers: adminApi.getHeaders(),
-    });
+    }));
     if (!r.ok) {
       const err = await r.json().catch(() => ({ detail: 'Ошибка генерации' }));
       throw new Error(err.detail || 'Ошибка генерации');
@@ -263,10 +285,10 @@ const adminApi = {
   },
 
   deleteLicense: async (licenseId: number) => {
-    const r = await apiFetch(`${API_BASE}/api/admin/licenses/${licenseId}`, {
+    const r = await adminApi.retryWithFreshCsrf(() => apiFetch(`${API_BASE}/api/admin/licenses/${licenseId}`, {
       method: 'DELETE',
       headers: adminApi.getHeaders(),
-    });
+    }));
     if (!r.ok) {
       const err = await r.json().catch(() => ({ detail: 'Ошибка удаления' }));
       throw new Error(err.detail || 'Ошибка удаления');
@@ -280,8 +302,7 @@ const adminApi = {
       method: 'POST',
       headers: adminApi.getHeaders(),
     });
-  },
-};
+  },};
 
 // ===================== СТИЛИ =====================
 

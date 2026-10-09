@@ -11,7 +11,7 @@ import {
 } from '@mui/material';
 import { styled } from '@mui/material/styles';
 import { Lock as LockIcon } from '@mui/icons-material';
-import { hasSessionMarker, readCsrfToken } from '../api/edoApi';
+import { hasSessionMarker, readCsrfToken, resetClientSession } from '../api/edoApi';
 
 // ===================== API =====================
 
@@ -35,6 +35,14 @@ const readCsrfHeaders = (): Record<string, string> => {
 
 const adminApi = {
   login: async (login: string, password: string) => {
+    // Перед входом выкидываем остатки прежней сессии в браузере.
+    //
+    // Зачем: если в браузере осталась протухшая сессионная cookie
+    // (edo_admin_access), backend считает запрос «залогиненным» и требовал бы
+    // X-CSRF-Token даже на самом входе — форма уходила бы в «мёртвую петлю»
+    // «CSRF-токен устарел». Вход по определению открывает НОВУЮ сессию, поэтому
+    // старые маркеры и токены здесь не нужны: сносим их до запроса.
+    resetClientSession();
     const r = await apiFetch(`${API_BASE}/api/admin/login`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },

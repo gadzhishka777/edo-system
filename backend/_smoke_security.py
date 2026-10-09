@@ -230,6 +230,27 @@ pub_client = TestClient(app, raise_server_exceptions=True)
 r_pub = pub_client.post("/api/public/appeals/", data={"content": "x"})
 check("POST /api/public/appeals/ без cookie → не 403", r_pub.status_code != 403, str(r_pub.status_code))
 
+print("\n== 6d. Вход не блокируется CSRF при протухшей сессионной cookie ==")
+# Регрессия: раньше POST /api/admin/login проходил через CSRFMiddleware, и если
+# в браузере оставалась живая сессионная cookie (edo_admin_access), а CSRF-токен
+# был протухшим/отсутствовал — вход отбивался 403 «CSRF-токен устарел» и форма
+# уходила в «мёртвую петлю» (обновление страницы не помогало). Теперь /login и
+# /auth/refresh в CSRF_EXEMPT_PATHS: вход всегда должен уметь открыть новую сессию.
+stale = TestClient(app, raise_server_exceptions=True)
+r_first = stale.post("/api/admin/login", json={"login": SMOKE_ADMIN, "password": SMOKE_PASS})
+check("первый вход → 200", r_first.status_code == 200, str(r_first.status_code))
+# Стираем CSRF-cookie, сессия жива — воспроизводим протухший токен.
+stale.cookies.delete(CSRF_COOKIE, domain="testserver.local", path="/")
+r_relogin = stale.post("/api/admin/login", json={"login": SMOKE_ADMIN, "password": SMOKE_PASS})
+check("повторный вход без edo_csrf → 200 (не 403 «CSRF-токен устарел»)",
+      r_relogin.status_code == 200, f"{r_relogin.status_code} {r_relogin.text[:160]}")
+check("после входа выдан свежий edo_csrf", bool(stale.cookies.get(CSRF_COOKIE)))
+# Но защита мутирующих эндпоинтов на месте: logout без токена всё так же 403.
+stale.cookies.delete(CSRF_COOKIE, domain="testserver.local", path="/")
+r_guard = stale.post("/api/admin/logout")
+check("logout без CSRF по-прежнему 403 (защита не ослаблена)",
+      r_guard.status_code == 403, str(r_guard.status_code))
+
 # ===================== 7. ВЫХОД ЧИСТИТ COOKIE =====================
 print("\n== 7. Выход администратора стирает сессионные cookie ==")
 logout_sets = [

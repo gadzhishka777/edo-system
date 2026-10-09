@@ -18,6 +18,9 @@ CSRFMiddleware — защита от межсайтовой подделки з�
 Запросы с Bearer-заголовком (без cookie) CSRF-проверкой не затрагиваются:
 Bearer-токен недоступен браузеру межсайтовым скриптам и не пересылается автоматически.
 
+Исключения CSRF_EXEMPT_PATHS (вход и обновление сессии) не проверяются вовсе:
+на входе сессии ещё нет, и проверка сломала бы вход при протухшей cookie.
+
 GeoBlockMiddleware — вторая линия обороны гео-ограничения: API доступно только
 из разрешённых стран (по умолчанию РФ, Беларусь, Казахстан). Основную работу
 делает nginx (модуль geoip2 + deploy/nginx-snippets/edo-geo-block.conf), который
@@ -47,6 +50,23 @@ from app.core.time import iso_msk, now
 logger = logging.getLogger("edo.security")
 
 SAFE_METHODS = {"GET", "HEAD", "OPTIONS", "TRACE"}
+
+# Эндпоинты, которые ЗАВЕДОМО не нуждаются в CSRF-проверке: на момент их вызова
+# пригодной сессии ещё нет, а вход как раз должен уметь «сбросить» протухшую.
+#   - /api/admin/login и /api/auth/login: ставим новые cookie. Если в браузере
+#     осталась старая сессионная cookie (например, токен пережил перезапуск
+#     бэкенда), CSRF-проверка требовала бы X-CSRF-Token на САМОМ входе — и форма
+#     уходила в «мёртвую петлю»: POST /login → 403 «CSRF-токен устарел», а
+#     обновление страницы это не лечит (новая CSRF-cookie выдаётся только на GET).
+#   - /api/auth/refresh: меняет access по refresh-cookie; проверка подписи CSRF
+#     здесь не несёт смысла (запрос всё равно требует валидного refresh-токена).
+# ВНИМАНИЕ: сюда нельзя вносить эндпоинты, которые ЧТО-ТО меняют по уже
+# установленной сессии (logout, CRUD) — для них CSRF обязателен.
+CSRF_EXEMPT_PATHS = frozenset((
+    "/api/admin/login",
+    "/api/auth/login",
+    "/api/auth/refresh",
+))
 
 SECURITY_HEADERS = {
     "X-Content-Type-Options": "nosniff",
@@ -139,6 +159,9 @@ class CSRFMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
         path = request.url.path
         if request.method in SAFE_METHODS or not path.startswith(settings.API_PREFIX):
+            return await call_next(request)
+
+        if path in CSRF_EXEMPT_PATHS:
             return await call_next(request)
 
         origin = request.headers.get("origin")

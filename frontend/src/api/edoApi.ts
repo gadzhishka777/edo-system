@@ -63,6 +63,25 @@ function clearSessionMarkers() {
   document.cookie = 'edo_admin_session=; Path=/; Expires=' + expired + '; Max-Age=0';
 }
 
+/** Стереть CSRF-cookie. Нужно перед входом: если edo_csrf остался от прежней
+ *  сессии, backend может отклонить запрос старой подписью. Страница входа
+ *  вызывается до получения новой сессии — токен здесь не нужен. */
+export function clearCsrfCookie() {
+  const expired = 'Thu, 01 Jan 1970 00:00:00 GMT';
+  document.cookie = 'edo_csrf=; Path=/; Expires=' + expired + '; Max-Age=0';
+}
+
+/** Сброс всей клиентской сессии (маркеры + CSRF + данные сотрудника).
+ *  Экспортируется для страницы входа админки: вход всегда открывает новую
+ *  сессию, поэтому остатки прежней надо убрать ДО запроса — иначе backend
+ *  увидит старую сессионную cookie и потребует CSRF-токен на самом входе
+ *  («мёртвая петля» «CSRF-токен устарел»). */
+export function resetClientSession() {
+  clearSessionMarkers();
+  clearCsrfCookie();
+  clearTokens();
+}
+
 function clearTokens() {
   localStorage.removeItem('org_name');
   localStorage.removeItem('org_id');
