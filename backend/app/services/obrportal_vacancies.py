@@ -200,27 +200,46 @@ def resolve_portal_org(
 
 # ===================== ПОДГОТОВКА ДАННЫХ =====================
 
-def build_vacancy_items(vacancies: List[Vacancy]) -> List[Dict[str, str]]:
+def hours_label(hours: Optional[int]) -> str:
+    """18 -> «18 часов в неделю» (в таком виде портал показывает нагрузку)."""
+    if not hours:
+        return "Не указана"
+    n = abs(int(hours))
+    if 11 <= n % 100 <= 14:
+        word = "часов"
+    elif n % 10 == 1:
+        word = "час"
+    elif 2 <= n % 10 <= 4:
+        word = "часа"
+    else:
+        word = "часов"
+    return f"{n} {word} в неделю"
+
+
+def build_vacancy_items(vacancies: List[Vacancy]) -> List[Dict[str, Any]]:
     """Вакансии ТОР ЭДО -> элементы контракта портала.
 
     Поля портала: name (название), rang (должность/разряд), workload (нагрузка),
-    description (описание). У нас название и должность — разные поля, поэтому
-    должность уходит в rang, а нагрузка — в workload текстом с единицей.
+    description (описание), details (карточка вакансии). У нас название и
+    должность — разные поля, поэтому должность уходит в rang.
+
+    Важно: карточку вакансии портал рисует не из workload, а из
+    details.hours_per_week (при пустом значении подставляет заглушку
+    «18 ч/нед»), поэтому часы дублируем в details.
     """
-    items: List[Dict[str, str]] = []
+    items: List[Dict[str, Any]] = []
     for v in vacancies:
         name = (v.name or "").strip()
         if not name:
             continue
-        workload = ""
-        if v.teaching_load:
-            workload = f"{v.teaching_load} ч/нед"
+        workload = f"{v.teaching_load} ч/нед" if v.teaching_load else ""
         items.append(
             {
                 "name": name[:255],
                 "rang": (v.position or "").strip()[:255],
                 "workload": workload[:255],
                 "description": (v.description or "").strip(),
+                "details": {"hours_per_week": hours_label(v.teaching_load)},
             }
         )
     return items

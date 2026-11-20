@@ -211,6 +211,19 @@ def test_payload():
     check("name/rang", items[0]["name"] == "Учитель физики" and items[0]["rang"] == "Учитель физики")
     check("нагрузка с единицей", items[0]["workload"] == "27 ч/нед", items[0]["workload"])
     check("пустая нагрузка у не-учителя", items[1]["workload"] == "", repr(items[1]["workload"]))
+    check(
+        "детали: часы в карточке портала",
+        items[0]["details"]["hours_per_week"] == "27 часов в неделю",
+        str(items[0].get("details")),
+    )
+    check(
+        "детали: без часов — «Не указана»",
+        items[1]["details"]["hours_per_week"] == "Не указана",
+        str(items[1].get("details")),
+    )
+    for n, want in ((1, "1 час в неделю"), (3, "3 часа в неделю"), (11, "11 часов в неделю"),
+                    (21, "21 час в неделю"), (22, "22 часа в неделю"), (18, "18 часов в неделю")):
+        check(f"склонение {n}", obrportal.hours_label(n) == want, obrportal.hours_label(n))
 
 
 async def test_push_ok(org_id):
