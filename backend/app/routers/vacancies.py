@@ -9,10 +9,11 @@ import uuid as uuid_lib
 from datetime import datetime
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import settings
 from app.core.dependencies import get_current_org, get_current_employee
 from app.core.time import now_naive
 from app.database import get_async_db
@@ -24,6 +25,11 @@ from app.models.vacancy import (
     is_teacher_position,
 )
 from app.models.pydantic import (
+    ObPortalExportResult,
+    ObPortalExportStatus,
+    ObPortalMappingRequest,
+    ObPortalSchool,
+    ObPortalSchoolListResponse,
     VacancyCreate,
     VacancyUpdate,
     VacancyResponse,
@@ -31,6 +37,7 @@ from app.models.pydantic import (
     VacancyPositionInfo,
     VacancyPositionListResponse,
 )
+from app.services import obrportal_vacancies as obrportal
 from app.utils.search import build_smart_search
 
 router = APIRouter(prefix="/vacancies", tags=["vacancies"])
@@ -127,12 +134,145 @@ async def list_vacancies(
     )
 
 
+# ===================== ВЫГРУЗКА В ЕИС «ОБРПОРТАЛ» =====================
+#
+# Портал принимает вакансии школы как «полное замещение» (см. сервис
+# obrportal_vacancies), поэтому выгрузка всегда отправляет весь список.
+# Всё, что ниже, доступно только администратору организации: это изменение
+# данных на внешней стороне.
+
+
+def _schedule_auto_export(background: BackgroundTasks, org_id: int) -> None:
+    """Фоновая выгрузка после изменения вакансий.
+
+    Не блокирует ответ и не откатывает сохранение, если портал недоступен:
+    администратор увидит ошибку в статусе выгрузки и сможет повторить вручную.
+    """
+    if settings.OBRPORTAL_ENABLED:
+        background.add_task(obrportal.push_org_vacancies_by_id, org_id)
+
+
+@router.get("/export/status", response_model=ObPortalExportStatus)
+async def get_export_status(
+    db: AsyncSession = Depends(get_async_db),
+    org: Organization = Depends(get_current_org),
+    employee: Employee = Depends(get_current_employee),
+):
+    """Состояние выгрузки вакансий организации в ОбрПортал."""
+    _require_org_admin(employee)
+
+    local_count = (
+        await db.execute(
+            select(func.count())
+            .select_from(Vacancy)
+            .where(Vacancy.org_id == org.id, Vacancy.is_active.is_(True))
+        )
+    ).scalar() or 0
+
+    portal_org_id = None
+    portal_org_name = None
+    mapping = "none"
+    if settings.OBRPORTAL_ENABLED:
+        try:
+            schools = await obrportal.fetch_portal_schools()
+            portal_org_id, portal_org_name, mapping = obrportal.resolve_portal_org(org, schools)
+        except obrportal.ObPortalError:
+            # Портал недоступен — показываем сохранённую привязку «как есть»,
+            # чтобы интерфейс не терял ручной выбор из-за сетевой ошибки.
+            if org.obrportal_org_id:
+                portal_org_id, mapping = int(org.obrportal_org_id), "manual"
+
+    return ObPortalExportStatus(
+        enabled=settings.OBRPORTAL_ENABLED,
+        configured=settings.obrportal_configured,
+        portal_org_id=portal_org_id,
+        portal_org_name=portal_org_name,
+        mapping=mapping,
+        local_count=int(local_count),
+        synced_at=org.obrportal_synced_at,
+        sync_status=org.obrportal_sync_status,
+        sync_error=org.obrportal_sync_error,
+        sync_count=org.obrportal_sync_count,
+    )
+
+
+@router.get("/portal-schools", response_model=ObPortalSchoolListResponse)
+async def list_portal_schools(
+    employee: Employee = Depends(get_current_employee),
+    _org: Organization = Depends(get_current_org),
+):
+    """Школы ОбрПортала — для ручной привязки организации."""
+    _require_org_admin(employee)
+
+    if not settings.OBRPORTAL_ENABLED:
+        return ObPortalSchoolListResponse(schools=[])
+
+    try:
+        schools = await obrportal.fetch_portal_schools(force=True)
+    except obrportal.ObPortalError as exc:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc))
+
+    return ObPortalSchoolListResponse(
+        schools=[ObPortalSchool(**s) for s in schools]
+    )
+
+
+@router.put("/export/mapping", response_model=ObPortalExportStatus)
+async def set_export_mapping(
+    data: ObPortalMappingRequest,
+    db: AsyncSession = Depends(get_async_db),
+    org: Organization = Depends(get_current_org),
+    employee: Employee = Depends(get_current_employee),
+):
+    """Закрепить организацию за школой портала (или сбросить привязку)."""
+    _require_org_admin(employee)
+
+    if data.portal_org_id is None:
+        org.obrportal_org_id = None
+    else:
+        # Принимаем только реально существующую школу: опечатка в id иначе
+        # увела бы вакансии в чужую школу портала.
+        try:
+            schools = await obrportal.fetch_portal_schools(force=True)
+        except obrportal.ObPortalError as exc:
+            raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc))
+        if int(data.portal_org_id) not in {s["id"] for s in schools}:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Такой школы нет в ОбрПортале",
+            )
+        org.obrportal_org_id = int(data.portal_org_id)
+
+    await db.commit()
+    await db.refresh(org)
+
+    return await get_export_status(db=db, org=org, employee=employee)
+
+
+@router.post("/export", response_model=ObPortalExportResult)
+async def export_vacancies(
+    db: AsyncSession = Depends(get_async_db),
+    org: Organization = Depends(get_current_org),
+    employee: Employee = Depends(get_current_employee),
+):
+    """Выгрузить вакансии организации в ОбрПортал прямо сейчас."""
+    _require_org_admin(employee)
+
+    try:
+        result = await obrportal.push_org_vacancies(db, org)
+    except obrportal.ObPortalError as exc:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc))
+
+    return ObPortalExportResult(**result)
+
+
 # ===================== СОЗДАНИЕ ВАКАНСИИ =====================
 
 
 @router.post("/", response_model=VacancyResponse, status_code=status.HTTP_201_CREATED)
 async def create_vacancy(
     data: VacancyCreate,
+    background: BackgroundTasks,
     db: AsyncSession = Depends(get_async_db),
     org: Organization = Depends(get_current_org),
     employee: Employee = Depends(get_current_employee),
@@ -152,6 +292,8 @@ async def create_vacancy(
     db.add(vacancy)
     await db.commit()
     await db.refresh(vacancy)
+
+    _schedule_auto_export(background, org.id)
 
     return _to_response(vacancy)
 
@@ -184,6 +326,7 @@ async def get_vacancy(
 async def update_vacancy(
     uuid: str,
     data: VacancyUpdate,
+    background: BackgroundTasks,
     db: AsyncSession = Depends(get_async_db),
     org: Organization = Depends(get_current_org),
     employee: Employee = Depends(get_current_employee),
@@ -216,6 +359,8 @@ async def update_vacancy(
     await db.commit()
     await db.refresh(vacancy)
 
+    _schedule_auto_export(background, org.id)
+
     return _to_response(vacancy)
 
 
@@ -225,6 +370,7 @@ async def update_vacancy(
 @router.delete("/{uuid}", response_model=dict)
 async def delete_vacancy(
     uuid: str,
+    background: BackgroundTasks,
     db: AsyncSession = Depends(get_async_db),
     org: Organization = Depends(get_current_org),
     employee: Employee = Depends(get_current_employee),
@@ -241,5 +387,7 @@ async def delete_vacancy(
 
     await db.delete(vacancy)
     await db.commit()
+
+    _schedule_auto_export(background, org.id)
 
     return {"message": f"Вакансия «{vacancy.name}» удалена"}

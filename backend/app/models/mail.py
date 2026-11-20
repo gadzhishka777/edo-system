@@ -121,6 +121,16 @@ class Organization(Base):
     # вход по логину/паролю для сотрудников организации запрещён.
     force_esa_auth = Column(Boolean, default=False, nullable=False)
 
+    # ===== Выгрузка вакансий в ЕИС «ОбрПортал» =====
+    # id школы на портале (orgs.obeys = 1). Пусто — привязка ещё не определена,
+    # тогда сервис пробует сопоставить организацию по названию автоматически.
+    obrportal_org_id = Column(Integer, nullable=True)
+    # Результат последней выгрузки: когда, чем закончилась, сколько вакансий ушло.
+    obrportal_synced_at = Column(DateTime(timezone=True), nullable=True)
+    obrportal_sync_status = Column(String(16), nullable=True)   # ok | error
+    obrportal_sync_error = Column(Text, nullable=True)
+    obrportal_sync_count = Column(Integer, nullable=True)
+
     # Связи
     employees = relationship("Employee", back_populates="organization", lazy="selectin")
 

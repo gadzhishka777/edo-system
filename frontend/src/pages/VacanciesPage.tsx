@@ -49,8 +49,14 @@ import {
   createVacancy,
   updateVacancy,
   deactivateVacancy,
+  getVacancyExportStatus,
+  exportVacanciesToPortal,
+  getPortalSchools,
+  setPortalSchoolMapping,
   type Vacancy,
   type VacancyPosition,
+  type ObPortalExportStatus,
+  type ObPortalSchool,
 } from '../api/edoApi';
 // Примечание: функция edoApi.deactivateVacancy выполняет DELETE-запрос к
 // /api/vacancies/{uuid}; бэкенд теперь удаляет запись физически (hard delete).
@@ -355,6 +361,14 @@ const VacanciesPage: React.FC = () => {
   const [deleteTarget, setDeleteTarget] = useState<string[]>([]);
   const [isEisModalOpen, setIsEisModalOpen] = useState(false);
 
+  // ===== Выгрузка вакансий в ЕИС «ОбрПортал» =====
+  const [exportStatus, setExportStatus] = useState<ObPortalExportStatus | null>(null);
+  const [isExporting, setIsExporting] = useState(false);
+  const [portalSchools, setPortalSchools] = useState<ObPortalSchool[]>([]);
+  const [portalSchoolsLoading, setPortalSchoolsLoading] = useState(false);
+  const [mappingSchoolId, setMappingSchoolId] = useState<string>('');
+  const [isMappingSaving, setIsMappingSaving] = useState(false);
+
   const [positions, setPositions] = useState<VacancyPosition[]>([]);
   const [positionsLoading, setPositionsLoading] = useState(false);
 
@@ -412,6 +426,75 @@ const VacanciesPage: React.FC = () => {
   useEffect(() => {
     setPage(1);
   }, [debouncedSearch]);
+
+  // ===== Выгрузка в ОбрПортал: привязка к школе и последняя синхронизация =====
+  const loadExportStatus = useCallback(async () => {
+    try {
+      const st = await getVacancyExportStatus();
+      setExportStatus(st);
+      if (st.portal_org_id) setMappingSchoolId(String(st.portal_org_id));
+    } catch {
+      // статус не критичен для работы раздела — оставляем прежнее значение
+    }
+  }, []);
+
+  useEffect(() => {
+    loadExportStatus();
+  }, [loadExportStatus]);
+
+  // Справочник школ портала грузим только когда он реально нужен —
+  // привязки нет либо администратор её меняет.
+  const loadPortalSchools = useCallback(async () => {
+    setPortalSchoolsLoading(true);
+    try {
+      const res = await getPortalSchools();
+      setPortalSchools(res.schools);
+    } catch (err: any) {
+      setError(getApiErrorMessage(err, 'Не удалось получить список школ ОбрПортала'));
+    } finally {
+      setPortalSchoolsLoading(false);
+    }
+  }, []);
+
+  const handleOpenEisModal = () => {
+    setIsEisModalOpen(true);
+    loadExportStatus();
+    if (!exportStatus || exportStatus.mapping === 'none') {
+      loadPortalSchools();
+    }
+  };
+
+  const handleSaveMapping = async () => {
+    if (!mappingSchoolId) return;
+    setIsMappingSaving(true);
+    try {
+      const st = await setPortalSchoolMapping(Number(mappingSchoolId));
+      setExportStatus(st);
+      setSuccess(`Организация привязана к школе «${st.portal_org_name || mappingSchoolId}»`);
+    } catch (err: any) {
+      setError(getApiErrorMessage(err, 'Не удалось сохранить привязку к школе'));
+    } finally {
+      setIsMappingSaving(false);
+    }
+  };
+
+  const handleExport = async () => {
+    setIsExporting(true);
+    try {
+      const res = await exportVacanciesToPortal();
+      setSuccess(
+        `Вакансии выгружены в ОбрПортал («${res.portal_org_name || 'школа'}»): ` +
+        `отправлено ${res.sent}, добавлено ${res.added}, удалено ${res.deleted}`
+      );
+      setIsEisModalOpen(false);
+      await loadExportStatus();
+    } catch (err: any) {
+      setError(getApiErrorMessage(err, 'Не удалось выгрузить вакансии в ОбрПортал'));
+      await loadExportStatus();
+    } finally {
+      setIsExporting(false);
+    }
+  };
 
   const handleOpenModal = (vacancy?: Vacancy) => {
     if (vacancy) {
@@ -610,11 +693,12 @@ const VacanciesPage: React.FC = () => {
           />
         </ToolbarLeft>
         <ToolbarRight>
-          {/* Кнопка выгрузки в ЕИС — открывает подтверждение (функция в разработке) */}
+          {/* Выгрузка в ЕИС «ОбрПортал»: подтверждение + привязка школы портала */}
           <Button
             variant="outlined"
             startIcon={<UploadIcon />}
-            onClick={() => setIsEisModalOpen(true)}
+            onClick={handleOpenEisModal}
+            disabled={exportStatus ? !exportStatus.enabled : false}
             sx={{
               textTransform: 'none',
               fontFamily: 'Lato, sans-serif',
@@ -631,6 +715,33 @@ const VacanciesPage: React.FC = () => {
           >
             Выгрузка в ЕИС
           </Button>
+          {exportStatus?.synced_at && (
+            <Tooltip
+              title={
+                exportStatus.sync_status === 'error'
+                  ? `Последняя выгрузка не удалась: ${exportStatus.sync_error || 'без описания'}`
+                  : `Выгружено вакансий: ${exportStatus.sync_count ?? 0}`
+              }
+            >
+              <Chip
+                size="small"
+                label={
+                  exportStatus.sync_status === 'error'
+                    ? 'Выгрузка: ошибка'
+                    : `Выгрузка: ${new Date(exportStatus.synced_at).toLocaleString('ru-RU', {
+                        day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit',
+                      })}`
+                }
+                sx={{
+                  fontFamily: 'Lato, sans-serif',
+                  fontWeight: 600,
+                  fontSize: '12px',
+                  backgroundColor: exportStatus.sync_status === 'error' ? '#fdecea' : '#eef7f1',
+                  color: exportStatus.sync_status === 'error' ? '#c62828' : '#2e7d4f',
+                }}
+              />
+            </Tooltip>
+          )}
           <StyledChip label={`Всего: ${total}`} size="small" />
         </ToolbarRight>
       </ToolbarContainer>
@@ -825,33 +936,99 @@ const VacanciesPage: React.FC = () => {
         </Fade>
       </Modal>
 
-      {/* Модалка «Выгрузка в ЕИС» */}
-      <Modal open={isEisModalOpen} onClose={() => setIsEisModalOpen(false)} closeAfterTransition>
+      {/* Модалка «Выгрузка в ЕИС «ОбрПортал»» */}
+      <Modal open={isEisModalOpen} onClose={() => !isExporting && setIsEisModalOpen(false)} closeAfterTransition>
         <Fade in={isEisModalOpen}>
           <Box sx={{
             position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)',
-            width: '90%', maxWidth: '440px', backgroundColor: '#ffffff', borderRadius: '16px',
+            width: '90%', maxWidth: '480px', backgroundColor: '#ffffff', borderRadius: '16px',
             boxShadow: '0 8px 32px rgba(0, 0, 0, 0.12)', overflow: 'hidden',
           }}>
             <ModalHeader>
               <Typography variant="h6" sx={{ fontFamily: 'Lato, sans-serif', fontWeight: 700, fontSize: '18px', color: '#101025' }}>
-                Обновление сведений в ЕИС
+                Выгрузка в ЕИС «ОбрПортал»
               </Typography>
-              <IconButton onClick={() => setIsEisModalOpen(false)} size="small" sx={{ color: '#87879b' }}>
+              <IconButton onClick={() => setIsEisModalOpen(false)} size="small" disabled={isExporting} sx={{ color: '#87879b' }}>
                 <CloseIcon fontSize="small" />
               </IconButton>
             </ModalHeader>
-            <Box sx={{ p: 3, textAlign: 'center' }}>
-              <Typography sx={{ fontFamily: 'Lato, sans-serif', fontSize: '15px', color: '#101025', lineHeight: 1.5 }}>
-                Вы действительно хотите начать синхронизацию данных с ЕИС?
-              </Typography>
-            </Box>
+
+            {exportStatus && !exportStatus.enabled ? (
+              <Box sx={{ p: 3 }}>
+                <Typography sx={{ fontFamily: 'Lato, sans-serif', fontSize: '15px', color: '#101025', lineHeight: 1.5 }}>
+                  Выгрузка вакансий в ОбрПортал отключена настройками сервера.
+                </Typography>
+              </Box>
+            ) : exportStatus && exportStatus.mapping === 'none' ? (
+              <Box sx={{ p: 3 }}>
+                <Typography sx={{ fontFamily: 'Lato, sans-serif', fontSize: '15px', color: '#101025', lineHeight: 1.5, mb: 1 }}>
+                  Организация не сопоставлена ни с одной школой ОбрПортала. Выберите школу,
+                  в которую выгружать вакансии:
+                </Typography>
+                <Typography sx={{ fontFamily: 'Lato, sans-serif', fontSize: '13px', color: '#87879b', lineHeight: 1.45, mb: 2 }}>
+                  Привязка сохраняется и используется для всех последующих выгрузок.
+                </Typography>
+                <FormControl fullWidth size="small">
+                  <InputLabel id="portal-school-label">Школа в ОбрПортале</InputLabel>
+                  <Select
+                    labelId="portal-school-label"
+                    label="Школа в ОбрПортале"
+                    value={mappingSchoolId}
+                    onChange={(e) => setMappingSchoolId(String(e.target.value))}
+                    disabled={portalSchoolsLoading}
+                    sx={{ fontFamily: 'Lato, sans-serif', fontSize: '14px', borderRadius: '8px' }}
+                  >
+                    {portalSchools.map((s) => (
+                      <MenuItem key={s.id} value={String(s.id)} sx={{ fontFamily: 'Lato, sans-serif', fontSize: '14px' }}>
+                        {s.short_name || s.full_name}
+                      </MenuItem>
+                    ))}
+                  </Select>
+                </FormControl>
+                {portalSchoolsLoading && (
+                  <Box sx={{ display: 'flex', justifyContent: 'center', mt: 2 }}>
+                    <CircularProgress size={20} />
+                  </Box>
+                )}
+              </Box>
+            ) : (
+              <Box sx={{ p: 3, textAlign: 'center' }}>
+                <Typography sx={{ fontFamily: 'Lato, sans-serif', fontSize: '15px', color: '#101025', lineHeight: 1.5 }}>
+                  Выгрузить {exportStatus?.local_count ?? total} вакансий организации в школу
+                  «{exportStatus?.portal_org_name || 'ОбрПортал'}»?
+                </Typography>
+                <Typography sx={{ fontFamily: 'Lato, sans-serif', fontSize: '13px', color: '#87879b', lineHeight: 1.45, mt: 1.5 }}>
+                  Предыдущая выгрузка по этой школе будет заменена. Вакансии, заведённые
+                  в портале вручную, не изменяются.
+                </Typography>
+              </Box>
+            )}
+
             <Box sx={{ p: 2, backgroundColor: '#fafafa', display: 'flex', justifyContent: 'flex-end', gap: 1 }}>
-              <Button onClick={() => setIsEisModalOpen(false)} sx={{ fontFamily: 'Lato, sans-serif', textTransform: 'none', fontWeight: 600, color: '#87879b', '&:hover': { backgroundColor: '#f4f4f8' } }}>Нет</Button>
-              <Button onClick={() => {
-                setIsEisModalOpen(false);
-                setError('Данная функция временно недоступна');
-              }} sx={{ fontFamily: 'Lato, sans-serif', textTransform: 'none', fontWeight: 600, backgroundColor: '#4c6ef5', color: '#ffffff', borderRadius: '8px', '&:hover': { backgroundColor: '#364fc7' } }}>Да</Button>
+              <Button
+                onClick={() => setIsEisModalOpen(false)}
+                disabled={isExporting}
+                sx={{ fontFamily: 'Lato, sans-serif', textTransform: 'none', fontWeight: 600, color: '#87879b', '&:hover': { backgroundColor: '#f4f4f8' } }}
+              >
+                {exportStatus && exportStatus.mapping === 'none' ? 'Отмена' : 'Нет'}
+              </Button>
+              {exportStatus && exportStatus.mapping === 'none' ? (
+                <Button
+                  onClick={handleSaveMapping}
+                  disabled={!mappingSchoolId || isMappingSaving || portalSchoolsLoading}
+                  sx={{ fontFamily: 'Lato, sans-serif', textTransform: 'none', fontWeight: 600, backgroundColor: '#4c6ef5', color: '#ffffff', borderRadius: '8px', '&:hover': { backgroundColor: '#364fc7' }, '&.Mui-disabled': { backgroundColor: '#e0e3ef', color: '#ffffff' } }}
+                >
+                  {isMappingSaving ? 'Сохранение...' : 'Привязать'}
+                </Button>
+              ) : (
+                <Button
+                  onClick={handleExport}
+                  disabled={isExporting}
+                  sx={{ fontFamily: 'Lato, sans-serif', textTransform: 'none', fontWeight: 600, backgroundColor: '#4c6ef5', color: '#ffffff', borderRadius: '8px', '&:hover': { backgroundColor: '#364fc7' }, '&.Mui-disabled': { backgroundColor: '#e0e3ef', color: '#ffffff' } }}
+                >
+                  {isExporting ? 'Выгрузка...' : 'Выгрузить'}
+                </Button>
+              )}
             </Box>
           </Box>
         </Fade>

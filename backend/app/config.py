@@ -145,6 +145,30 @@ class Settings(BaseSettings):
     ESA_EXCHANGE_CODE_TTL_SECONDS: int = int(os.getenv("ESA_EXCHANGE_CODE_TTL_SECONDS", "60"))
     # Таймаут HTTP-запросов к ESA (сек).
     ESA_HTTP_TIMEOUT: int = int(os.getenv("ESA_HTTP_TIMEOUT", "15"))
+
+    # ===== ЕИС «ОбрПортал»: выгрузка вакансий =====
+    # Вакансии организации уходят на портал в сервис синхронизации вакансий
+    # (system.mroo-snpm.ru/api/vacancy/load.php). Логика портала — «полное
+    # замещение»: старые external-строки школы удаляются, приходят новые;
+    # вакансии, заведённые в портале руками (source='manual'), не трогаются.
+    # Авторизация — app_id/app_secret приложения ЕСА (по умолчанию app «toredo»).
+    OBRPORTAL_ENABLED: bool = os.getenv("OBRPORTAL_ENABLED", "false").lower() in ("1", "true", "yes")
+    OBRPORTAL_VACANCY_URL: str = os.getenv(
+        "OBRPORTAL_VACANCY_URL", "https://system.mroo-snpm.ru/api/vacancy/load.php"
+    )
+    # Список школ портала (для авто-привязки организации и ручного выбора).
+    OBRPORTAL_SCHOOLS_URL: str = os.getenv(
+        "OBRPORTAL_SCHOOLS_URL", "https://system.mroo-snpm.ru/api/schools/list"
+    )
+    # Головная организация портала, в которую входят школы (orgs.obeys = 0).
+    OBRPORTAL_ROOT_ORG_ID: int = int(os.getenv("OBRPORTAL_ROOT_ORG_ID", "1"))
+    # Ключи приложения ЕСА; если пусты — берутся ESA_APP_ID / ESA_APP_SECRET.
+    OBRPORTAL_APP_ID: str = os.getenv("OBRPORTAL_APP_ID", "")
+    OBRPORTAL_APP_SECRET: str = os.getenv("OBRPORTAL_APP_SECRET", "")
+    OBRPORTAL_HTTP_TIMEOUT: int = int(os.getenv("OBRPORTAL_HTTP_TIMEOUT", "20"))
+    # Кэш списка школ портала (сек): не дёргать портал на каждый запрос статуса.
+    OBRPORTAL_SCHOOLS_TTL: int = int(os.getenv("OBRPORTAL_SCHOOLS_TTL", "600"))
+
     # Базовый URL фронтенда для редиректов после ESA-входа.
     # В проде это обычно пустая строка — бэкенд смотрит на тот же origin.
     FRONTEND_BASE_URL: str = os.getenv("FRONTEND_BASE_URL", "")
@@ -163,6 +187,21 @@ class Settings(BaseSettings):
     def esa_scopes(self) -> list:
         """Скоупы ESA как список (парсит ESA_SCOPES: запятая или JSON)."""
         return _parse_list_env(self.ESA_SCOPES)
+
+    @property
+    def obrportal_app_id(self) -> str:
+        """app_id для ОбрПортала: отдельный ключ, иначе приложение ЕСА «toredo»."""
+        return self.OBRPORTAL_APP_ID or self.ESA_APP_ID
+
+    @property
+    def obrportal_app_secret(self) -> str:
+        """app_secret для ОбрПортала: отдельный ключ, иначе секрет приложения ЕСА."""
+        return self.OBRPORTAL_APP_SECRET or self.ESA_APP_SECRET
+
+    @property
+    def obrportal_configured(self) -> bool:
+        """True, если выгрузка включена и есть чем авторизоваться на портале."""
+        return bool(self.OBRPORTAL_ENABLED and self.obrportal_app_id and self.obrportal_app_secret)
 
     @property
     def cors_origins(self) -> list:

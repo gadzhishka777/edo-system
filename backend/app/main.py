@@ -351,6 +351,38 @@ async def migrate_esa_columns():
         await conn.run_sync(_add_esa_columns)
 
 
+async def migrate_obrportal_columns():
+    """Идемпотентная миграция: колонки выгрузки вакансий в ЕИС «ОбрПортал».
+
+    Храним состояние синхронизации прямо в organizations (одна строка на
+    организацию, без истории): интерфейсу нужен только последний результат.
+    obrportal_org_id — ручная привязка к школе портала; NULL означает
+    «сопоставлять по названию».
+    """
+    from sqlalchemy import inspect as _sqla_inspect
+
+    async with async_engine.begin() as conn:
+        def _add_obrportal_columns(connection):
+            inspector = _sqla_inspect(connection)
+            if "organizations" not in inspector.get_table_names():
+                return
+            columns = {c["name"] for c in inspector.get_columns("organizations")}
+            additions = {
+                "obrportal_org_id": "INTEGER",
+                "obrportal_synced_at": "TIMESTAMP",
+                "obrportal_sync_status": "VARCHAR(16)",
+                "obrportal_sync_error": "TEXT",
+                "obrportal_sync_count": "INTEGER",
+            }
+            for col, ddl in additions.items():
+                if col not in columns:
+                    connection.execute(
+                        text(f"ALTER TABLE organizations ADD COLUMN {col} {ddl}")
+                    )
+
+        await conn.run_sync(_add_obrportal_columns)
+
+
 async def migrate_program_columns():
     """Идемпотентная миграция: колонка program_id у классов.
 
@@ -507,6 +539,7 @@ async def lifespan(app: FastAPI):
     await create_default_admin()
     await create_employees_table()
     await migrate_esa_columns()
+    await migrate_obrportal_columns()
     await migrate_program_columns()
     await migrate_orgs_to_employees()
     await seed_response_templates()

@@ -725,6 +725,53 @@ class VacancyPositionListResponse(BaseModel):
     positions: List[VacancyPositionInfo]
 
 
+# ===== Выгрузка вакансий в ЕИС «ОбрПортал» =====
+
+class ObPortalSchool(BaseModel):
+    """Школа портала, доступная для привязки организации."""
+    id: int
+    full_name: str = ""
+    short_name: str = ""
+
+
+class ObPortalSchoolListResponse(BaseModel):
+    schools: List[ObPortalSchool]
+
+
+class ObPortalExportStatus(BaseModel):
+    """Состояние выгрузки вакансий организации в ОбрПортал.
+
+    `mapping` — как найдена школа портала: manual / auto / none.
+    `portal_org_id` пуст, если привязки нет: тогда выгрузка запрещена.
+    """
+    enabled: bool
+    configured: bool
+    portal_org_id: Optional[int] = None
+    portal_org_name: Optional[str] = None
+    mapping: str = "none"
+    local_count: int = 0
+    synced_at: Optional[datetime] = None
+    sync_status: Optional[str] = None
+    sync_error: Optional[str] = None
+    sync_count: Optional[int] = None
+
+
+class ObPortalExportResult(BaseModel):
+    status: str
+    portal_org_id: int
+    portal_org_name: Optional[str] = None
+    mapping: str = "auto"
+    sent: int = 0
+    added: int = 0
+    deleted: int = 0
+    skipped: int = 0
+
+
+class ObPortalMappingRequest(BaseModel):
+    """Привязка организации к школе портала. portal_org_id=null — сбросить привязку."""
+    portal_org_id: Optional[int] = None
+
+
 # ===== Классы школ (раздел «Реестры → Классы») =====
 
 def _normalize_letter(value):

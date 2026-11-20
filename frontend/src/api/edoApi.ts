@@ -1300,6 +1300,64 @@ export const deactivateVacancy = async (uuid: string): Promise<{ message: string
   return response.data;
 };
 
+// ===== Выгрузка вакансий в ЕИС «ОбрПортал» =====
+// Портал принимает вакансии школы как «полное замещение»: присланный список
+// заменяет все его external-строки по этой школе.
+
+export interface ObPortalSchool {
+  id: number;
+  full_name: string;
+  short_name: string;
+}
+
+export interface ObPortalExportStatus {
+  enabled: boolean;                 // выгрузка включена в конфиге бэкенда
+  configured: boolean;              // заданы ключи приложения
+  portal_org_id: number | null;     // школа портала; null — привязки нет
+  portal_org_name: string | null;
+  mapping: 'manual' | 'auto' | 'none';
+  local_count: number;              // сколько вакансий есть у нас
+  synced_at: string | null;
+  sync_status: 'ok' | 'error' | null;
+  sync_error: string | null;
+  sync_count: number | null;
+}
+
+export interface ObPortalExportResult {
+  status: string;
+  portal_org_id: number;
+  portal_org_name: string | null;
+  mapping: string;
+  sent: number;
+  added: number;
+  deleted: number;
+  skipped: number;
+}
+
+export const getVacancyExportStatus = async (): Promise<ObPortalExportStatus> => {
+  const response = await apiClient.get('/api/vacancies/export/status');
+  return response.data;
+};
+
+export const getPortalSchools = async (): Promise<{ schools: ObPortalSchool[] }> => {
+  const response = await apiClient.get('/api/vacancies/portal-schools');
+  return response.data;
+};
+
+export const setPortalSchoolMapping = async (
+  portalOrgId: number | null
+): Promise<ObPortalExportStatus> => {
+  const response = await apiClient.put('/api/vacancies/export/mapping', {
+    portal_org_id: portalOrgId,
+  });
+  return response.data;
+};
+
+export const exportVacanciesToPortal = async (): Promise<ObPortalExportResult> => {
+  const response = await apiClient.post('/api/vacancies/export');
+  return response.data;
+};
+
 // ===== Классы школы (раздел «Реестры → Классы») =====
 // Раздел доступен только организациям с признаком «Является школой».
 
